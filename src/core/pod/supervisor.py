@@ -23,7 +23,7 @@ VERSION = '0.1.0'
 USER_AGENT = 'llmpod-supervisor/' + VERSION
 METRIC_LINE = re.compile(r'^([A-Za-z_:][A-Za-z0-9_:]*)(\{.*\})?\s+(\S+)')
 KV_LINE = re.compile(r'KV cache size:\s*([\d,]+)\s*tokens')
-RELOAD_FORBIDDEN = ('--api-key', '--host', '--port', '--served-model-name')
+RELOAD_FORBIDDEN = ('--api-key', '--host', '--port', '--served-model-name', '--config')
 
 
 def parse_metrics(text):
@@ -77,9 +77,50 @@ def valid_reload_args(payload):
         return None
     if not all(isinstance(a, str) and 0 < len(a) <= 2000 for a in args):
         return None
-    if any(a.split('=')[0] in RELOAD_FORBIDDEN for a in args):
+    if any(forbidden_option(a) for a in args):
         return None
     return args
+
+
+def forbidden_option(arg):
+    """Vero se l'argomento è (anche abbreviato o con '_') un'opzione vietata in /reload."""
+    if not arg.startswith('--'):
+        return False
+    name = arg.split('=')[0].replace('_', '-').lower()
+    if name in RELOAD_FORBIDDEN:
+        return True
+    # argparse accetta abbreviazioni univoche (--por, --serv): vietate se prefisso di un'opzione vietata
+    return len(name) >= 5 and any(f.startswith(name) for f in RELOAD_FORBIDDEN)
+
+
+def delete_pod(api, pod_id, key):
+    """DELETE del Pod con la chiave iniettata. Restituisce (ok, errore)."""
+    req = urllib.request.Request(f'{api}/pods/{pod_id}', method='DELETE',
+                                 headers={'User-Agent': USER_AGENT, 'Authorization': 'Bearer ' + key})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            if r.status in (200, 202, 204):
+                return True, None
+            return False, f'terminazione fallita: HTTP {r.status}'
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return True, None
+        return False, f'terminazione fallita: HTTP {e.code}'
+    except Exception as e:  # noqa: BLE001
+        return False, f'terminazione fallita: {e}'
+
+
+def emergency_terminate(env):
+    """Un tentativo di terminare il Pod leggendo solo l'ambiente (configurazione rotta). Restituisce True se riuscito."""
+    pod_id = env.get('RUNPOD_POD_ID', '')
+    key = env.get('RUNPOD_API_KEY', '')
+    if not pod_id or not key:
+        print('[llmpod] RUNPOD_POD_ID o RUNPOD_API_KEY mancanti: impossibile terminare il Pod', file=sys.stderr, flush=True)
+        return False
+    ok, err = delete_pod(env.get('LLMPOD_RUNPOD_API', 'https://api.runpod.io/v2'), pod_id, key)
+    if not ok:
+        print(f'[llmpod] {err}', file=sys.stderr, flush=True)
+    return ok
 
 
 def env_config(env):
@@ -102,6 +143,7 @@ def env_config(env):
         'vllm_cmd': json.loads(env['LLMPOD_VLLM_CMD']) if env.get('LLMPOD_VLLM_CMD') else ['vllm', 'serve'],
         'status_port': int(env.get('LLMPOD_STATUS_PORT', '8001')),
         'max_restarts': int(env.get('LLMPOD_MAX_RESTARTS', '2')),
+        'state_dir': env.get('LLMPOD_STATE_DIR', '/root'),
     }
 
 
@@ -121,9 +163,11 @@ class Supervisor:
         self.cfg = cfg
         self.clock = clock
         self.lock = threading.Lock()
-        self.started_at = clock()
+        self.proc_lock = threading.RLock()
+        self.reloading = False
         self.logs = deque(maxlen=500)
         self.log_seq = 0
+        self.started_at = self._load_started_at()
         self.proc = None
         self.args = list(cfg['args'])
         self.phase = 'downloading' if cfg['model_bytes'] > 0 else 'loading'
@@ -134,6 +178,25 @@ class Supervisor:
         self.tracker = None
         self.expected_exit = False
         self.terminate_reason = None
+
+    def _load_started_at(self):
+        """Istante di avvio persistito per Pod: se il container riparte la durata massima non si azzera."""
+        now = self.clock()
+        pod_id = self.cfg['pod_id']
+        if not pod_id:
+            return now
+        path = os.path.join(self.cfg.get('state_dir', '/root'), f'.llmpod-started-{pod_id}')
+        try:
+            with open(path) as f:
+                return float(f.read().strip())
+        except (OSError, ValueError):
+            pass
+        try:
+            with open(path, 'w') as f:
+                f.write(repr(now))
+        except OSError as e:
+            self.log(f'[llmpod] impossibile salvare l\'ora di avvio: {e}')
+        return now
 
     # --- log ---
     def log(self, line):
@@ -160,30 +223,49 @@ class Supervisor:
                                 '--host', '0.0.0.0', '--port', str(c['vllm_port'])] + self.args
 
     def start_vllm(self):
-        self.expected_exit = False
-        self.proc = subprocess.Popen(self.vllm_command(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, bufsize=1, env=dict(os.environ))
-        threading.Thread(target=self._read_output, args=(self.proc,), daemon=True).start()
-        self.log(f'[llmpod] vLLM avviato (pid {self.proc.pid})')
+        with self.proc_lock:
+            self.expected_exit = False
+            self.proc = subprocess.Popen(self.vllm_command(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                         text=True, bufsize=1, env=dict(os.environ))
+            threading.Thread(target=self._read_output, args=(self.proc,), daemon=True).start()
+            self.log(f'[llmpod] vLLM avviato (pid {self.proc.pid})')
 
     def stop_vllm(self, timeout=30):
-        if self.proc and self.proc.poll() is None:
-            self.expected_exit = True
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait()
+        with self.proc_lock:
+            if self.proc and self.proc.poll() is None:
+                self.expected_exit = True
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                    self.proc.wait()
+
+    def try_begin_reload(self):
+        """Prenota la ricarica: False se ce n'è già una in corso."""
+        with self.lock:
+            if self.reloading:
+                return False
+            self.reloading = True
+            return True
 
     def reload(self, args):
-        self.log('[llmpod] ricarica di vLLM con nuovi argomenti')
-        self.stop_vllm()
-        self.args = list(args)
-        self.phase = 'loading'
-        self.restarts = 0
-        self.last_error = None
-        self.start_vllm()
+        try:
+            with self.proc_lock:
+                self.log('[llmpod] ricarica di vLLM con nuovi argomenti')
+                self.stop_vllm()
+                self.args = list(args)
+                self.phase = 'loading'
+                self.restarts = 0
+                self.last_error = None
+                self.start_vllm()
+        except Exception as e:  # noqa: BLE001
+            self.phase = 'error'
+            self.last_error = f'ricarica fallita: {e}'
+            self.log(f'[llmpod] {self.last_error}')
+        finally:
+            with self.lock:
+                self.reloading = False
 
     # --- HTTP verso vLLM e Runpod ---
     def _get(self, path, auth=False, timeout=5):
@@ -205,36 +287,29 @@ class Supervisor:
         if not c['pod_id'] or not c['runpod_key']:
             self.last_error = 'RUNPOD_POD_ID o RUNPOD_API_KEY mancanti: impossibile terminare il Pod'
             return False
-        req = urllib.request.Request(f"{c['runpod_api']}/pods/{c['pod_id']}", method='DELETE',
-                                     headers={'User-Agent': USER_AGENT, 'Authorization': 'Bearer ' + c['runpod_key']})
-        try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                return r.status in (200, 202, 204)
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return True
-            self.last_error = f'terminazione fallita: HTTP {e.code}'
-        except Exception as e:  # noqa: BLE001
-            self.last_error = f'terminazione fallita: {e}'
-        return False
+        ok, err = delete_pod(c['runpod_api'], c['pod_id'], c['runpod_key'])
+        if not ok:
+            self.last_error = err
+        return ok
 
     # --- ciclo di controllo ---
     def step(self):
         """Un controllo: aggiorna fase e inattività, restituisce il motivo di terminazione o None."""
         now = self.clock()
-        if (self.phase != 'terminating' and self.proc is not None
-                and self.proc.poll() is not None and not self.expected_exit):
-            code = self.proc.returncode
-            self.log(f'[llmpod] vLLM terminato con codice {code}')
-            if self.restarts < self.cfg['max_restarts']:
-                self.restarts += 1
-                self.phase = 'loading'
-                self.start_vllm()
-            else:
-                self.phase = 'error'
-                self.last_error = f'vLLM terminato con codice {code} dopo {self.restarts} riavvii'
-                if self.tracker is None:
-                    self.tracker = IdleTracker(now)
+        with self.proc_lock:
+            if (self.phase != 'terminating' and self.proc is not None
+                    and self.proc.poll() is not None and not self.expected_exit):
+                code = self.proc.returncode
+                self.log(f'[llmpod] vLLM terminato con codice {code}')
+                if self.restarts < self.cfg['max_restarts']:
+                    self.restarts += 1
+                    self.phase = 'loading'
+                    self.start_vllm()
+                else:
+                    self.phase = 'error'
+                    self.last_error = f'vLLM terminato con codice {code} dopo {self.restarts} riavvii'
+                    if self.tracker is None:
+                        self.tracker = IdleTracker(now)
         if self.phase in ('downloading', 'loading'):
             if self.check_ready():
                 self.phase = 'ready'
@@ -267,19 +342,39 @@ class Supervisor:
             self.downloaded = dir_size(os.path.join(self.cfg['hf_home'], 'hub'))
             time.sleep(10)
 
+    def tick(self):
+        """Un giro del loop: controllo e, se dovuto, terminazione. Un errore nel controllo non impedisce di spegnere il Pod."""
+        try:
+            reason = self.step()
+        except Exception as e:  # noqa: BLE001
+            self.log(f'[llmpod] errore nel controllo: {e}')
+            now = self.clock()
+            idle = self.tracker.idle_seconds(now) if self.tracker else None
+            reason = termination_reason(now, self.started_at, self.cfg['max_seconds'], idle, self.cfg['idle_seconds'])
+        if reason:
+            self.terminate_reason = reason
+            self.phase = 'terminating'
+            self.log(f'[llmpod] terminazione del Pod: {reason}')
+            if self.terminate_pod():
+                self.log('[llmpod] terminazione accettata da Runpod')
+            else:
+                self.log(f'[llmpod] {self.last_error}; nuovo tentativo al prossimo controllo')
+        return reason
+
     def run(self):
-        self.start_vllm()
+        try:
+            self.start_vllm()
+        except Exception as e:  # noqa: BLE001
+            self.phase = 'error'
+            self.last_error = f'avvio di vLLM fallito: {e}'
+            self.log(f'[llmpod] {self.last_error}')
+            self.tracker = IdleTracker(self.clock())
         threading.Thread(target=self._measure_download, daemon=True).start()
         while True:
-            reason = self.step()
-            if reason:
-                self.terminate_reason = reason
-                self.phase = 'terminating'
-                self.log(f'[llmpod] terminazione del Pod: {reason}')
-                if self.terminate_pod():
-                    self.log('[llmpod] terminazione accettata da Runpod')
-                else:
-                    self.log(f'[llmpod] {self.last_error}; nuovo tentativo al prossimo controllo')
+            try:
+                self.tick()
+            except Exception as e:  # noqa: BLE001
+                self.log(f'[llmpod] errore nel controllo: {e}')
             time.sleep(self.cfg['check_seconds'])
 
 
@@ -329,6 +424,8 @@ def make_server(sup):
             args = valid_reload_args(payload)
             if args is None:
                 return self._send(400, {'error': 'args non validi'})
+            if not sup.try_begin_reload():
+                return self._send(409, {'error': 'ricarica già in corso'})
             threading.Thread(target=sup.reload, args=(args,), daemon=True).start()
             return self._send(202, {'ok': True})
 
@@ -336,8 +433,14 @@ def make_server(sup):
 
 
 def main():
-    sup = Supervisor(env_config(os.environ))
-    server = make_server(sup)
+    try:
+        sup = Supervisor(env_config(os.environ))
+        server = make_server(sup)
+    except Exception as e:  # noqa: BLE001 — configurazione o porta non valide: il Pod a pagamento va comunque spento
+        print(f'[llmpod] avvio fallito: {e}', file=sys.stderr, flush=True)
+        while not emergency_terminate(os.environ):
+            time.sleep(60)
+        return
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     def on_sigterm(*_args):

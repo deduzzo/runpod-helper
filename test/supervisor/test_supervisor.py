@@ -95,6 +95,23 @@ class PureFunctions(unittest.TestCase):
                     {'args': ['--port=9000']}, {'args': ['x' * 2001]}, {'args': ['a'] * 201}]:
             self.assertIsNone(sv.valid_reload_args(bad), bad)
 
+    def test_valid_reload_args_non_aggirabile(self):
+        for bad in ['--api_key', '--API-KEY=x', '--served_model_name', '--served-model-name=x', '--por', '--hos=0.0.0.0',
+                    '--serv', '--config', '--config=/tmp/x.yaml', '--api']:
+            self.assertIsNone(sv.valid_reload_args({'args': [bad]}), bad)
+        self.assertEqual(sv.valid_reload_args({'args': ['--max-model-len', '4096', '--enable-prefix-caching']}),
+                         ['--max-model-len', '4096', '--enable-prefix-caching'])
+
+    def test_emergency_terminate(self):
+        runpod = FakeRunpod()
+        try:
+            self.assertFalse(sv.emergency_terminate({}))
+            env = {'RUNPOD_POD_ID': 'POD9', 'RUNPOD_API_KEY': 'k', 'LLMPOD_RUNPOD_API': runpod.url}
+            self.assertTrue(sv.emergency_terminate(env))
+            self.assertEqual(runpod.calls, [{'path': '/v2/pods/POD9', 'auth': 'Bearer k', 'ua': 'llmpod-supervisor/' + sv.VERSION}])
+        finally:
+            runpod.close()
+
 
 class SupervisorIntegration(unittest.TestCase):
     def setUp(self):
@@ -112,7 +129,7 @@ class SupervisorIntegration(unittest.TestCase):
             'LLMPOD_CHECK_SECONDS': '0.1', 'HF_HOME': self.tmp, 'RUNPOD_POD_ID': 'POD123', 'RUNPOD_API_KEY': 'chiave-iniettata',
             'LLMPOD_RUNPOD_API': self.runpod.url, 'LLMPOD_VLLM_PORT': str(self.port),
             'LLMPOD_VLLM_CMD': json.dumps([sys.executable, os.path.join(HERE, 'fake_vllm.py')]),
-            'LLMPOD_STATUS_PORT': str(free_port()), 'LLMPOD_MAX_RESTARTS': '1',
+            'LLMPOD_STATUS_PORT': str(free_port()), 'LLMPOD_MAX_RESTARTS': '1', 'LLMPOD_STATE_DIR': self.tmp,
         })
         self.now = [1000.0]
         self.sup = sv.Supervisor(self.cfg, clock=lambda: self.now[0])
@@ -156,6 +173,53 @@ class SupervisorIntegration(unittest.TestCase):
         self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
         self.assertIn('codice 3', self.sup.last_error)
         self.assertIsNotNone(self.sup.tracker)  # l'inattività continua a contare anche in errore
+
+    def test_tick_sopravvive_a_eccezione_e_termina(self):
+        def boom():
+            raise RuntimeError('guasto simulato')
+        self.sup.step = boom
+        self.sup.tracker = sv.IdleTracker(self.now[0])
+        self.assertIsNone(self.sup.tick())      # nessun motivo di terminazione: sopravvive
+        self.assertEqual(self.runpod.calls, [])
+        self.now[0] += 61
+        self.assertEqual(self.sup.tick(), 'idle')  # eccezione in step(), ma il Pod viene comunque terminato
+        self.assertEqual(self.sup.phase, 'terminating')
+        self.assertEqual([c['path'] for c in self.runpod.calls], ['/v2/pods/POD123'])
+        self.assertTrue(any('errore nel controllo' in l['line'] for l in self.sup.logs_since(0)))
+
+    def test_ora_di_avvio_persistita(self):
+        self.assertEqual(self.sup.started_at, 1000.0)
+        second = sv.Supervisor(self.cfg, clock=lambda: 9999.0)
+        self.assertEqual(second.started_at, 1000.0)
+        other = sv.Supervisor(dict(self.cfg, pod_id='ALTRO'), clock=lambda: 9999.0)
+        self.assertEqual(other.started_at, 9999.0)
+
+    def test_ora_di_avvio_errore_io(self):
+        sup = sv.Supervisor(dict(self.cfg, state_dir=os.path.join(self.tmp, 'non', 'esiste')), clock=lambda: 42.0)
+        self.assertEqual(sup.started_at, 42.0)
+
+    def test_reload_concorrente_409(self):
+        self.assertTrue(self.sup.try_begin_reload())
+        self.assertFalse(self.sup.try_begin_reload())
+        self.sup.reloading = False
+        server = sv.make_server(self.sup)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            def post(args):
+                r = urllib.request.Request(f'http://127.0.0.1:{self.cfg["status_port"]}/reload', method='POST',
+                                           data=json.dumps({'args': args}).encode(), headers={'Authorization': 'Bearer ' + KEY})
+                try:
+                    with urllib.request.urlopen(r, timeout=5) as resp:
+                        return resp.status
+                except urllib.error.HTTPError as e:
+                    return e.code
+            self.sup.reloading = True
+            self.assertEqual(post(['--max-model-len', '2048']), 409)
+            self.sup.reloading = False
+            self.assertEqual(post(['--max-model-len', '2048']), 202)
+            self.assertTrue(wait_until(lambda: self.sup.args == ['--max-model-len', '2048'] and not self.sup.reloading))
+        finally:
+            server.shutdown()
 
     def test_server_di_stato_autenticato(self):
         server = sv.make_server(self.sup)
