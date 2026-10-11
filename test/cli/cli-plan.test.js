@@ -43,7 +43,7 @@ describe('CLI: infrastruttura', () => {
 
 describe('CLI: init', () => {
   it('salva credenziali (600), datacenter e crea il volume', async () => {
-    const s = sandbox({ answers: { secret: [SECRETS.RUNPOD_API_KEY, SECRETS.HF_TOKEN], text: ['EU-RO-1', '150'], ask: [true] } });
+    const s = sandbox({ answers: { secret: [SECRETS.RUNPOD_API_KEY, SECRETS.HF_TOKEN], text: ['EU-RO-1', '150'], ask: [true, false] } });
     const runpod = runpodFake();
     const http = { request: vi.fn(async () => ({ ok: true, status: 200, data: { name: 'utente' } })) };
     expect(await s.run(['init'], { runpod, http })).toBe(0);

@@ -7,6 +7,8 @@ import { createRunpod } from '../core/runpod.js';
 import { createHf } from '../core/hf.js';
 import { createEvents } from '../core/events.js';
 import { createOps } from '../core/ops.js';
+import { resolveAdvisorConfig } from '../core/advisor/presets.js';
+import { createProvider } from '../core/advisor/providers.js';
 import { zcodeDir, isZcodeRunning } from '../core/clients/zcode.js';
 
 export const VERSION = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
@@ -32,6 +34,17 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
     },
     get ops() {
       return (cache.ops ??= createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events, ask: io.ask, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning } }));
+    },
+    get advisor() {
+      return {
+        config: (endpoint) => resolveAdvisorConfig(store.readEnv(), { endpoint }),
+        provider(endpoint) {
+          if (store.readConfig().advisor?.enabled === false) return null;
+          const cfg = resolveAdvisorConfig(store.readEnv(), { endpoint });
+          if (!cfg || (cfg.podOnly && !endpoint)) return null;
+          return createProvider(cfg, { http, spawn: ctx.spawn });
+        },
+      };
     },
   };
   return ctx;

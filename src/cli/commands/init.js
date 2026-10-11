@@ -1,6 +1,7 @@
 import { LlmpodError, Codes } from '../../core/errors.js';
 import { confirmCost } from '../../core/confirm.js';
 import { table } from '../render.js';
+import { configureAdvisor } from './advisor.js';
 
 async function verifyHfToken(http, token) {
   const r = await http.request('GET', 'https://huggingface.co/api/whoami-v2', { headers: { authorization: `Bearer ${token}` } });
@@ -62,5 +63,9 @@ export function register(program, getCtx) {
       }
       store.writeConfig({ dataCenterId: dc, ...(volume ? { volume: { id: volume.id, name: volume.name, size: volume.size, dataCenterId: dc } } : {}) });
       io.out(`✓ Configurazione salvata in ${store.dir}`);
+      if (!store.readConfig().advisor?.enabled && !opts.yes && !opts.dryRun
+        && await io.ask('Configurare ora il consulente IA che propone gli argomenti di vLLM?', false)) {
+        await configureAdvisor(ctx);
+      }
     });
 }
