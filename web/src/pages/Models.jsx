@@ -20,24 +20,25 @@ export default function Models() {
   }
   async function plan() {
     setBusy('plan'); setError(null); setResult(null);
-    try { setResult(await api('/api/plan', { method: 'POST', body: { model, context: Number(context), concurrency: Math.min(8, Math.max(1, Math.round(Number(concurrency)) || 1)), advisor: useAdvisor } })); } catch (e) { setError(e); } finally { setBusy(null); }
+    try { setResult(await api('/api/plan', { method: 'POST', body: { model: model.trim(), context: Number(context), concurrency: Math.min(8, Math.max(1, Math.round(Number(concurrency)) || 1)), advisor: useAdvisor } })); } catch (e) { setError(e); } finally { setBusy(null); }
   }
 
   return (
     <div className="space-y-4">
       <Card title="Cerca su Hugging Face">
         <form className="flex gap-3" onSubmit={(e) => { e.preventDefault(); search(); }}>
-          <input className={`${inputClass} flex-1`} placeholder="Cerca un modello (es. qwen3 coder)" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <input aria-label="Cerca un modello" className={`${inputClass} flex-1`} placeholder="Cerca un modello (es. qwen3 coder)" value={query} onChange={(e) => setQuery(e.target.value)} />
           <Button type="submit" loading={busy === 'search'}>Cerca</Button>
         </form>
-        {rows && (
+        {rows && rows.length === 0 && <p className="mt-4 text-sm text-gray-400">Nessun risultato</p>}
+        {rows && rows.length > 0 && (
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="text-gray-400"><tr><th className="py-1">Modello</th><th>Parametri</th><th>Pesi</th><th>Licenza</th><th>Gated</th><th>Parser</th></tr></thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} className="cursor-pointer border-t border-white/5 transition hover:bg-white/5" onClick={() => setModel(r.id)}>
-                    <td className="py-1 text-cyan-200">{r.id}</td>
+                  <tr key={r.id} aria-selected={model.trim() === r.id} className={`cursor-pointer border-t border-white/5 transition hover:bg-white/5 ${model.trim() === r.id ? 'bg-cyan-400/10' : ''}`} onClick={() => setModel(r.id)}>
+                    <td className="py-1"><button type="button" className="break-all text-left text-cyan-200 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60">{r.id}</button></td>
                     <td>{r.params ? `${(r.params / 1e9).toFixed(1)} B` : '?'}</td>
                     <td>{fmtGiB(r.weightsGiB)}</td>
                     <td>{r.license ?? '?'}</td>
@@ -51,7 +52,7 @@ export default function Models() {
         )}
       </Card>
 
-      <Card title="Piano">
+      <Card title="Calcola un piano">
         <form className="grid gap-3 sm:grid-cols-4" onSubmit={(e) => { e.preventDefault(); plan(); }}>
           <div className="sm:col-span-2">
             <Field label="Modello (org/nome, org/nome@rev o URL)">

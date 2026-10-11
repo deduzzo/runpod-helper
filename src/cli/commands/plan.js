@@ -1,5 +1,6 @@
 import { runPlan, applyAdvice } from '../../core/plan-flow.js';
 import { fmtUSD } from '../../core/confirm.js';
+import { shellQuoteArgs } from '../../core/planner/shell-quote.js';
 import { table, fmtGiB, attachRenderer, renderAdvice } from '../render.js';
 
 const toInt = (v) => Number.parseInt(v, 10);
@@ -60,7 +61,7 @@ export function register(program, getCtx) {
       if (plan.gpu) io.out(`Scelta:    ${plan.gpu.id} ×${plan.gpu.count} a ${fmtUSD(plan.hourlyUSD)}/h`);
       if (plan.alternatives.length) io.out(`Alternative: ${plan.alternatives.map((a) => `${a.id} ×${a.count} (${fmtUSD(a.hourly)}/h)`).join(', ')}`);
       io.out(`vLLM:      ${plan.vllm.image}`);
-      io.out(`           vllm serve ${m.id} --served-model-name <profilo> ${plan.vllm.args.join(' ')}`);
+      io.out(`           vllm serve ${shellQuoteArgs([m.id])} --served-model-name <profilo> ${shellQuoteArgs(plan.vllm.args)}`);
       for (const w of plan.warnings) io.out(`⚠ ${w}`);
       io.out('\nSalva il piano come profilo con: llmpod save <nome>');
     });
