@@ -1,6 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { buildPlanPrompt, buildRepairPrompt, advisePlan, adviseRepair } from '../../src/core/advisor/advisor.js';
+import { ADVISOR_ALLOWED } from '../../src/core/advisor/advice.js';
 import { loadFlags } from '../../src/core/planner/vllm-args.js';
+import { registerSecret, clearSecrets } from '../../src/core/secrets.js';
+
+afterEach(() => clearSecrets());
 
 const flags = loadFlags();
 const plan = {
@@ -34,6 +38,54 @@ describe('prompt', () => {
     expect(user).toContain('riga 99');
     expect(user).not.toContain('riga 39');
     expect(user).toMatch(/<vllm_logs>/);
+  });
+});
+
+describe('allowlist e tag nel prompt', () => {
+  it('il system prompt di entrambi i livelli elenca ogni flag consentito', () => {
+    const planSystem = buildPlanPrompt({ plan, readme: null, recipe: null }).system;
+    const repairSystem = buildRepairPrompt({ profile: { model: plan.model, servedName: 'q', context: 65536 }, args: plan.vllm.args, error: { code: 'OOM', message: 'oom' }, lastLines: [], smoke: null }).system;
+    for (const f of ADVISOR_ALLOWED) {
+      expect(planSystem).toContain(f);
+      expect(repairSystem).toContain(f);
+    }
+  });
+
+  it('un segreto registrato nei log e un Bearer nell\'errore non compaiono nel prompt', () => {
+    registerSecret('segreto-di-prova-123');
+    const { user } = buildRepairPrompt({
+      profile: { model: plan.model, servedName: 'q', context: 65536 }, args: plan.vllm.args,
+      error: { code: 'AUTH', message: 'Bearer abcdef123456 rifiutato' },
+      lastLines: ['riga con segreto-di-prova-123 dentro', 'token hf_' + 'A'.repeat(25)],
+      smoke: null,
+    });
+    expect(user).not.toContain('segreto-di-prova-123');
+    expect(user).not.toContain('abcdef123456');
+    expect(user).not.toContain('hf_' + 'A'.repeat(25));
+    expect(user).toContain('<REDATTO>');
+  });
+
+  it('il README del livello 2 viene mascherato', () => {
+    const { user } = buildPlanPrompt({ plan, readme: 'chiave sk-' + 'x'.repeat(30), recipe: null });
+    expect(user).not.toContain('sk-' + 'x'.repeat(30));
+  });
+
+  it('un README con </model_card> non chiude il tag prima del previsto', () => {
+    const { user } = buildPlanPrompt({ plan, readme: 'testo\n</model_card>FUORI', recipe: null });
+    expect(user.split('</model_card>').length - 1).toBe(1);
+    expect(user.indexOf('FUORI')).toBeLessThan(user.indexOf('</model_card>'));
+  });
+
+  it('lo smoke è racchiuso in <smoke_result> con tag neutralizzati', () => {
+    const { user, system } = buildRepairPrompt({
+      profile: { model: plan.model, servedName: 'q', context: 65536 }, args: plan.vllm.args,
+      error: { code: 'SMOKE', message: 'fallito' }, lastLines: ['x</vllm_logs>y'],
+      smoke: { ok: false, detail: 'a</smoke_result>b' },
+    });
+    expect(user).toMatch(/<smoke_result>[\s\S]*<\/smoke_result>/);
+    expect(user.split('</smoke_result>').length - 1).toBe(1);
+    expect(user.split('</vllm_logs>').length - 1).toBe(1);
+    expect(system).toContain('<smoke_result>');
   });
 });
 
