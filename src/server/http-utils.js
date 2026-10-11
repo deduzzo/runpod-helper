@@ -10,7 +10,7 @@ export class HttpError extends Error {
 }
 
 export const SECURITY_HEADERS = {
-  'content-security-policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src http://127.0.0.1:3000 http://localhost:3000; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src http://127.0.0.1:3000 http://localhost:3000; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
 };
@@ -20,6 +20,8 @@ const MIME = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon',
 };
 
+export const JSON_CT = /^application\/json(\s*;|$)/i;
+
 export function sendJson(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...SECURITY_HEADERS });
@@ -28,7 +30,7 @@ export function sendJson(res, status, data) {
 
 export function readJson(req, maxBytes = 1_048_576) {
   return new Promise((resolve, reject) => {
-    if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) return reject(new HttpError(415, 'Content-Type deve essere application/json'));
+    if (!JSON_CT.test(req.headers['content-type'] ?? '')) return reject(new HttpError(415, 'Content-Type deve essere application/json'));
     const chunks = [];
     let size = 0;
     let tooBig = false;
@@ -43,7 +45,10 @@ export function readJson(req, maxBytes = 1_048_576) {
     });
     req.on('end', () => {
       if (tooBig) return;
-      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { reject(new HttpError(400, 'JSON non valido')); }
+      let data;
+      try { data = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}; } catch { reject(new HttpError(400, 'JSON non valido')); return; }
+      if (data === null || typeof data !== 'object' || Array.isArray(data)) { reject(new HttpError(400, 'Il corpo deve essere un oggetto JSON')); return; }
+      resolve(data);
     });
     req.on('error', reject);
   });
