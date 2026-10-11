@@ -52,8 +52,8 @@ Check ($LASTEXITCODE -eq 0) 'run claude: uscita 0'
 Check ($out.Contains($expectedDir)) "il client parte dalla cartella del chiamante ($expectedDir)"
 Check ((Get-Location).Path -eq $expectedDir) 'la cartella corrente non cambia'
 Check ($env:ANTHROPIC_BASE_URL -eq 'originale') 'variabile preesistente del client ripristinata'
-Check ($null -eq $env:LLMPOD_TEST_NEW) 'variabile nuova del client rimossa'
-Check ($null -eq $env:LLMPOD_CONFIG_DIR -and $null -eq $env:LLMPOD_HOST_OS -and $null -eq $env:LLMPOD_UID) 'variabili del wrapper rimosse dalla sessione'
+Check ($null -eq $env:LLMPOD_TEST_NEW) "variabile nuova del client rimossa (valore: '$($env:LLMPOD_TEST_NEW)')"
+Check ($null -eq $env:LLMPOD_CONFIG_DIR -and $null -eq $env:LLMPOD_HOST_OS -and $null -eq $env:LLMPOD_UID) "variabili del wrapper rimosse dalla sessione (CONFIG_DIR='$($env:LLMPOD_CONFIG_DIR)' HOST_OS='$($env:LLMPOD_HOST_OS)' UID='$($env:LLMPOD_UID)')"
 $calls = Read-Log
 Check ($calls.Contains('--project-directory') -and $calls.Contains('compose.yaml')) 'compose usa --project-directory e -f'
 Check ($calls.Contains('run --rm -T llmpod prepare claude --format ps1')) 'prepare eseguito nel container'

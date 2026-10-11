@@ -27,7 +27,11 @@ function Save-Env([string[]]$Names) {
   }
 }
 function Restore-Env {
-  foreach ($n in @($script:SavedEnv.Keys)) { [Environment]::SetEnvironmentVariable($n, $script:SavedEnv[$n], 'Process') }
+  foreach ($n in @($script:SavedEnv.Keys)) {
+    $orig = $script:SavedEnv[$n]
+    if ($null -eq $orig) { Remove-Item -LiteralPath "Env:$n" -ErrorAction SilentlyContinue }
+    else { Set-Item -LiteralPath "Env:$n" -Value $orig }
+  }
 }
 
 # L'esito va in $script:Rc (non si restituisce nulla: l'output dei comandi nativi deve restare sulla console).

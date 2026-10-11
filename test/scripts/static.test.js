@@ -51,7 +51,7 @@ describe('script Windows', () => {
   it('llmpod.ps1 ripristina le variabili d\'ambiente in finally', () => {
     const t = text('bin/llmpod.ps1');
     expect(t).toMatch(/finally \{\s*Restore-Env/);
-    expect(t).toContain('SetEnvironmentVariable');
+    expect(t).toContain('Remove-Item -LiteralPath "Env:$n"');
   });
 });
 
