@@ -278,7 +278,8 @@ class Supervisor:
             self.log(f'[llmpod] {self.last_error}')
         finally:
             with self.lock:
-                self.tracker = IdleTracker(self.clock())  # da qui l'inattività riparte da zero (successo o errore)
+                # Come al primo avvio: l'inattività si conta da 'ready' (lo imposta step) o subito in caso di errore.
+                self.tracker = IdleTracker(self.clock()) if self.phase == 'error' else None
                 self.reloading = False
 
     # --- HTTP verso vLLM e Runpod ---

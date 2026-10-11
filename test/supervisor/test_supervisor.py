@@ -301,7 +301,7 @@ class SupervisorIntegration(unittest.TestCase):
         self.assertEqual(self.sup.args, first)
         self.assertEqual(self.sup.phase, 'loading')
 
-    def test_reload_azzera_il_tracker_di_inattivita_e_lo_ricrea_alla_fine(self):
+    def test_reload_azzera_il_tracker_di_inattivita_fino_a_ready(self):
         self.sup.start_vllm()
         self.assertTrue(wait_until(lambda: self.sup.step() is None and self.sup.phase == 'ready'))
         self.assertIsNotNone(self.sup.tracker)
@@ -312,6 +312,9 @@ class SupervisorIntegration(unittest.TestCase):
         self.now[0] += 500
         self.assertIsNone(self.sup.step())
         self.sup.reload(['--max-model-len', '2048'])
+        # come al primo avvio: niente conteggio durante il caricamento, riparte da zero a 'ready'
+        self.assertIsNone(self.sup.tracker)
+        self.assertTrue(wait_until(lambda: self.sup.step() is None and self.sup.phase == 'ready'))
         self.assertIsNotNone(self.sup.tracker)
         self.assertEqual(self.sup.tracker.idle_seconds(self.now[0]), 0)
         # il limite di ore massime resta attivo anche durante il reload
