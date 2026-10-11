@@ -181,3 +181,50 @@ describe('ops', () => {
     expect(JSON.stringify(seen)).not.toContain(store.readEnv().LLMPOD_KEY_QWEN3_CODER);
   });
 });
+
+describe('ops: nessun Pod orfano', () => {
+  beforeEach(() => clearSecrets());
+
+  it('down: Pod ancora attivo dopo la terminazione → RUNPOD_API e stato conservato', async () => {
+    const { ops, store, runpod } = setup();
+    ops.saveProfile('qwen3-coder');
+    await ops.up('qwen3-coder', { yes: true });
+    runpod.deletePod.mockResolvedValue();
+    runpod.getPod.mockResolvedValue({ id: 'pod1', status: 'RUNNING', cost: 1.49 });
+    await expect(ops.down('qwen3-coder', { yes: true })).rejects.toMatchObject({ code: 'RUNPOD_API' });
+    expect(store.readState().pods['qwen3-coder'].podId).toBe('pod1');
+  });
+
+  it('up: creazione ambigua (NETWORK) con Pod comparso → terminato e errore originale rilanciato', async () => {
+    const { ops, store, runpod } = setup();
+    ops.saveProfile('qwen3-coder');
+    runpod.createPod.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'NETWORK' }));
+    runpod.listPods.mockResolvedValueOnce([]).mockResolvedValue([{ id: 'pod1', name: 'llmpod-qwen3-coder', status: 'RUNNING' }]);
+    await expect(ops.up('qwen3-coder', { yes: true })).rejects.toMatchObject({ code: 'NETWORK' });
+    expect(runpod.deletePod).toHaveBeenCalledWith('pod1');
+    expect(store.readState().pods['qwen3-coder']).toBeUndefined();
+  });
+
+  it('up: timeout di avvio → "aspettare ancora" (sì) e poi pronto', async () => {
+    const { ops, http, ask } = setup();
+    ops.saveProfile('qwen3-coder');
+    const orig = http.request.getMockImplementation();
+    let extended = false;
+    http.request.mockImplementation(async (m, url, o) => {
+      if (url.endsWith('/status') && !extended) return { ok: false, status: 502, data: null };
+      return orig(m, url, o);
+    });
+    ask.mockImplementation(async (msg) => { if (/Aspettare altri 15 minuti/.test(msg)) extended = true; return true; });
+    const r = await ops.up('qwen3-coder', {});
+    expect(r.podId).toBe('pod1');
+    expect(ask.mock.calls.some((c) => /Aspettare altri 15 minuti/.test(c[0]))).toBe(true);
+  });
+
+  it('up: errore di avvio + terminazione fallita → warning e errore ORIGINALE', async () => {
+    const { ops, runpod, seen } = setup({ smokeOk: false });
+    ops.saveProfile('qwen3-coder');
+    runpod.deletePod.mockRejectedValue(new Error('boom'));
+    await expect(ops.up('qwen3-coder', { yes: true })).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
+    expect(seen.some((e) => e.type === 'warning' && /Terminazione del Pod pod1 non riuscita: boom/.test(e.message))).toBe(true);
+  });
+});

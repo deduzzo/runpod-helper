@@ -98,10 +98,13 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
     await runpod.deletePod(podId);
     for (let i = 0; i < 12; i++) {
       const pod = await runpod.getPod(podId);
-      if (!pod || pod.status === 'TERMINATED') break;
+      if (!pod || pod.status === 'TERMINATED') {
+        forget(name);
+        return;
+      }
       await sleep(5000);
     }
-    forget(name);
+    throw new LlmpodError(Codes.RUNPOD_API, `Il Pod ${podId} risulta ancora attivo dopo la richiesta di terminazione`, { hint: 'Controlla su https://www.runpod.io/console/pods e riprova con: llmpod down' });
   }
 
   async function refreshZcode(endpoint) {
@@ -112,6 +115,14 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       events.emit('info', { message: 'URL aggiornato nella configurazione di ZCode' });
     } catch (err) {
       events.emit('warning', { message: `ZCode non aggiornato: ${err.message}. Esegui "llmpod run zcode" dopo averlo chiuso` });
+    }
+  }
+
+  async function offerTerminate(name, podId, yes) {
+    try {
+      if (yes || await ask(`Terminare il Pod ${podId} per non continuare a pagare?`, true)) await terminate(name, podId);
+    } catch (e) {
+      events.emit('warning', { message: `Terminazione del Pod ${podId} non riuscita: ${e.message}. Controlla su https://www.runpod.io/console/pods` });
     }
   }
 
@@ -161,16 +172,36 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
 
     const startedAt = now();
     let confirmedHourly = first.hourly;
-    const { pod, candidate } = await createWithFallback({
-      runpod, candidates, buildBody, sleep,
-      beforeAttempt: async (c) => {
-        if (c.hourly > confirmedHourly) {
-          await confirmCost({ hourlyUSD: c.hourly, yes, ask, description: `Il candidato successivo costa di più: ${c.id} ×${c.count} in ${c.dataCenterId}` });
-          confirmedHourly = c.hourly;
+    const findExisting = async () => (await runpod.listPods()).find((p) => p.name === podName(name) && ACTIVE(p)) ?? null;
+    const NOT_AMBIGUOUS = [Codes.CANCELLED, Codes.REQUEST_INVALID, Codes.RUNPOD_AUTH, Codes.INSUFFICIENT_BALANCE, Codes.NO_GPU_AVAILABLE];
+    let created;
+    try {
+      created = await createWithFallback({
+        runpod, candidates, buildBody, sleep, findExisting,
+        beforeAttempt: async (c) => {
+          if (c.hourly > confirmedHourly) {
+            await confirmCost({ hourlyUSD: c.hourly, yes, ask, description: `Il candidato successivo costa di più: ${c.id} ×${c.count} in ${c.dataCenterId}` });
+            confirmedHourly = c.hourly;
+          }
+        },
+        onAttempt: (c) => events.emit('phase', { message: `Creazione del Pod: ${c.id} ×${c.count} in ${c.dataCenterId}${c.withVolume ? '' : ' (senza volume)'}` }),
+      });
+    } catch (err) {
+      if (!NOT_AMBIGUOUS.includes(err.code)) {
+        // creazione ambigua (es. timeout del POST): il Pod potrebbe esistere e costare
+        let stray = null;
+        try { stray = await findExisting(); } catch { /* ricerca best effort */ }
+        if (stray) {
+          events.emit('pod', { podId: stray.id });
+          const st = store.readState();
+          st.pods[name] = { podId: stray.id, startedAt: new Date(startedAt).toISOString(), hourlyUSD: first.hourly, dataCenterId: first.dataCenterId, withVolume: first.withVolume };
+          store.writeState(st);
+          await offerTerminate(name, stray.id, yes);
         }
-      },
-      onAttempt: (c) => events.emit('phase', { message: `Creazione del Pod: ${c.id} ×${c.count} in ${c.dataCenterId}${c.withVolume ? '' : ' (senza volume)'}` }),
-    });
+      }
+      throw err;
+    }
+    const { pod, candidate } = created;
     events.emit('pod', { podId: pod.id });
     const state = store.readState();
     state.pods[name] = { podId: pod.id, startedAt: new Date(startedAt).toISOString(), hourlyUSD: candidate.hourly, dataCenterId: candidate.dataCenterId, withVolume: candidate.withVolume };
@@ -181,11 +212,18 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       const runningPod = await waitForRunning({ runpod, podId: pod.id, sleep, now });
       const sup = createSupervisorClient({ http, podId: pod.id, apiKey });
       events.emit('phase', { message: 'Avvio di vLLM (download e caricamento dei pesi)' });
-      const st = await waitForReady({
-        sup, sleep, now, timeoutMs: readyTimeoutMs(profile.model.weightsBytes),
-        onStatus: (s) => events.emit('progress', progressOf(s)),
-        onLog: (line) => events.emit('log', { line }),
-      });
+      const readyOpts = { sup, sleep, now, onStatus: (s) => events.emit('progress', progressOf(s)), onLog: (line) => events.emit('log', { line }) };
+      let st;
+      let timeoutMs = readyTimeoutMs(profile.model.weightsBytes);
+      for (;;) {
+        try {
+          st = await waitForReady({ ...readyOpts, timeoutMs });
+          break;
+        } catch (err) {
+          if (err.code !== Codes.POD_START_TIMEOUT || yes || !(await ask('vLLM non è ancora pronto. Aspettare altri 15 minuti?', true))) throw err;
+          timeoutMs = 15 * 60_000;
+        }
+      }
       const baseUrl = proxyUrl(pod.id, 8000);
       events.emit('phase', { message: 'Smoke test con chiamata a strumento' });
       const smoke = await smokeTest({ http, baseUrl, apiKey, model: profile.servedName });
@@ -201,7 +239,7 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       };
     } catch (err) {
       events.emit('warning', { message: `Avvio non riuscito: ${err.message}` });
-      if (yes || await ask(`Terminare il Pod ${pod.id} per non continuare a pagare?`, true)) await terminate(name, pod.id);
+      await offerTerminate(name, pod.id, yes);
       throw err;
     }
   }

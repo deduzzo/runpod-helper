@@ -39,6 +39,14 @@ describe('createWithFallback', () => {
     expect(runpod.createPod).toHaveBeenCalledTimes(2);
   });
 
+  it('5xx con findExisting che trova un Pod: nessun secondo createPod', async () => {
+    const runpod = { createPod: vi.fn().mockResolvedValue({ status: 503, data: {} }) };
+    const findExisting = vi.fn().mockResolvedValue({ id: 'pod9' });
+    const r = await createWithFallback({ runpod, candidates: cands, buildBody: body, sleep, findExisting });
+    expect(r).toEqual({ pod: { id: 'pod9' }, candidate: cands[0] });
+    expect(runpod.createPod).toHaveBeenCalledTimes(1);
+  });
+
   it('402 si ferma subito, 422 è un errore della richiesta', async () => {
     const r402 = { createPod: vi.fn().mockResolvedValue({ status: 402, data: { detail: 'balance' } }) };
     await expect(createWithFallback({ runpod: r402, candidates: cands, buildBody: body, sleep })).rejects.toMatchObject({ code: 'INSUFFICIENT_BALANCE' });

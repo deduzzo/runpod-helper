@@ -25,7 +25,7 @@ export function rankCandidates({ profile, catalogs, cloud = 'SECURE' }) {
   return { inVolumeDc, otherDcs };
 }
 
-export async function createWithFallback({ runpod, candidates, buildBody, onAttempt = () => {}, beforeAttempt = async () => true, sleep = defaultSleep }) {
+export async function createWithFallback({ runpod, candidates, buildBody, onAttempt = () => {}, beforeAttempt = async () => true, findExisting = async () => null, sleep = defaultSleep }) {
   let last = null;
   for (const c of candidates) {
     await beforeAttempt(c);
@@ -38,7 +38,13 @@ export async function createWithFallback({ runpod, candidates, buildBody, onAtte
       if (r.status === 402) throw new LlmpodError(Codes.INSUFFICIENT_BALANCE, `Credito Runpod insufficiente: ${detail}`, { hint: 'Ricarica il credito su https://www.runpod.io/console/user/billing' });
       if (r.status === 401) throw new LlmpodError(Codes.RUNPOD_AUTH, `Chiave Runpod non valida: ${detail}`);
       if (r.status === 422) throw new LlmpodError(Codes.REQUEST_INVALID, `Richiesta di creazione Pod non valida: ${detail}`);
-      if (r.status >= 500) { await sleep(2000 * (attempt + 1)); continue; }
+      if (r.status >= 500) {
+        // la creazione potrebbe essere andata a buon fine nonostante l'errore: evita un secondo Pod
+        const existing = await findExisting();
+        if (existing) return { pod: existing, candidate: c };
+        await sleep(2000 * (attempt + 1));
+        continue;
+      }
       break;
     }
   }
