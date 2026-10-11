@@ -1,8 +1,7 @@
 # llmpod — runpod-helper
 
-> **Stato: in progettazione.** Il codice non è ancora stato scritto: questo repository contiene per ora
-> il README con le decisioni di design prese e le verifiche già fatte sulle API. Le istruzioni di
-> installazione arriveranno con la prima versione.
+> **Stato:** CLI v1 funzionante (piano 1). In arrivo: consulente con IA esterna (piano 2),
+> interfaccia web (piano 3), Docker e script di avvio per ogni piattaforma (piano 4).
 
 `llmpod` è una CLI (con interfaccia web locale) che automatizza il ciclo di vita di un **LLM
 self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di coding agent come
@@ -35,6 +34,73 @@ self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di codin
 
 Ogni operazione che costa denaro mostra il **costo orario stimato e chiede conferma**
 (`--yes` per saltarla); tutti i comandi che creano o distruggono risorse supportano `--dry-run`.
+
+## Installazione (CLI, senza Docker)
+
+Requisiti: Node.js ≥ 20, git. Python serve solo per i test del supervisore.
+
+```bash
+git clone https://github.com/deduzzo/runpod-helper.git
+cd runpod-helper
+npm install          # attiva anche l'hook anti-segreti
+npm link             # rende disponibile il comando "llmpod"
+```
+
+## Primo utilizzo end-to-end
+
+```bash
+llmpod init                                   # chiave Runpod, token HF, datacenter, network volume
+llmpod search qwen3 coder                     # modelli con chat template e tool parser noto
+llmpod plan Qwen/Qwen3-Coder-30B-A3B-Instruct --context 65536
+llmpod save qwen3-coder
+llmpod up qwen3-coder                         # mostra il costo orario e chiede conferma
+llmpod run claude                             # oppure: opencode, pi, zcode
+llmpod status
+llmpod down                                   # il volume con i pesi resta
+```
+
+Il Pod si spegne da solo dopo 30 minuti senza richieste o dopo 8 ore in ogni caso
+(valori nel profilo, sezione `watchdog`), anche a portatile spento.
+
+## Costi tipici
+
+Prezzi di listino Runpod Secure Cloud letti dall'API il 11/10/2026 (possono cambiare;
+`llmpod plan` mostra sempre quelli correnti):
+
+| GPU | VRAM | $/h |
+|---|---|---|
+| RTX 4090 | 24 GB | 0,89 |
+| RTX 6000 Ada | 48 GB | 0,99 |
+| L40S | 48 GB | 1,09 |
+| A100 80GB (PCIe/SXM) | 80 GB | 1,79 |
+| RTX PRO 6000 Blackwell | 96 GB | 2,49 |
+| H100 PCIe | 80 GB | 2,89 |
+| H100 SXM | 80 GB | 3,99 |
+| H200 | 141 GB | 5,29 |
+
+Esempio: Qwen3-Coder-30B-A3B con 64K di contesto entra in una A100 80GB (circa 1,79 $/h).
+Network volume: 0,07 $/GB al mese (150 GB = 10,50 $/mese), pagato anche a Pod spento.
+
+## Risoluzione dei problemi
+
+| Errore | Causa | Cosa fare |
+|---|---|---|
+| `NO_GPU_AVAILABLE` | Nessuna GPU adatta libera nel datacenter del volume | Riprova più tardi; `llmpod plan` mostra dove c'è disponibilità; `up` può ripiegare su altri datacenter senza volume |
+| `GATED_MODEL` / `HF_AUTH` | Modello con accesso su richiesta | Richiedi l'accesso sulla pagina del modello e imposta `HF_TOKEN` con `llmpod init` (basta un token Read) |
+| `OOM` | Memoria GPU insufficiente | Riduci `--context`, usa `--set kv-cache-dtype=fp8` o una GPU più grande (`llmpod plan`) |
+| `SMOKE_TEST_FAILED` / `UNKNOWN_TOOL_PARSER` | Le chiamate a strumento non funzionano | Verifica il parser con `llmpod plan … --set tool-call-parser=<nome>`; elenco: https://docs.vllm.ai/en/v0.30.0/features/tool_calling/ |
+| `ZCODE_RUNNING` | ZCode è aperto e sovrascriverebbe la configurazione | Chiudi ZCode e ripeti `llmpod run zcode` |
+| `CONFIG_PERMISSIONS` | `.env` leggibile da altri utenti | `chmod 600 ~/.config/llmpod/.env` |
+| Risposte interrotte dopo ~100 s | Limite del proxy HTTPS di Runpod (Cloudflare) | Esito della prova reale: _compilare con il risultato del controllo streaming_ |
+
+## Sicurezza
+
+- Le credenziali stanno in `~/.config/llmpod/.env` (permessi 600) e non vengono mai stampate.
+- Nel Pod non entra nessuna chiave Runpod dell'utente: il watchdog usa la chiave che Runpod
+  inietta nel Pod, verificata in grado di agire solo su quel Pod.
+- Ogni profilo ha una chiave vLLM propria (`llmpod rotate-key` per cambiarla).
+- Le metriche di vLLM (`/metrics`) sono raggiungibili senza chiave tramite il proxy pubblico:
+  espongono solo contatori, non i contenuti delle richieste.
 
 ## Decisioni di design
 
