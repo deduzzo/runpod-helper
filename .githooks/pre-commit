@@ -1,0 +1,30 @@
+#!/bin/sh
+# Blocca i commit che contengono segreti. Usa gitleaks se installato,
+# altrimenti un controllo basato su pattern dei formati di chiave noti.
+set -eu
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+# File che non devono mai essere committati
+bad_files=$(printf '%s\n' "$staged" | grep -E '(^|/)\.env($|\.)|\.(pem|key|p12|pfx)$|(^|/)state\.json$' || true)
+if [ -n "$bad_files" ]; then
+  echo "pre-commit: file sensibili in stage, commit bloccato:" >&2
+  printf '  %s\n' $bad_files >&2
+  exit 1
+fi
+
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --staged --redact --no-banner || { echo "pre-commit: gitleaks ha trovato segreti" >&2; exit 1; }
+  exit 0
+fi
+
+# Ripiego: pattern di chiavi note (Runpod, Hugging Face, OpenAI, Anthropic, GitHub, Z.ai, chiavi private)
+pattern='rpa_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,}|sk-(ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|[0-9a-f]{32}\.[A-Za-z0-9]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+hits=$(git diff --cached -U0 --diff-filter=ACMR | grep -E '^\+' | grep -nE "$pattern" || true)
+if [ -n "$hits" ]; then
+  echo "pre-commit: possibili segreti nelle modifiche, commit bloccato:" >&2
+  printf '%s\n' "$hits" | sed -E "s/($pattern)/<REDATTO>/g" >&2
+  exit 1
+fi
+exit 0

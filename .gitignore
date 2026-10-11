@@ -1,7 +1,24 @@
+# Dipendenze e build
 node_modules/
 dist/
 coverage/
+.vite/
+__pycache__/
+*.pyc
+
+# Segreti e configurazione locale: MAI su GitHub
 .env
 .env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+state.json
+.llmpod/
+config.local.json
+
+# Log e file di sistema
 *.log
 .DS_Store
+Thumbs.db
