@@ -13,7 +13,7 @@ describe('llmpod ui', () => {
     const s = sandbox();
     const spawn = vi.fn(child);
     s.env.LLMPOD_UI_TOKEN = TOKEN;
-    const done = s.run(['ui', '--port', '0', '--proxy-port', '0', '--no-open'], { spawn });
+    const done = s.run(['ui', '--port', '0', '--proxy-port', '0', '--no-open'], { spawn, exit: vi.fn() });
     for (let i = 0; i < 100 && !/Interfaccia llmpod: http/.test(s.out()); i++) await new Promise((r) => setTimeout(r, 20));
     expect(s.out()).toMatch(new RegExp(`Interfaccia llmpod: http://127\\.0\\.0\\.1:\\d+/\\?t=${TOKEN}`));
     expect(s.out()).toContain('Proxy per Open WebUI su 127.0.0.1:');
@@ -27,7 +27,7 @@ describe('llmpod ui', () => {
   it('senza LLMPOD_UI_TOKEN genera un token esadecimale e apre il browser', async () => {
     const s = sandbox();
     const spawn = vi.fn(child);
-    const done = s.run(['ui', '--port', '0', '--no-proxy'], { spawn });
+    const done = s.run(['ui', '--port', '0', '--no-proxy'], { spawn, exit: vi.fn() });
     for (let i = 0; i < 100 && !spawn.mock.calls.length; i++) await new Promise((r) => setTimeout(r, 20));
     expect(s.out()).toMatch(/\/\?t=[0-9a-f]{48}\n/);
     expect(s.out()).not.toContain('Proxy per Open WebUI');
@@ -110,5 +110,24 @@ describe('openBrowser', () => {
   });
   it('spawn che lancia: false, nessuna eccezione', () => {
     expect(openBrowser('http://x/', { platform: 'linux', spawn: () => { throw new Error('ENOENT'); } })).toBe(false);
+  });
+});
+
+describe('llmpod chat: credenziali nell\'URL', () => {
+  it('user:password@ rimossi da richiesta, output e browser', async () => {
+    const s = sandbox();
+    s.env.LLMPOD_OPENWEBUI_URL = 'http://utente:segretissima@127.0.0.1:3000/';
+    const spawn = vi.fn(child);
+    const http = { request: vi.fn(async () => ({ ok: true, status: 200, data: '' })) };
+    expect(await s.run(['chat'], { http, spawn })).toBe(0);
+    expect(http.request.mock.calls[0][1]).toBe('http://127.0.0.1:3000/');
+    expect(s.all()).not.toContain('segretissima');
+    expect(JSON.stringify(spawn.mock.calls)).not.toContain('segretissima');
+  });
+  it('URL non valido: il valore non è riportato nell\'errore', async () => {
+    const s = sandbox();
+    s.env.LLMPOD_OPENWEBUI_URL = 'ftp://utente:segretissima@host';
+    expect(await s.run(['chat'], { http: { request: vi.fn() } })).toBe(1);
+    expect(s.all()).not.toContain('segretissima');
   });
 });

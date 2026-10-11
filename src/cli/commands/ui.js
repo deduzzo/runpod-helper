@@ -4,12 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { LlmpodError, Codes } from '../../core/errors.js';
 import { registerSecret } from '../../core/secrets.js';
-import { startUi } from '../../server/start.js';
+import { startUi, assertUiToken } from '../../server/start.js';
 import { VERSION } from '../context.js';
 import { openBrowser } from '../open-browser.js';
 
 const STATIC_DIR = fileURLToPath(new URL('../../../dist/web', import.meta.url));
-const TOKEN_RE = /^[A-Za-z0-9_-]{16,}$/;
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
+// Variabile d'ambiente vuota = assente.
+const envValue = (v) => (v === undefined || v === '' ? undefined : v);
 
 function parsePort(value, label) {
   const n = typeof value === 'number' ? value : Number(value);
@@ -28,18 +30,22 @@ export function register(program, getCtx) {
     .action(async (opts) => {
       const ctx = getCtx();
       const { env, io } = ctx;
-      const host = opts.host ?? env.LLMPOD_UI_HOST ?? '127.0.0.1';
-      const port = parsePort(opts.port ?? env.LLMPOD_UI_PORT ?? 7860, 'Porta');
-      const proxyPort = parsePort(opts.proxyPort ?? env.LLMPOD_PROXY_PORT ?? 8081, 'Porta del proxy');
-      const proxyHost = env.LLMPOD_PROXY_HOST ?? host;
+      const host = opts.host ?? envValue(env.LLMPOD_UI_HOST) ?? '127.0.0.1';
+      const port = parsePort(opts.port ?? envValue(env.LLMPOD_UI_PORT) ?? 7860, 'Porta');
+      const proxyPort = parsePort(opts.proxyPort ?? envValue(env.LLMPOD_PROXY_PORT) ?? 8081, 'Porta del proxy');
+      const proxyHost = envValue(env.LLMPOD_PROXY_HOST) ?? host;
 
-      let token = env.LLMPOD_UI_TOKEN;
-      if (token === undefined || token === '') {
-        token = randomBytes(24).toString('hex');
-      } else if (!TOKEN_RE.test(token)) {
-        throw new LlmpodError(Codes.INVALID_INPUT, 'LLMPOD_UI_TOKEN non valido: servono almeno 16 caratteri tra lettere, cifre, "_" e "-"', { hint: 'Imposta un token più lungo oppure rimuovi la variabile per generarne uno casuale a ogni avvio' });
-      }
+      let token = envValue(env.LLMPOD_UI_TOKEN);
+      if (token === undefined) token = randomBytes(24).toString('hex');
+      else assertUiToken(token, { source: 'LLMPOD_UI_TOKEN' });
       registerSecret(token);
+
+      for (const h of new Set([host, ...(opts.proxy ? [proxyHost] : [])])) {
+        if (LOOPBACK.has(h)) continue;
+        io.err(env.LLMPOD_IN_DOCKER === '1'
+          ? `⚠ Ascolto su ${h} dentro Docker: pubblica la porta solo su 127.0.0.1 (ad esempio -p 127.0.0.1:${port}:${port}), altrimenti l'interfaccia è raggiungibile dalla rete`
+          : `⚠ Ascolto su ${h}: l'interfaccia è raggiungibile da altri computer della rete e il token è l'unica protezione. Usa 127.0.0.1 se non ti serve`);
+      }
 
       const staticDir = fs.existsSync(path.join(STATIC_DIR, 'index.html')) ? STATIC_DIR : null;
       if (!staticDir) io.err('⚠ Interfaccia non compilata: esegui "npm run build:web" (le API funzionano comunque)');
@@ -51,13 +57,22 @@ export function register(program, getCtx) {
       if (opts.open && env.LLMPOD_IN_DOCKER !== '1') openBrowser(ui.url, { platform: ctx.platform, spawn: ctx.spawn });
       await new Promise((resolve) => {
         let stopping = false;
+        // process.on (non once): un secondo segnale durante lo spegnimento non deve riattivare il comportamento predefinito.
         const stop = () => {
-          if (stopping) return;
+          if (stopping) { io.err('  Terminazione in corso, attendere…'); return; }
           stopping = true;
-          ui.shutdown({ io }).catch((err) => io.err(`⚠ Chiusura incompleta: ${err.message}`)).finally(resolve);
+          ui.shutdown({ io })
+            .catch((err) => io.err(`⚠ Chiusura incompleta: ${err.message}`))
+            .finally(() => {
+              process.off('SIGINT', stop);
+              process.off('SIGTERM', stop);
+              // Il processo deve terminare davvero: nessun job rimasto (polling, consulente, domande) deve restare in vita.
+              ctx.exit(0);
+              resolve();
+            });
         };
-        process.once('SIGINT', stop);
-        process.once('SIGTERM', stop);
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
       });
     });
 }

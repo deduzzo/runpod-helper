@@ -22,6 +22,7 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
   const ctx = {
     env, io, store, http, events, platform,
     spawn: overrides.spawn ?? spawn,
+    exit: overrides.exit ?? ((code) => process.exit(code)),
     isZcodeRunning: overrides.isZcodeRunning ?? (() => isZcodeRunning({ platform })),
     get runpod() {
       if (overrides.runpod) return overrides.runpod;

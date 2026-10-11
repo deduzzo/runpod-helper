@@ -15,8 +15,12 @@ export function register(program, getCtx) {
         url = new URL(raw);
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('protocollo');
       } catch {
-        throw new LlmpodError(Codes.INVALID_INPUT, `LLMPOD_OPENWEBUI_URL non valido: "${raw}"`, { hint: 'Usa un indirizzo http(s), ad esempio http://127.0.0.1:3000' });
+        // Il valore non viene riportato: potrebbe contenere credenziali.
+        throw new LlmpodError(Codes.INVALID_INPUT, 'LLMPOD_OPENWEBUI_URL non valido', { hint: 'Usa un indirizzo http(s), ad esempio http://127.0.0.1:3000' });
       }
+      // Mai credenziali nell'indirizzo richiesto, stampato o aperto nel browser.
+      url.username = '';
+      url.password = '';
       const notRunning = new LlmpodError(Codes.NETWORK, `Open WebUI non risponde su ${url.origin}`, {
         hint: 'Avvia Open WebUI con scripts/start.sh (Docker) oppure usa la pagina Prova veloce di llmpod ui',
       });

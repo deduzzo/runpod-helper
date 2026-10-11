@@ -110,6 +110,27 @@ describe('startUi', () => {
     }
   });
 
+  it('le altre variabili del .env sopravvivono alla generazione della chiave interna', async () => {
+    const c = ctx();
+    c.store.writeEnv({ ALTRA_VARIABILE: 'valore-qualsiasi', LLMPOD_KEY_QWEN: 'CHIAVE-PROFILO-FINTA-ABCDEFG' });
+    const ui = await startUi(c, { port: 0, proxy: false, token: 't'.repeat(20), staticDir: null });
+    try {
+      const env = c.store.readEnv();
+      expect(env.ALTRA_VARIABILE).toBe('valore-qualsiasi');
+      expect(env.LLMPOD_KEY_QWEN).toBe('CHIAVE-PROFILO-FINTA-ABCDEFG');
+      expect(env.LLMPOD_OPENWEBUI_KEY).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      await ui.close();
+    }
+  });
+
+  it.each([['corto', 'abc'], ['caratteri non validi', 'token con spazi!!!!!!!!!']])('token %s: INVALID_INPUT senza stampare il valore', async (_n, bad) => {
+    const err = await startUi(ctx(), { port: 0, proxy: false, token: bad, staticDir: null }).catch((e) => e);
+    expect(err).toMatchObject({ code: 'INVALID_INPUT' });
+    expect(err.message).not.toContain(bad);
+    expect(String(err.hint ?? '')).not.toContain(bad);
+  });
+
   it('porta occupata: errore chiaro in italiano', async () => {
     const c = ctx();
     const first = await startUi(c, { port: 0, proxy: false, token: 't'.repeat(20), staticDir: null });
@@ -124,6 +145,7 @@ describe('startUi', () => {
 describe('startUi: chiusura con job up in corso (R5)', () => {
   const TOKEN = 'abcdef0123456789abcdef0123456789';
   const waitFor = async (fn) => { for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 20)); } throw new Error('timeout'); };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function withJob({ emitPod = true } = {}) {
     const down = vi.fn(async () => ({}));
@@ -144,18 +166,16 @@ describe('startUi: chiusura con job up in corso (R5)', () => {
     return { c, io, down, listPods, lines: () => events.join('\n') };
   }
 
-  async function startJob(c, ui, profile = 'qwen') {
-    const api = apiClient({ port: ui.port, token: TOKEN });
-    const r = await api('/api/jobs', { method: 'POST', body: { action: 'up', profile } });
+  const startJob = async (ui, profile = 'qwen') => {
+    const r = await apiClient({ port: ui.port, token: TOKEN })('/api/jobs', { method: 'POST', body: { action: 'up', profile } });
     expect(r.status).toBe(200);
-    return api;
-  }
+  };
 
   it('termina il Pod in creazione e stampa cosa ha fatto', async () => {
     const t = withJob();
     const ui = await startUi(t.c, { port: 0, proxy: false, token: TOKEN, staticDir: null });
-    await startJob(t.c, ui);
-    await waitFor(() => /pod9/.test(JSON.stringify(ui.trackedJobs())));
+    await startJob(ui);
+    await waitFor(() => ui.trackedUps().some((u) => u.podId === 'pod9'));
     await ui.shutdown({ io: t.io });
     expect(t.down).toHaveBeenCalledWith('qwen', { yes: true });
     expect(t.lines()).toContain('pod9');
@@ -164,23 +184,59 @@ describe('startUi: chiusura con job up in corso (R5)', () => {
   it('senza Pod noto ma in creazione: avvisa che potrebbe esistere un Pod non visibile', async () => {
     const t = withJob({ emitPod: false });
     const ui = await startUi(t.c, { port: 0, proxy: false, token: TOKEN, staticDir: null });
-    await startJob(t.c, ui);
-    await waitFor(() => ui.trackedJobs().some((j) => j.creating));
+    await startJob(ui);
+    await waitFor(() => ui.trackedUps().some((u) => u.creating));
     await ui.shutdown({ io: t.io });
     expect(t.down).not.toHaveBeenCalled();
     expect(t.lines()).toContain('Potrebbe essere stato creato un Pod');
   });
 
-  it('senza job in corso chiude e basta; i Pod già pronti restano con un messaggio', async () => {
+  it('job concluso: chiude e basta; il Pod pronto resta con un messaggio', async () => {
     const down = vi.fn();
     const c = ctx({ ops: { down }, makeOps: ({ events: ev }) => ({ up: async () => { ev.emit('pod', { podId: 'podOK' }); return { baseUrl: 'x' }; } }) });
     const lines = [];
     const ui = await startUi(c, { port: 0, proxy: false, token: TOKEN, staticDir: null });
-    const api = apiClient({ port: ui.port, token: TOKEN });
-    await api('/api/jobs', { method: 'POST', body: { action: 'up', profile: 'qwen' } });
-    await waitFor(() => ui.trackedJobs().some((j) => j.status === 'done'));
+    await startJob(ui);
+    await waitFor(() => ui.trackedUps().some((u) => u.returned));
     await ui.shutdown({ io: { err: (t) => lines.push(t), out: (t) => lines.push(t) } });
     expect(down).not.toHaveBeenCalled();
     expect(lines.join('\n')).toMatch(/podOK.*(watchdog|llmpod down qwen)/s);
+  });
+
+  it('job in attesa della domanda "Salvare gli argomenti corretti?": il Pod è pronto e resta', async () => {
+    const down = vi.fn();
+    const c = ctx({ ops: { down }, makeOps: ({ events: ev }) => ({ up: async () => { ev.emit('pod', { podId: 'podPronto' }); return { baseUrl: 'x', repairedArgs: ['--x'] }; }, saveProfileArgs: vi.fn() }) });
+    const lines = [];
+    const ui = await startUi(c, { port: 0, proxy: false, token: TOKEN, staticDir: null });
+    await startJob(ui);
+    await waitFor(() => ui.trackedUps().some((u) => u.returned));
+    await sleep(30);
+    const jobsNow = (await apiClient({ port: ui.port, token: TOKEN })('/api/jobs')).json.jobs;
+    expect(jobsNow.some((j) => j.status === 'running' && j.question)).toBe(true);
+    await ui.shutdown({ io: { err: (t) => lines.push(t), out: (t) => lines.push(t) } });
+    expect(down).not.toHaveBeenCalled();
+    expect(lines.join('\n')).toContain('podPronto');
+  });
+
+  it('lo stato del job è letto dal vivo: un Pod comparso durante lo spegnimento dei precedenti viene terminato', async () => {
+    const calls = [];
+    const down = vi.fn(async (name) => { calls.push(name); await sleep(60); });
+    const c = ctx({
+      ops: { down },
+      runpod: { listPods: async () => [] },
+      makeOps: ({ events: ev }) => ({
+        up: (name) => new Promise(() => {
+          ev.emit('phase', { message: 'Creazione del Pod' });
+          if (name === 'alpha') ev.emit('pod', { podId: 'podA' });
+          else setTimeout(() => ev.emit('pod', { podId: 'podB' }), 20);
+        }),
+      }),
+    });
+    const ui = await startUi(c, { port: 0, proxy: false, token: TOKEN, staticDir: null });
+    await startJob(ui, 'alpha');
+    await startJob(ui, 'beta');
+    await waitFor(() => ui.trackedUps().some((u) => u.profile === 'beta' && u.creating));
+    await ui.shutdown({ io: { err: () => {}, out: () => {} } });
+    expect(calls).toEqual(['alpha', 'beta']);
   });
 });

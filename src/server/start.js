@@ -11,6 +11,14 @@ import { createSse } from './sse.js';
 import { createOpenwebuiProxy, createTargetResolver } from './openwebui-proxy.js';
 
 const MIN_KEY_LENGTH = 16;
+const TOKEN_RE = /^[A-Za-z0-9_-]{16,}$/;
+
+// Token dell'interfaccia: il valore non compare mai nel messaggio.
+export function assertUiToken(token, { source = 'Il token dell\'interfaccia' } = {}) {
+  if (typeof token !== 'string' || !TOKEN_RE.test(token)) {
+    throw new LlmpodError(Codes.INVALID_INPUT, `${source} non è valido: servono almeno 16 caratteri tra lettere, cifre, "_" e "-"`, { hint: 'Imposta un token più lungo oppure rimuovi LLMPOD_UI_TOKEN per generarne uno casuale a ogni avvio' });
+  }
+}
 
 const listen = (server, port, host, what) => new Promise((resolve, reject) => {
   server.once('error', (err) => {
@@ -32,6 +40,7 @@ const closeServer = (server) => new Promise((resolve) => {
 export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost = '127.0.0.1', proxyPort = 8081, token, staticDir, proxy = true, version = '0.0.0' }) {
   // Tutti i segreti vanno registrati prima di avviare job o rispondere: readEnv registra le variabili KEY/TOKEN/SECRET
   // (Runpod, HF, consulente, chiavi dei profili, chiave interna di Open WebUI); il token dell'interfaccia non sta nel .env.
+  assertUiToken(token);
   registerSecret(token);
   let key = ctx.store.readEnv().LLMPOD_OPENWEBUI_KEY;
   if (!key) {
@@ -46,16 +55,27 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
   ctx.isZcodeRunning ??= () => isZcodeRunning({ platform: ctx.platform });
 
   const sse = createSse();
-  // Per ogni job: Pod creato e fase di creazione, serve a chiudere "ui" senza lasciare Pod accesi.
-  const tracked = new Map();
-  const jobs = createJobs({
-    onEvent: (e) => {
-      const t = tracked.get(e.jobId) ?? tracked.set(e.jobId, { podId: null, creating: false }).get(e.jobId);
-      if (e.type === 'pod') t.podId = e.podId;
-      if (e.type === 'phase' && /^Creazione del Pod/.test(e.message ?? '')) t.creating = true;
-      sse.broadcast('job', e);
-    },
-  });
+  // Una voce per ogni chiamata a ops.up: Pod creato, fase di creazione e ritorno di ops.up. Serve a chiudere "ui"
+  // senza lasciare Pod in creazione; lo stato è vivo (aggiornato dagli eventi), mai uno snapshot.
+  const ups = [];
+  const serverCtx = Object.create(ctx);
+  serverCtx.makeOps = (args) => {
+    const ops = ctx.makeOps(args);
+    if (typeof ops?.up !== 'function') return ops;
+    const up = ops.up.bind(ops);
+    return Object.assign(Object.create(ops), {
+      up(name, ...rest) {
+        const rec = { profile: name, podId: null, creating: false, returned: false };
+        ups.push(rec);
+        const off = args.events?.on?.((e) => {
+          if (e.type === 'pod') rec.podId = e.podId;
+          if (e.type === 'phase' && /^Creazione del Pod/.test(e.message ?? '')) rec.creating = true;
+        });
+        return Promise.resolve(up(name, ...rest)).finally(() => { rec.returned = true; off?.(); });
+      },
+    });
+  };
+  const jobs = createJobs({ onEvent: (e) => sse.broadcast('job', e) });
   const state = { lastAdvice: null, proxy: null };
 
   const uiServer = http.createServer();
@@ -69,7 +89,7 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
   let actualProxyPort = null;
   try {
     actualPort = await listen(uiServer, port, host, 'interfaccia');
-    uiServer.on('request', createApp({ ctx, token, port: actualPort, staticDir, jobs, version, routes: createRoutes({ ctx, jobs, sse, state }) }));
+    uiServer.on('request', createApp({ ctx: serverCtx, token, port: actualPort, staticDir, jobs, version, routes: createRoutes({ ctx: serverCtx, jobs, sse, state }) }));
     if (proxy) {
       const resolver = createTargetResolver({ store: ctx.store, getOps: () => ctx.ops });
       const proxyServer = http.createServer(createOpenwebuiProxy({ resolveTarget: resolver, internalKey: key, userAgent: `llmpod/${version}` }));
@@ -83,30 +103,29 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
     throw err;
   }
 
-  const trackedJobs = () => jobs.list().map((j) => ({ jobId: j.id, kind: j.kind, status: j.status, ...(tracked.get(j.id) ?? { podId: null, creating: false }) }));
+  const trackedUps = () => ups.map((u) => ({ ...u }));
 
-  // R5: come Ctrl+C durante "llmpod up": i Pod in creazione/attesa vengono terminati (risposta "sì" automatica, un
-  // server non ha un terminale da interrogare); i Pod già pronti restano e li spegne il watchdog.
+  // R5: come Ctrl+C durante "llmpod up": i Pod la cui ops.up non è ancora tornata (in creazione/attesa) vengono terminati
+  // (risposta "sì" automatica, un server non ha un terminale da interrogare); i Pod pronti restano e li spegne il watchdog.
   async function shutdown({ io } = {}) {
-    for (const j of trackedJobs()) {
-      const [action, ...rest] = j.kind.split(':');
-      const profile = rest.join(':');
-      if (action === 'up' && j.status === 'running') {
+    for (const rec of ups) {
+      if (!rec.returned) {
         await createInterruptHandler({
           ops: ctx.ops,
           runpod: { listPods: () => ctx.runpod.listPods() },
           io: { ask: async (q) => { io?.err(`${String(q).trim()} Sì (automatico: l'interfaccia si sta chiudendo)`); return true; }, err: (t) => io?.err(t) },
-          name: profile,
-          getPodId: () => j.podId,
-          isCreating: () => j.creating,
+          name: rec.profile,
+          getPodId: () => rec.podId,
+          isCreating: () => rec.creating,
           exit: () => {},
         })();
-        if (!j.podId && !j.creating) io?.err(`ℹ Avvio di ${profile} interrotto prima della creazione del Pod: nessun costo`);
-      } else if (action === 'up' && j.status === 'done' && j.podId) {
-        io?.err(`ℹ Il Pod ${j.podId} (${profile}) resta attivo: lo spegne il watchdog dopo l'inattività, oppure esegui "llmpod down ${profile}"`);
-      } else if (action === 'down' && j.status === 'running') {
-        io?.err(`⚠ Spegnimento di ${profile} ancora in corso: controlla con "llmpod status"`);
+        if (!rec.podId && !rec.creating) io?.err(`ℹ Avvio di ${rec.profile} interrotto prima della creazione del Pod: nessun costo`);
+      } else if (rec.podId) {
+        io?.err(`ℹ Il Pod ${rec.podId} (${rec.profile}) resta attivo: lo spegne il watchdog dopo l'inattività, oppure esegui "llmpod down ${rec.profile}"`);
       }
+    }
+    for (const j of jobs.list()) {
+      if (j.kind.startsWith('down:') && j.status === 'running') io?.err(`⚠ Spegnimento di ${j.kind.slice(5)} ancora in corso: controlla con "llmpod status"`);
     }
     await closeAll();
   }
@@ -115,7 +134,7 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
     url: `http://127.0.0.1:${actualPort}/?t=${token}`,
     port: actualPort,
     proxyPort: actualProxyPort,
-    trackedJobs,
+    trackedUps,
     shutdown,
     close: closeAll,
   };
