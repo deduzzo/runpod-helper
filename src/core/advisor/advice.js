@@ -2,15 +2,34 @@ import { LlmpodError, Codes } from '../errors.js';
 import { applyOverrides, validateArgs } from '../planner/vllm-args.js';
 
 export const LOCKED = ['revision', 'tensor-parallel-size', 'max-model-len'];
+// Allowlist: il consulente può proporre solo questi flag (nomi senza `--`).
+export const ADVISOR_ALLOWED = [
+  'tool-call-parser', 'reasoning-parser', 'enable-auto-tool-choice', 'tokenizer-mode',
+  'chat-template-content-format', 'enable-prefix-caching', 'no-enable-prefix-caching',
+  'enable-chunked-prefill', 'no-enable-chunked-prefill', 'max-num-seqs', 'max-num-batched-tokens',
+  'kv-cache-dtype', 'gpu-memory-utilization', 'enforce-eager', 'enable-expert-parallel',
+  'async-scheduling', 'default-chat-template-kwargs',
+];
 const MEMORY_KEYS = ['kv-cache-dtype', 'gpu-memory-utilization'];
+
+function tryObject(candidate) {
+  try {
+    const v = JSON.parse(candidate);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch { return null; }
+}
 
 export function parseAdvice(text) {
   const s = String(text ?? '');
-  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = fenced ? fenced[1] : s.slice(s.indexOf('{'), s.lastIndexOf('}') + 1);
-  let obj;
-  try { obj = JSON.parse(candidate); } catch { obj = null; }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+  // Prima i blocchi recintati (```json, ```bash, ...): vince il primo che è un oggetto JSON valido.
+  let obj = null;
+  for (const m of s.matchAll(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)```/g)) {
+    obj = tryObject(m[1]);
+    if (obj) break;
+  }
+  // Fallback: tra la prima '{' e l'ultima '}'.
+  if (!obj) obj = tryObject(s.slice(s.indexOf('{'), s.lastIndexOf('}') + 1));
+  if (!obj) {
     throw new LlmpodError(Codes.ADVISOR_INVALID, 'La risposta del consulente non contiene un oggetto JSON valido');
   }
   const set = obj.set ?? {};
@@ -48,13 +67,30 @@ export function diffArgs(before, after) {
 function checkValue(value) {
   if (value === true || value === false) return String(value);
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  if (typeof value === 'string' && value.length > 0 && value.length <= 300 && !/[\r\n]/.test(value)) return value;
+  // Una stringa che inizia con '-' verrebbe letta come flag (contrabbando): ammessi solo i numeri negativi.
+  if (typeof value === 'string' && value.length > 0 && value.length <= 300 && !/[\r\n]/.test(value)
+    && (!value.startsWith('-') || /^-\d+(\.\d+)?$/.test(value))) return value;
   return null;
+}
+
+// Controllo finale di integrità: nessun flag vietato/sconosciuto nuovo e i flag protetti invariati.
+function protectedFlagsIntact(baseArgs, args, flags, allowTrustRemoteCode) {
+  const before = validateArgs(baseArgs, flags, { allowTrustRemoteCode });
+  const after = validateArgs(args, flags, { allowTrustRemoteCode });
+  const known = new Set([...before.unknown, ...before.forbidden]);
+  if ([...after.unknown, ...after.forbidden].some((f) => !known.has(f))) return false;
+  const a = argMap(baseArgs);
+  const b = argMap(args);
+  return LOCKED.every((k) => {
+    const f = `--${k}`;
+    return a.has(f) === b.has(f) && a.get(f) === b.get(f);
+  });
 }
 
 export function reviewAdvice({ advice, baseArgs, flags, allowTrustRemoteCode = false, fitsWith = () => true }) {
   let accepted = [];
   const rejected = [];
+  const baseMap = argMap(baseArgs);
   for (const [rawKey, rawValue] of Object.entries(advice.set)) {
     const key = rawKey.replace(/^-+/, '').trim().toLowerCase().replace(/_/g, '-');
     if (!/^[a-z0-9][a-z0-9-]*$/.test(key)) { rejected.push({ key: rawKey, reason: 'nome di flag non valido' }); continue; }
@@ -62,11 +98,19 @@ export function reviewAdvice({ advice, baseArgs, flags, allowTrustRemoteCode = f
     const { unknown, forbidden } = validateArgs([`--${key}`], flags, { allowTrustRemoteCode });
     if (forbidden.length) { rejected.push({ key: rawKey, reason: 'flag vietato' }); continue; }
     if (unknown.length) { rejected.push({ key: rawKey, reason: 'flag sconosciuto a questa versione di vLLM' }); continue; }
+    if (!ADVISOR_ALLOWED.includes(key)) { rejected.push({ key: rawKey, reason: 'non consentito al consulente' }); continue; }
     const value = checkValue(rawValue);
     if (value === null) { rejected.push({ key: rawKey, reason: 'valore non valido' }); continue; }
+    // "true" su un flag che nella base ha già un valore lo cancellerebbe: rifiutato.
+    if (value === 'true' && typeof baseMap.get(`--${key}`) === 'string') { rejected.push({ key: rawKey, reason: 'valore non valido' }); continue; }
     accepted.push(`${key}=${value}`);
   }
   let args = applyOverrides(baseArgs, { set: accepted });
+  if (!protectedFlagsIntact(baseArgs, args, flags, allowTrustRemoteCode)) {
+    accepted = [];
+    args = [...baseArgs];
+    rejected.push({ key: '*', reason: 'la proposta altererebbe flag protetti: scartata' });
+  }
   if (!fitsWith(args)) {
     const memory = accepted.filter((s) => MEMORY_KEYS.includes(s.split('=')[0]));
     for (const s of memory) rejected.push({ key: s.split('=')[0], reason: 'la memoria non basterebbe sulla GPU scelta' });

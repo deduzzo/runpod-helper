@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAdvice, reviewAdvice, diffArgs, makeFitsWith, LOCKED } from '../../src/core/advisor/advice.js';
+import { parseAdvice, reviewAdvice, diffArgs, makeFitsWith, LOCKED, ADVISOR_ALLOWED } from '../../src/core/advisor/advice.js';
 import { loadFlags } from '../../src/core/planner/vllm-args.js';
 
 const flags = loadFlags();
@@ -18,6 +18,11 @@ describe('parseAdvice', () => {
     expect(() => parseAdvice('nessun json qui')).toThrow(expect.objectContaining({ code: 'ADVISOR_INVALID' }));
     expect(() => parseAdvice('{"set":["a"]}')).toThrow(expect.objectContaining({ code: 'ADVISOR_INVALID' }));
     expect(() => parseAdvice('[1,2]')).toThrow(expect.objectContaining({ code: 'ADVISOR_INVALID' }));
+  });
+
+  it('blocco bash seguito da blocco json: usa il primo JSON valido', () => {
+    const j = '{"set":{"tool-call-parser":"qwen3_coder"},"rationale":"perché","warnings":[]}';
+    expect(parseAdvice(`\`\`\`bash\necho ciao\n\`\`\`\n\`\`\`json\n${j}\n\`\`\``).rationale).toBe('perché');
   });
 });
 
@@ -46,9 +51,55 @@ describe('reviewAdvice', () => {
     expect(reasons['trust-remote-code']).toMatch(/vietato/);
     expect(reasons['flag-inventato']).toMatch(/sconosciuto/);
     expect(reasons['tokenizer-mode']).toMatch(/valore/);
-    expect(reasons['chat-template']).toMatch(/valore/);
+    expect(reasons['chat-template']).toMatch(/non consentito/);
     expect(reasons['kv-cache-dtype']).toMatch(/valore/);
     expect(reasons['bad name!']).toMatch(/nome/);
+  });
+
+  it('valori di contrabbando che iniziano con "-" sono rifiutati e gli args restano invariati', () => {
+    const advice = { set: {
+      'enable-auto-tool-choice': '--trust-remote-code',
+      'enable-prefix-caching': '--api-key=x',
+      'enforce-eager': '--revision=main',
+      'max-num-seqs': '-tp=8',
+    }, rationale: '', warnings: [] };
+    const r = reviewAdvice({ advice, baseArgs: base, flags });
+    expect(r.args).toEqual(base);
+    expect(r.accepted).toEqual([]);
+    expect(r.rejected.map((x) => x.key).sort()).toEqual(['enable-auto-tool-choice', 'enable-prefix-caching', 'enforce-eager', 'max-num-seqs']);
+    for (const x of r.rejected) expect(x.reason).toBe('valore non valido');
+  });
+
+  it('numero negativo come valore di un flag ammesso: accettato', () => {
+    const r1 = reviewAdvice({ advice: { set: { 'max-num-seqs': -1 }, rationale: '', warnings: [] }, baseArgs: base, flags });
+    expect(r1.rejected).toEqual([]);
+    expect(r1.args).toEqual(expect.arrayContaining(['--max-num-seqs', '-1']));
+    const r2 = reviewAdvice({ advice: { set: { 'max-num-seqs': '-1' }, rationale: '', warnings: [] }, baseArgs: base, flags });
+    expect(r2.rejected).toEqual([]);
+    expect(r2.args).toEqual(expect.arrayContaining(['--max-num-seqs', '-1']));
+  });
+
+  it('flag reali ma fuori dall\'allowlist: non consentiti', () => {
+    const names = ['tool-parser-plugin', 'hf-overrides', 'otlp-traces-endpoint', 'uds', 'kv-cache-memory-bytes'];
+    const set = Object.fromEntries(names.map((n) => [n, 'x']));
+    const r = reviewAdvice({ advice: { set, rationale: '', warnings: [] }, baseArgs: base, flags });
+    expect(r.args).toEqual(base);
+    for (const n of names) expect(Object.fromEntries(r.rejected.map((x) => [x.key, x.reason]))[n]).toMatch(/non consentito al consulente/);
+  });
+
+  it('ogni nome dell\'allowlist esiste tra i flag di vLLM', () => {
+    for (const n of ADVISOR_ALLOWED) expect(flags.has(`--${n}`)).toBe(true);
+  });
+
+  it('true su un flag che nella base ha già un valore: rifiutato', () => {
+    const r = reviewAdvice({ advice: { set: { 'tool-call-parser': true }, rationale: '', warnings: [] }, baseArgs: base, flags });
+    expect(r.args).toEqual(base);
+    expect(r.rejected).toEqual([{ key: 'tool-call-parser', reason: 'valore non valido' }]);
+  });
+
+  it('valore troppo lungo su un flag ammesso: valore non valido', () => {
+    const r = reviewAdvice({ advice: { set: { 'tokenizer-mode': 'x'.repeat(301) }, rationale: '', warnings: [] }, baseArgs: base, flags });
+    expect(r.rejected).toEqual([{ key: 'tokenizer-mode', reason: 'valore non valido' }]);
   });
 
   it('false rimuove un flag', () => {
