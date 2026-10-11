@@ -254,4 +254,33 @@ describe('startUi: chiusura con job up in corso (R5)', () => {
     await ui.shutdown({ io: { err: () => {}, out: () => {} } });
     expect(calls).toEqual(['alpha', 'beta']);
   });
+
+  it('durante lo spegnimento le richieste che modificano stato ricevono 503 e non avviano job; le GET restano', async () => {
+    let releaseDown;
+    const gate = new Promise((r) => { releaseDown = r; });
+    const up = vi.fn(() => new Promise(() => {}));
+    const c = ctx({
+      ops: { down: async () => { await gate; return {}; } },
+      runpod: { listPods: async () => [] },
+      makeOps: ({ events: ev }) => ({
+        up: (name) => { ev.emit('phase', { message: 'Creazione del Pod' }); ev.emit('pod', { podId: 'podL' }); return up(name); },
+        down: async () => ({}),
+      }),
+    });
+    const ui = await startUi(c, { port: 0, proxy: false, token: TOKEN, staticDir: null });
+    const api = apiClient({ port: ui.port, token: TOKEN });
+    await startJob(ui, 'alpha');
+    await waitFor(() => ui.trackedUps().some((u) => u.podId === 'podL'));
+    const lines = [];
+    const closing = ui.shutdown({ io: { err: (t) => lines.push(t), out: (t) => lines.push(t) } });
+    await sleep(30);
+    const r = await api('/api/jobs', { method: 'POST', body: { action: 'up', profile: 'beta' } });
+    expect(r.status).toBe(503);
+    expect(r.json.error.message).toBe('llmpod ui si sta chiudendo');
+    expect((await api('/api/profiles', { method: 'POST', body: { name: 'x' } })).status).toBe(503);
+    expect((await api('/api/jobs')).status).toBe(200);
+    expect(up).toHaveBeenCalledTimes(1);
+    releaseDown();
+    await closing;
+  });
 });

@@ -82,6 +82,7 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
   };
   const jobs = createJobs({ onEvent: (e) => sse.broadcast('job', e) });
   const state = { lastAdvice: null, proxy: null };
+  let closing = false;
 
   const uiServer = http.createServer();
   const servers = [uiServer];
@@ -94,7 +95,7 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
   let actualProxyPort = null;
   try {
     actualPort = await listen(uiServer, port, host, 'interfaccia');
-    uiServer.on('request', createApp({ ctx: serverCtx, token, port: actualPort, staticDir, jobs, version, routes: createRoutes({ ctx: serverCtx, jobs, sse, state }) }));
+    uiServer.on('request', createApp({ ctx: serverCtx, token, port: actualPort, staticDir, jobs, version, routes: createRoutes({ ctx: serverCtx, jobs, sse, state }), isClosing: () => closing }));
     if (proxy) {
       const resolver = createTargetResolver({ store: ctx.store, getOps: () => ctx.ops });
       const proxyServer = http.createServer(createOpenwebuiProxy({ resolveTarget: resolver, internalKey: key, userAgent: `llmpod/${version}` }));
@@ -113,6 +114,9 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
   // R5: come Ctrl+C durante "llmpod up": i Pod la cui ops.up non è ancora tornata (in creazione/attesa) vengono terminati
   // (risposta "sì" automatica, un server non ha un terminale da interrogare); i Pod pronti restano e li spegne il watchdog.
   async function shutdown({ io } = {}) {
+    // Per prima cosa: nessuna nuova operazione e nessuna domanda in attesa durante lo spegnimento.
+    closing = true;
+    jobs.close();
     for (const rec of ups) {
       if (!rec.returned) {
         await createInterruptHandler({

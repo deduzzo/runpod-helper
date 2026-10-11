@@ -6,6 +6,7 @@ const MAX_EVENTS = 1000;
 
 export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } = {}) {
   const jobs = new Map();
+  let closing = false;
   const view = (j) => ({ id: j.id, kind: j.kind, status: j.status, startedAt: j.startedAt, question: j.question ? { id: j.question.id, text: j.question.text, defYes: j.question.defYes } : null, result: j.result, error: j.error });
 
   function start(kind, run) {
@@ -39,7 +40,8 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
     // così un job non confermato non continua a spendere.
     const ask = (text, defYes = false, opts) => new Promise((resolve) => {
       const timeoutValue = Boolean(opts?.timeoutValue ?? false);
-      if (job.status !== 'running') { resolve(timeoutValue); return; }
+      // Con l'interfaccia in chiusura nessuno può rispondere: vale subito il valore di default (mai domande nuove).
+      if (job.status !== 'running' || closing) { resolve(timeoutValue); return; }
       // Una sola domanda pendente: la precedente viene chiusa come se fosse scaduta.
       if (job.question) job.question.settle(job.question.timeoutValue);
       const id = randomUUID();
@@ -92,9 +94,16 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
     return true;
   }
 
+  // Spegnimento: le domande pendenti si chiudono col loro timeoutValue e le nuove ask rispondono subito.
+  function close() {
+    closing = true;
+    for (const j of jobs.values()) j.question?.settle(j.question.timeoutValue);
+  }
+
   return {
     start,
     answer,
+    close,
     get: (id) => (jobs.has(id) ? view(jobs.get(id)) : null),
     list: () => [...jobs.values()].map(view),
     // Eventi con seq >= since: il client passa (ultimo seq visto + 1).

@@ -5,7 +5,7 @@ import { HttpError, JSON_CT, SECURITY_HEADERS, sendJson, parseCookies, safeEqual
 export { HttpError };
 const COOKIE = 'llmpod_session';
 
-export function createApp({ ctx, token, port, staticDir, jobs, version, routes = () => null }) {
+export function createApp({ ctx, token, port, staticDir, jobs, version, routes = () => null, isClosing = () => false }) {
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function handle(req, res) {
@@ -16,6 +16,8 @@ export function createApp({ ctx, token, port, staticDir, jobs, version, routes =
 
     // Richieste che modificano stato: controlli centralizzati (CSRF / content-type).
     if (url.pathname.startsWith('/api/') && !['GET', 'HEAD'].includes(req.method)) {
+      // Spegnimento in corso: nessuna nuova operazione (altrimenti partirebbero job che nessuno potrebbe più chiudere).
+      if (isClosing()) return sendJson(res, 503, { error: { code: 'UNAVAILABLE', message: 'llmpod ui si sta chiudendo' } });
       const site = req.headers['sec-fetch-site'];
       if (site !== undefined && site !== 'same-origin' && site !== 'none') return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'Richiesta cross-site non consentita' } });
       if (site === undefined && req.headers.origin === undefined) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'Origine mancante' } });

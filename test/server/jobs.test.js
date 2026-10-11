@@ -197,3 +197,25 @@ describe('jobs', () => {
     });
   });
 });
+
+describe('jobs: chiusura (spegnimento di llmpod ui)', () => {
+  it('close() chiude le domande pendenti con il loro timeoutValue e le nuove ask rispondono subito', async () => {
+    const jobs = createJobs();
+    const a = jobs.start('up:a', async ({ ask }) => ask('Aspettare?', true));
+    const b = jobs.start('down:b', async ({ ask }) => ask('Terminare il Pod?', true, { timeoutValue: true }));
+    const c = jobs.start('up:c', async ({ ask, emit }) => {
+      await new Promise((r) => setTimeout(r, 30));
+      emit({ type: 'phase', message: 'dopo la chiusura' });
+      return ask('Altra domanda?', true, { timeoutValue: true });
+    });
+    await tick();
+    expect(jobs.get(a.id).question).not.toBeNull();
+    jobs.close();
+    await tick(); await tick();
+    expect(jobs.get(a.id)).toMatchObject({ status: 'done', result: false, question: null });
+    expect(jobs.get(b.id)).toMatchObject({ status: 'done', result: true, question: null });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(jobs.get(c.id)).toMatchObject({ status: 'done', result: true });
+    expect(jobs.events(c.id).some((e) => e.type === 'question')).toBe(false);
+  });
+});
