@@ -13,8 +13,15 @@ LLMPOD_UI_TOKEN="$(llmpod_random 24)"
 export LLMPOD_UI_TOKEN
 PORT="${LLMPOD_UI_PORT:-7860}"
 
+NEEDS_INIT=0
+if ! grep -q '^RUNPOD_API_KEY=.' "$LLMPOD_ENV_FILE"; then NEEDS_INIT=1; fi
+if [ "$NEEDS_INIT" = 1 ] && [ ! -t 0 ]; then
+  echo "Prima configurazione: esegui lo script da un terminale interattivo" >&2
+  exit 1
+fi
+
 docker compose build llmpod
-if ! grep -q '^RUNPOD_API_KEY=.' "$LLMPOD_ENV_FILE"; then
+if [ "$NEEDS_INIT" = 1 ]; then
   echo "Prima configurazione di llmpod…"
   docker compose run --rm -it llmpod init
 fi

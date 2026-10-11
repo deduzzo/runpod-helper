@@ -35,7 +35,7 @@ $all = @($args)
 $client = $null
 $rest = $all
 if ($all.Count -ge 1 -and $all[0] -eq 'claude') { $client = 'claude'; $rest = @($all | Select-Object -Skip 1) }
-elseif ($all.Count -ge 2 -and $all[0] -eq 'run') { $client = $all[1]; $rest = @($all | Select-Object -Skip 2) }
+elseif ($all.Count -ge 2 -and $all[0] -eq 'run' -and -not $all[1].StartsWith('-')) { $client = $all[1]; $rest = @($all | Select-Object -Skip 2) }
 
 if (-not $client) {
   if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
@@ -59,4 +59,11 @@ if ($client -eq 'zcode') {
 # Se prepare fallisce si esce con lo stesso codice, senza eseguire nulla.
 $script = Invoke-Native { docker compose run --rm -T llmpod prepare $client --format ps1 --host-config-dir $env:LLMPOD_CONFIG_DIR --host-pi-dir $env:PI_DIR @rest }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Si valuta solo uno script fatto di righe "$env:..." / "& ...": altro = risposta inattesa (non stampata).
+foreach ($l in @($script)) {
+  if ("$l" -notmatch '^(\$env:|& )') {
+    [Console]::Error.WriteLine('Risposta inattesa da prepare: non eseguita')
+    exit 1
+  }
+}
 Invoke-Expression (@($script) -join "`n")

@@ -1,7 +1,16 @@
 #!/usr/bin/env sh
 # Wrapper della CLI llmpod con Docker: esegue i comandi nel container, avvia i client sull'host.
 set -eu
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Risolve i link simbolici (senza readlink -f, assente su macOS vecchi) per trovare la radice del progetto.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *) SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib.sh"
 llmpod_env
@@ -11,7 +20,12 @@ if [ -t 0 ] && [ -t 1 ]; then TTY=-it; fi
 
 client=""
 if [ "${1:-}" = "claude" ]; then client=claude; shift
-elif [ "${1:-}" = "run" ] && [ -n "${2:-}" ]; then client="$2"; shift 2
+elif [ "${1:-}" = "run" ] && [ -n "${2:-}" ]; then
+  # "run --help" e simili: opzione, non client -> comando normale nel container
+  case "$2" in
+    -*) ;;
+    *) client="$2"; shift 2 ;;
+  esac
 fi
 
 case "$client" in
@@ -30,5 +44,10 @@ case "$client" in
     rc=0
     SCRIPT="$(docker compose run --rm -T llmpod prepare "$client" --format sh --host-config-dir "$LLMPOD_CONFIG_DIR" --host-pi-dir "$PI_DIR" "$@")" || rc=$?
     if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+    # Si valuta solo uno script fatto di righe "export ..." / "exec ...": altro = risposta inattesa (non stampata).
+    if printf '%s\n' "$SCRIPT" | grep -qv -e '^export ' -e '^exec '; then
+      echo "Risposta inattesa da prepare: non eseguita" >&2
+      exit 1
+    fi
     eval "$SCRIPT" ;;
 esac

@@ -34,16 +34,27 @@ foreach ($d in @($env:LLMPOD_CONFIG_DIR, $env:ZCODE_DIR, $env:PI_DIR)) { New-Ite
 $envFile = Join-Path $env:LLMPOD_CONFIG_DIR '.env'
 if (-not (Test-Path $envFile)) { New-Item -ItemType File -Path $envFile | Out-Null }
 $content = Get-Content $envFile -ErrorAction SilentlyContinue
-if (-not ($content -match '^LLMPOD_OPENWEBUI_KEY=')) { Add-Content -Path $envFile -Value "LLMPOD_OPENWEBUI_KEY=$(New-RandomHex 32)" }
+if (-not ($content -match '^LLMPOD_OPENWEBUI_KEY=')) {
+  # Se l'ultima riga non termina con un a capo, ne aggiunge uno: la riga precedente resta intatta.
+  $bytes = [System.IO.File]::ReadAllBytes($envFile)
+  if ($bytes.Length -gt 0 -and $bytes[$bytes.Length - 1] -ne 10) { [System.IO.File]::AppendAllText($envFile, "`n") }
+  Add-Content -Path $envFile -Value "LLMPOD_OPENWEBUI_KEY=$(New-RandomHex 32)"
+}
 $env:LLMPOD_OPENWEBUI_KEY = ((Get-Content $envFile | Where-Object { $_ -match '^LLMPOD_OPENWEBUI_KEY=' } | Select-Object -First 1) -split '=', 2)[1]
 $env:LLMPOD_UID = '1000'; $env:LLMPOD_GID = '1000'
 $env:COMPOSE_PROFILES = if ($NoOpenWebUI) { '' } else { 'openwebui' }
 $env:LLMPOD_UI_TOKEN = New-RandomHex 24
 $port = if ($env:LLMPOD_UI_PORT) { $env:LLMPOD_UI_PORT } else { '7860' }
 
+$needsInit = -not ((Get-Content $envFile) -match '^RUNPOD_API_KEY=.')
+if ($needsInit -and [Console]::IsInputRedirected) {
+  [Console]::Error.WriteLine('Prima configurazione: esegui lo script da un terminale interattivo')
+  exit 1
+}
+
 Invoke-Native { docker compose build llmpod }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-if (-not ((Get-Content $envFile) -match '^RUNPOD_API_KEY=.')) {
+if ($needsInit) {
   Write-Host 'Prima configurazione di llmpod…'
   Invoke-Native { docker compose run --rm -it llmpod init }
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

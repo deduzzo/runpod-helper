@@ -20,7 +20,8 @@ services:
     image: ghcr.io/open-webui/open-webui:v0.11.4
     profiles: ["openwebui"]
     depends_on:
-      - llmpod
+      llmpod:
+        condition: service_healthy
     environment:
       OPENAI_API_BASE_URL: http://llmpod:8081/v1
       OPENAI_API_KEY: ${LLMPOD_OPENWEBUI_KEY:-}
