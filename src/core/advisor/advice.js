@@ -85,7 +85,10 @@ function checkValue(key, value) {
   if (typeof value === 'string' && CONTROL_RE.test(value)) return bad('contiene caratteri di controllo');
   if (value === false) return { value: 'false' }; // rimozione del flag
   const type = FLAG_TYPES[key];
-  if (type === 'bool') return value === true ? { value: 'true' } : bad('atteso true o false');
+  if (type === 'bool') {
+    if (value === true || value === 'true') return { value: 'true' };
+    return value === 'false' ? { value: 'false' } : bad('atteso true o false');
+  }
   if (type === 'posint') {
     const n = typeof value === 'number' ? value : (typeof value === 'string' && /^[1-9]\d{0,14}$/.test(value) ? Number(value) : NaN);
     return Number.isSafeInteger(n) && n > 0 ? { value: String(n) } : bad('atteso un intero positivo');
@@ -95,6 +98,7 @@ function checkValue(key, value) {
     return Number.isFinite(n) && n > 0 && n <= 0.98 ? { value: String(n) } : bad('atteso un numero maggiore di 0 e al massimo 0,98');
   }
   if (type === 'json') {
+    if (value && typeof value === 'object' && !Array.isArray(value)) value = JSON.stringify(value);
     if (typeof value !== 'string' || value.length > 300) return bad('atteso un oggetto JSON (testo di al massimo 300 caratteri)');
     try {
       const o = JSON.parse(value);
@@ -103,6 +107,8 @@ function checkValue(key, value) {
     return { value };
   }
   if (type === 'str') {
+    // "true"/"false" come testo verrebbero letti da applyOverrides come flag senza valore o rimozione.
+    if (value === 'true' || value === 'false') return bad('atteso un testo, non un booleano');
     return typeof value === 'string' && value.length <= 300 && STR_RE.test(value) ? { value } : bad('atteso un testo semplice (lettere, cifre, _ . : / -, al massimo 300 caratteri)');
   }
   return bad('tipo del flag sconosciuto');

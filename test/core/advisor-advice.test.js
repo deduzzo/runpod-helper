@@ -154,14 +154,16 @@ describe('tipo e caratteri dei valori proposti', () => {
     expect(Object.keys(FLAG_TYPES).sort()).toEqual([...ADVISOR_ALLOWED].sort());
   });
 
-  it('booleani: solo true/false', () => {
-    for (const v of ['yes', 'true', 1, 0, 'sì', null, {}]) {
+  it('booleani: solo true/false (anche come testo)', () => {
+    for (const v of ['yes', 1, 0, 'sì', null, {}]) {
       const r = review({ 'enforce-eager': v });
       expect(r.args).toEqual(base);
       expect(reason(r, 'enforce-eager')).toMatch(/^valore non valido: atteso true o false/);
     }
     expect(review({ 'enforce-eager': true }).args).toContain('--enforce-eager');
     expect(review({ 'enable-auto-tool-choice': false }).args).not.toContain('--enable-auto-tool-choice');
+    expect(review({ 'enforce-eager': 'true' }).args).toContain('--enforce-eager');
+    expect(review({ 'enable-auto-tool-choice': 'false' }).args).not.toContain('--enable-auto-tool-choice');
   });
 
   it('interi positivi: max-num-seqs e max-num-batched-tokens', () => {
@@ -185,7 +187,7 @@ describe('tipo e caratteri dei valori proposti', () => {
   });
 
   it('stringhe semplici: parser, kv-cache-dtype, tokenizer-mode; true e valori con simboli rifiutati', () => {
-    for (const v of [true, 'con spazio', 'a;b', '$(x)', '--x', '-x', '', 5, {}]) {
+    for (const v of [true, 'true', 'false', 'con spazio', 'a;b', '$(x)', '--x', '-x', '', 5, {}]) {
       const r = review({ 'reasoning-parser': v });
       expect(r.args).toEqual(base);
       expect(reason(r, 'reasoning-parser')).toMatch(/^valore non valido/);
@@ -199,7 +201,9 @@ describe('tipo e caratteri dei valori proposti', () => {
     const r = review({ 'default-chat-template-kwargs': '{"enable_thinking": false}' });
     expect(r.rejected).toEqual([]);
     expect(r.args).toEqual(expect.arrayContaining(['--default-chat-template-kwargs', '{"enable_thinking": false}']));
-    for (const v of ['[1]', 'testo', '{"a":', 5]) expect(reason(review({ 'default-chat-template-kwargs': v }), 'default-chat-template-kwargs')).toMatch(/^valore non valido/);
+    const obj = review({ 'default-chat-template-kwargs': { enable_thinking: false } });
+    expect(obj.args).toEqual(expect.arrayContaining(['--default-chat-template-kwargs', '{"enable_thinking":false}']));
+    for (const v of ['[1]', 'testo', '{"a":', 5, [1]]) expect(reason(review({ 'default-chat-template-kwargs': v }), 'default-chat-template-kwargs')).toMatch(/^valore non valido/);
   });
 
   it('caratteri di controllo (ANSI, NUL) nel valore: rifiutati con motivo chiaro', () => {
