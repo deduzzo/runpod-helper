@@ -1,8 +1,10 @@
 import { prepareClient } from '../../core/clients/prepare.js';
+import { LlmpodError, Codes } from '../../core/errors.js';
 import { piDir } from '../../core/clients/pi.js';
 
 const sq = (v) => `'${String(v).replace(/'/g, "'\\''")}'`;
-const pq = (v) => `'${String(v).replace(/'/g, "''")}'`;
+// In PowerShell anche gli apici tipografici ‘ ’ chiudono una stringa tra apici singoli: si raddoppiano tutti.
+const pq = (v) => `'${String(v).replace(/['\u2018\u2019\u201A\u201B]/g, (c) => c + c)}'`;
 
 export function register(program, getCtx) {
   program.command('prepare <client>')
@@ -12,6 +14,7 @@ export function register(program, getCtx) {
     .option('--host-config-dir <dir>', 'percorso della cartella di configurazione sull\'host')
     .option('--host-pi-dir <dir>', 'percorso della cartella di pi sull\'host')
     .action(async (client, opts) => {
+      if (!['sh', 'ps1'].includes(opts.format)) throw new LlmpodError(Codes.INVALID_INPUT, `Formato non valido: ${opts.format}`, { hint: 'Usa --format sh oppure --format ps1' });
       const ctx = getCtx();
       const ep = await ctx.ops.endpoint(await ctx.ops.resolveProfile(opts.profile));
       const containerPi = piDir(ctx.env);

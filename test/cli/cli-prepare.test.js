@@ -39,3 +39,11 @@ describe('llmpod prepare', () => {
     expect(t.err()).toMatch(/llmpod run zcode/);
   });
 });
+
+describe('llmpod prepare: formato', () => {
+  it('formato sconosciuto → errore', async () => {
+    const t = setup();
+    expect(await t.run(['prepare', 'claude', '--format', 'bat'], { runpod: t.runpod })).toBe(1);
+    expect(t.err()).toMatch(/Formato non valido/);
+  });
+});
