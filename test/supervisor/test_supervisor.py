@@ -282,6 +282,70 @@ class SupervisorIntegration(unittest.TestCase):
         self.assertTrue(wait_until(lambda: self.sup.step() is None and self.sup.phase == 'ready'))
         self.assertEqual(self.sup.args, new_args)
 
+    def test_409_su_reload_concorrente_non_cambia_args_e_fase(self):
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: self.sup.step() is None and self.sup.phase == 'ready'))
+        first = ['--max-model-len', '2048']
+        self.assertTrue(self.sup.try_begin_reload(first))
+        server = sv.make_server(self.sup)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            r = urllib.request.Request(f'http://127.0.0.1:{self.cfg["status_port"]}/reload', method='POST',
+                                       data=json.dumps({'args': ['--max-model-len', '1024']}).encode(), headers={'Authorization': 'Bearer ' + KEY})
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(r, timeout=5)
+            self.assertEqual(ctx.exception.code, 409)
+        finally:
+            server.shutdown()
+        self.assertFalse(self.sup.try_begin_reload(['--max-model-len', '512']))
+        self.assertEqual(self.sup.args, first)
+        self.assertEqual(self.sup.phase, 'loading')
+
+    def test_reload_azzera_il_tracker_di_inattivita_e_lo_ricrea_alla_fine(self):
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: self.sup.step() is None and self.sup.phase == 'ready'))
+        self.assertIsNotNone(self.sup.tracker)
+        self.assertTrue(self.sup.try_begin_reload(['--max-model-len', '2048']))
+        self.assertIsNone(self.sup.tracker)
+        self.assertIsNone(self.sup.status()['idleSeconds'])
+        # durante la riparazione il watchdog di inattività non scatta, anche oltre il limite (60 s)
+        self.now[0] += 500
+        self.assertIsNone(self.sup.step())
+        self.sup.reload(['--max-model-len', '2048'])
+        self.assertIsNotNone(self.sup.tracker)
+        self.assertEqual(self.sup.tracker.idle_seconds(self.now[0]), 0)
+        # il limite di ore massime resta attivo anche durante il reload
+        self.assertTrue(self.sup.try_begin_reload(['--max-model-len', '1024']))
+        self.now[0] += 3600
+        self.assertEqual(self.sup.step(), 'max-duration')
+        self.sup.stop_vllm(5)
+
+    def test_reload_fallito_ricrea_comunque_il_tracker(self):
+        self.assertTrue(self.sup.try_begin_reload(['--max-model-len', '2048']))
+        self.assertIsNone(self.sup.tracker)
+
+        def boom():
+            raise OSError('niente processo')
+        self.sup.start_vllm = boom
+        self.sup.reload(['--max-model-len', '2048'])
+        self.assertEqual(self.sup.phase, 'error')
+        self.assertIsNotNone(self.sup.tracker)
+        self.assertFalse(self.sup.reloading)
+
+    def test_ready_non_viene_scritto_se_un_reload_parte_dopo_check_ready(self):
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: self.sup.check_ready()))
+        real = self.sup.check_ready
+
+        def check_then_reload():
+            ok = real()
+            self.sup.try_begin_reload(['--max-model-len', '2048'])  # il reload parte tra il sondaggio e la scrittura della fase
+            return ok
+        self.sup.check_ready = check_then_reload
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'loading')
+        self.assertIsNone(self.sup.tracker)
+
     def test_server_di_stato_autenticato(self):
         server = sv.make_server(self.sup)
         threading.Thread(target=server.serve_forever, daemon=True).start()

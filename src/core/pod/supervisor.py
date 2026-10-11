@@ -253,6 +253,8 @@ class Supervisor:
             if self.reloading:
                 return False
             self.reloading = True
+            # Durante la riparazione l'inattività non conta: il watchdog non deve spegnere il Pod (resta la durata massima).
+            self.tracker = None
             if args is not None:
                 self.args = list(args)
                 self.phase = 'loading'
@@ -276,6 +278,7 @@ class Supervisor:
             self.log(f'[llmpod] {self.last_error}')
         finally:
             with self.lock:
+                self.tracker = IdleTracker(self.clock())  # da qui l'inattività riparte da zero (successo o errore)
                 self.reloading = False
 
     # --- HTTP verso vLLM e Runpod ---
@@ -335,26 +338,36 @@ class Supervisor:
             finally:
                 self.proc_lock.release()
         if self.phase in ('downloading', 'loading'):
+            promoted = False
             if self.can_promote() and self.check_ready():
-                self.phase = 'ready'
-                self.tracker = IdleTracker(now)
+                # Un reload può essere partito dopo il sondaggio: sotto lock si riverifica prima di scrivere 'ready'.
+                with self.lock:
+                    if not self.reloading:
+                        self.phase = 'ready'
+                        self.tracker = IdleTracker(now)
+                        promoted = True
+            if promoted:
                 self.log('[llmpod] vLLM pronto')
             elif self.phase == 'downloading' and self.downloaded >= self.cfg['model_bytes'] * 0.98:
                 self.phase = 'loading'
         if self.phase == 'ready':
             try:
                 in_flight, success = parse_metrics(self._get('/metrics')[1])
-                self.tracker.observe(now, in_flight, success)
+                tracker = self.tracker  # può essere stato azzerato da un reload appena partito
+                if tracker is not None:
+                    tracker.observe(now, in_flight, success)
             except Exception as e:  # noqa: BLE001
                 self.log(f'[llmpod] metriche non disponibili: {e}')
-        idle = self.tracker.idle_seconds(now) if self.tracker else None
+        tracker = self.tracker
+        idle = tracker.idle_seconds(now) if tracker else None
         return termination_reason(now, self.started_at, self.cfg['max_seconds'], idle, self.cfg['idle_seconds'])
 
     def status(self):
         now = self.clock()
+        tracker = self.tracker
         return {
             'phase': self.phase, 'downloadedBytes': self.downloaded, 'totalBytes': self.cfg['model_bytes'],
-            'idleSeconds': round(self.tracker.idle_seconds(now)) if self.tracker else None,
+            'idleSeconds': round(tracker.idle_seconds(now)) if tracker else None,
             'idleLimitSeconds': self.cfg['idle_seconds'], 'uptimeSeconds': round(now - self.started_at),
             'maxSeconds': self.cfg['max_seconds'], 'restarts': self.restarts, 'lastError': self.last_error,
             'kvCacheTokens': self.kv_tokens, 'terminateReason': self.terminate_reason, 'args': self.args,
