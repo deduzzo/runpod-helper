@@ -129,7 +129,7 @@ export function makeFitsWith(plan) {
   return (args) => {
     const m = argMap(args);
     const isFp8 = /fp8/i.test(m.get('--kv-cache-dtype') ?? 'auto');
-    const planFp8 = plan.kvCacheDtype === 'fp8';
+    const planFp8 = plan.estimate.kvDtype ? plan.estimate.kvDtype === 'fp8' : plan.kvCacheDtype === 'fp8';
     const factor = isFp8 === planFp8 ? 1 : (isFp8 ? 0.5 : 2);
     const util = Number(m.get('--gpu-memory-utilization') ?? 0.9);
     return Number.isFinite(util) && util > 0 && util <= 0.98 && fixed + kvPerGpu * factor <= c.memoryGiB * util;

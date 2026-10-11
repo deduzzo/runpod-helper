@@ -131,4 +131,18 @@ describe('diffArgs e makeFitsWith', () => {
     expect(fits(['--gpu-memory-utilization', '1.5'])).toBe(false);
     expect(makeFitsWith({ gpu: null, candidates: [] })([])).toBe(true);
   });
+
+  const mk = (kvDtype, kvCacheDtype) => ({ gpu: { id: 'G74', count: 1 }, kvCacheDtype, estimate: { weightsGiB: 56.87, kvGiB: 6, perGpuGiB: 64.87, kvDtype }, candidates: [{ gpuId: 'G74', count: 1, memoryGiB: 74 }] });
+
+  it('makeFitsWith: base della stima FP8 anche se --set kv-cache-dtype=auto ha azzerato plan.kvCacheDtype', () => {
+    const fits = makeFitsWith(mk('fp8', null));
+    expect(fits(['--kv-cache-dtype', 'fp8'])).toBe(true);
+    expect(fits(['--kv-cache-dtype', 'auto'])).toBe(false);
+  });
+
+  it('makeFitsWith: base della stima BF16 anche se --set kv-cache-dtype=fp8 ha impostato plan.kvCacheDtype', () => {
+    const fits = makeFitsWith(mk('auto', 'fp8'));
+    expect(fits(['--kv-cache-dtype', 'fp8'])).toBe(true);
+    expect(fits(['--kv-cache-dtype', 'auto'])).toBe(true);
+  });
 });

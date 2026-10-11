@@ -92,4 +92,25 @@ describe('syncDerivedFields', () => {
     expect(t.kvCacheDtype).toBeNull();
     expect(t.warnings).toEqual(['altro']);
   });
+
+  it("l'ultima occorrenza di un flag vince", () => {
+    const t = syncDerivedFields({ vllm: { args: ['--reasoning-parser', 'a', '--reasoning-parser=b', '--kv-cache-dtype', 'fp8', '--kv-cache-dtype', 'auto'] } });
+    expect(t.parsers.reasoning).toBe('b');
+    expect(t.kvCacheDtype).toBeNull();
+  });
+  it('senza --tool-call-parser toglie --enable-auto-tool-choice', () => {
+    const t = syncDerivedFields({ vllm: { args: ['--enable-auto-tool-choice', '--reasoning-parser', 'qwen3'] } });
+    expect(t.vllm.args).toEqual(['--reasoning-parser', 'qwen3']);
+    expect(t.parsers.tool).toBeNull();
+  });
+});
+
+describe('makePlan estimate.kvDtype', () => {
+  it('BF16 → auto; resta invariato con --set kv-cache-dtype=fp8', async () => {
+    const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
+    expect((await makePlan({ hf, runpod, ...base })).estimate.kvDtype).toBe('auto');
+    const p = await makePlan({ hf, runpod, ...base, set: ['kv-cache-dtype=fp8'] });
+    expect(p.estimate.kvDtype).toBe('auto');
+    expect(p.kvCacheDtype).toBe('fp8');
+  });
 });
