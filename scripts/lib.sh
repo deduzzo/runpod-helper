@@ -5,6 +5,12 @@ llmpod_random() {
   od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'
 }
 
+# Esegue docker compose sulla cartella del progetto ($LLMPOD_ROOT, impostata dallo script chiamante)
+# senza cambiare la cartella corrente dell'utente.
+llmpod_compose() {
+  docker compose --project-directory "$LLMPOD_ROOT" -f "$LLMPOD_ROOT/compose.yaml" "$@"
+}
+
 # Controlla che Docker e Docker Compose v2 siano disponibili e raggiungibili.
 llmpod_check_docker() {
   if ! command -v docker >/dev/null 2>&1; then
@@ -30,9 +36,17 @@ llmpod_check_docker() {
 llmpod_dirs() {
   export LLMPOD_CONFIG_DIR="${LLMPOD_CONFIG_DIR:-$HOME/.config/llmpod}"
   export ZCODE_DIR="${ZCODE_DIR:-$HOME/.zcode/v2}"
-  export PI_DIR="${PI_DIR:-$HOME/.pi/agent}"
+  export PI_DIR="${PI_DIR:-${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}}"
+  export LLMPOD_OPENWEBUI_PORT="${LLMPOD_OPENWEBUI_PORT:-3000}"
   LLMPOD_ENV_FILE="$LLMPOD_CONFIG_DIR/.env"
   LLMPOD_UID="$(id -u)"; LLMPOD_GID="$(id -g)"
+  # Docker rootless e Docker Desktop for Linux mappano l'utente del container sul proprietario dei file montati: serve root (0:0).
+  if [ "$(uname -s)" = "Linux" ]; then
+    case "$(docker info --format '{{.SecurityOptions}}' 2>/dev/null)" in
+      *rootless*) LLMPOD_UID=0; LLMPOD_GID=0 ;;
+    esac
+    if [ "$(docker context show 2>/dev/null)" = "desktop-linux" ]; then LLMPOD_UID=0; LLMPOD_GID=0; fi
+  fi
   export LLMPOD_UID LLMPOD_GID
 }
 

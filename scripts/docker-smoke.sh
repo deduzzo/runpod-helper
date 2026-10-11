@@ -36,4 +36,9 @@ KEY_SMOKE="$(grep '^LLMPOD_OPENWEBUI_KEY=' "$TMP/config/.env" | head -n 1 | cut 
 [ -n "$KEY_SMOKE" ] || { echo "✗ chiave interna non generata nel .env di prova" >&2; exit 1; }
 [ "$(proxy_status "Bearer $KEY_SMOKE")" = "503" ] && echo "✓ proxy con chiave: 503 (nessun Pod attivo)" || { echo "✗ il proxy con chiave non risponde 503" >&2; exit 1; }
 [ "$(proxy_status "")" = "401" ] && echo "✓ proxy senza chiave: 401" || { echo "✗ il proxy senza chiave non risponde 401" >&2; exit 1; }
+# Permessi di .env: 0666 è rifiutato, tranne con LLMPOD_HOST_OS=windows (file montati da Windows). Nessuna chiamata di rete: manca la chiave Runpod.
+chmod 666 "$TMP/config/.env"
+run_status() { docker run --rm --user "$(id -u):$(id -g)" "$@" -v "$TMP/config:/config" llmpod:local status --json 2>&1 || true; }
+run_status | grep -q 'CONFIG_PERMISSIONS' && echo "✓ .env 0666 rifiutato" || { echo "✗ .env 0666 non rifiutato" >&2; exit 1; }
+run_status -e LLMPOD_HOST_OS=windows | grep -q 'CONFIG_PERMISSIONS' && { echo "✗ LLMPOD_HOST_OS=windows non salta il controllo" >&2; exit 1; } || echo "✓ LLMPOD_HOST_OS=windows: controllo dei permessi saltato"
 docker run --rm --entrypoint sh llmpod:local -c 'test ! -e /app/.env && test ! -e /app/.git && test ! -e /app/test' && echo "✓ immagine senza .env/.git/test"

@@ -11,12 +11,34 @@ while [ -L "$SELF" ]; do
   esac
 done
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
-cd "$ROOT"
+# Non si cambia la cartella corrente: i client partono da dove l'utente ha lanciato il wrapper.
+LLMPOD_ROOT="$ROOT"
 . "$ROOT/scripts/lib.sh"
+
+# Comandi gestiti dal wrapper, senza passare dal container.
+case "${1:-}" in
+  ui)
+    echo "Nel setup Docker l'interfaccia la avvia scripts/start" >&2
+    exit 1 ;;
+  chat)
+    # Su un host diverso da 127.0.0.1 (quello della UI): il cookie di sessione della UI non viene inviato a Open WebUI.
+    CHAT_URL="http://localhost:${LLMPOD_OPENWEBUI_PORT:-3000}"
+    echo "Open WebUI: $CHAT_URL"
+    if [ "$(uname -s)" = "Darwin" ]; then open "$CHAT_URL" >/dev/null 2>&1 || true
+    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$CHAT_URL" >/dev/null 2>&1 || true
+    fi
+    exit 0 ;;
+esac
+
 llmpod_env
 
 TTY=-T
 if [ -t 0 ] && [ -t 1 ]; then TTY=-it; fi
+
+if [ "${1:-}" = "logs" ]; then
+  # Diagnosi: ultimi log del servizio (predefinito llmpod), seguiti. Nei log c'è anche il link dell'interfaccia con il token.
+  exec docker compose --project-directory "$ROOT" -f "$ROOT/compose.yaml" logs --tail 200 -f "${2:-llmpod}"
+fi
 
 client=""
 if [ "${1:-}" = "claude" ]; then client=claude; shift
@@ -30,19 +52,19 @@ fi
 
 case "$client" in
   "")
-    exec docker compose run --rm "$TTY" llmpod "$@" ;;
+    exec docker compose --project-directory "$ROOT" -f "$ROOT/compose.yaml" run --rm "$TTY" llmpod "$@" ;;
   zcode)
     if command -v pgrep >/dev/null 2>&1 && pgrep -x ZCode >/dev/null 2>&1; then
       echo "Chiudi ZCode e riprova: lo riscrive all'uscita e le modifiche andrebbero perse" >&2
       exit 1
     fi
-    docker compose run --rm -T llmpod run zcode --no-open "$@"
+    llmpod_compose run --rm -T llmpod run zcode --no-open "$@"
     if [ "$(uname -s)" = "Darwin" ]; then open -a ZCode >/dev/null 2>&1 || true; fi ;;
   *)
     # L'output di prepare contiene la chiave del profilo: non va mai stampato né scritto su file, solo valutato.
     # Se prepare fallisce si esce con lo stesso codice, senza eseguire nulla.
     rc=0
-    SCRIPT="$(docker compose run --rm -T llmpod prepare "$client" --format sh --host-config-dir "$LLMPOD_CONFIG_DIR" --host-pi-dir "$PI_DIR" "$@")" || rc=$?
+    SCRIPT="$(llmpod_compose run --rm -T llmpod prepare "$client" --format sh --host-config-dir "$LLMPOD_CONFIG_DIR" --host-pi-dir "$PI_DIR" "$@")" || rc=$?
     if [ "$rc" -ne 0 ]; then exit "$rc"; fi
     # Si valuta solo uno script fatto di righe "export ..." / "exec ...": altro = risposta inattesa (non stampata).
     if printf '%s\n' "$SCRIPT" | grep -qv -e '^export ' -e '^exec '; then

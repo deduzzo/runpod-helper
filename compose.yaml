@@ -8,6 +8,9 @@ services:
     environment:
       LLMPOD_UI_TOKEN: ${LLMPOD_UI_TOKEN:-}
       LLMPOD_UI_PORT: ${LLMPOD_UI_PORT:-7860}
+      # Su Windows i file montati appaiono 0777 e chmod non ha effetto: llmpod salta il controllo dei permessi di .env.
+      LLMPOD_HOST_OS: ${LLMPOD_HOST_OS:-}
+      LLMPOD_OPENWEBUI_URL: http://127.0.0.1:${LLMPOD_OPENWEBUI_PORT:-3000}
     ports:
       - "127.0.0.1:${LLMPOD_UI_PORT:-7860}:${LLMPOD_UI_PORT:-7860}"
     volumes:
@@ -26,10 +29,14 @@ services:
       OPENAI_API_BASE_URL: http://llmpod:8081/v1
       OPENAI_API_KEY: ${LLMPOD_OPENWEBUI_KEY:-}
       ENABLE_PERSISTENT_CONFIG: "false"
-      WEBUI_AUTH: "false"
+      # Accesso con account: il primo che si registra diventa amministratore e, da v0.11.4, il primo account non dipende
+      # da ENABLE_SIGNUP; con ENABLE_SIGNUP "false" nessun altro può registrarsi. Senza account una pagina web malevola
+      # (o un DNS rebinding) potrebbe usare Open WebUI su localhost come fosse l'utente.
+      WEBUI_AUTH: "true"
+      ENABLE_SIGNUP: "false"
       ENABLE_OLLAMA_API: "false"
     ports:
-      - "127.0.0.1:3000:8080"
+      - "127.0.0.1:${LLMPOD_OPENWEBUI_PORT:-3000}:8080"
     volumes:
       - open-webui-data:/app/backend/data
     restart: unless-stopped

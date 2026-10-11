@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const ROOT = new URL('../..', import.meta.url).pathname;
+const ROOTDIR = ROOT.replace(/\/$/, '');
 
 function setup({ zcodeRunning = false, prepareFails = false, prepareOutput = '' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-home-'));
@@ -13,14 +14,15 @@ function setup({ zcodeRunning = false, prepareFails = false, prepareOutput = '' 
   fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh
 echo "docker $*" >> "${log}"
 case "$*" in
-  *"prepare claude"*) ${prepareFails ? 'echo "errore" >&2; exit 7;' : ''} ${prepareOutput ? `printf '%s\\n' '${prepareOutput}'; exit 0;` : ''} printf "export ANTHROPIC_BASE_URL='https://p1-8000.proxy.runpod.net'\\nexec 'claude' '--version'\\n" ;;
+  *"prepare claude"*) ${prepareFails ? 'echo "errore" >&2; exit 7;' : ''} ${prepareOutput ? `cat "${path.join(bin, 'prepare.out')}"; exit 0;` : ''} printf "export ANTHROPIC_BASE_URL='https://p1-8000.proxy.runpod.net'\\nexec 'claude' '--version'\\n" ;;
 esac
 exit 0
 `, { mode: 0o755 });
+  if (prepareOutput) fs.writeFileSync(path.join(bin, 'prepare.out'), `${prepareOutput}\n`);
   fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\necho "claude $* base=$ANTHROPIC_BASE_URL" >> "${log}"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'pgrep'), `#!/bin/sh\n${zcodeRunning ? 'echo 123; exit 0' : 'exit 1'}\n`, { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, 'open'), `#!/bin/sh\necho "open $*" >> "${log}"\n`, { mode: 0o755 });
-  const run = (args, script = path.join(ROOT, 'bin/llmpod')) => spawnSync('sh', [script, ...args], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8', input: '' });
+  for (const t of ['open', 'xdg-open']) fs.writeFileSync(path.join(bin, t), `#!/bin/sh\necho "open $*" >> "${log}"\n`, { mode: 0o755 });
+  const run = (args, script = path.join(ROOT, 'bin/llmpod'), { cwd, env = {} } = {}) => spawnSync('sh', [script, ...args], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin`, ...env }, encoding: 'utf8', input: '', cwd });
   return { run, log: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '') };
 }
 
@@ -28,14 +30,14 @@ describe('bin/llmpod', () => {
   it('comandi normali passano al container senza TTY se stdin non è un terminale', () => {
     const t = setup();
     expect(t.run(['status']).status).toBe(0);
-    expect(t.log()).toContain('docker compose run --rm -T llmpod status');
+    expect(t.log()).toContain(' run --rm -T llmpod status');
   });
 
   it('run claude: prepare nel container, avvio sull\'host con le variabili', () => {
     const t = setup();
     expect(t.run(['run', 'claude', '--profile', 'qwen3-coder']).status).toBe(0);
     const log = t.log();
-    expect(log).toMatch(/docker compose run --rm -T llmpod prepare claude --format sh --host-config-dir \S+\/\.config\/llmpod --host-pi-dir \S+\/\.pi\/agent --profile qwen3-coder/);
+    expect(log).toMatch(/ run --rm -T llmpod prepare claude --format sh --host-config-dir \S+\/\.config\/llmpod --host-pi-dir \S+\/\.pi\/agent --profile qwen3-coder/);
     expect(log).toContain('claude --version base=https://p1-8000.proxy.runpod.net');
   });
 
@@ -44,10 +46,10 @@ describe('bin/llmpod', () => {
     const r = t.run(['run', 'zcode']);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/Chiudi ZCode/);
-    expect(t.log()).not.toContain('docker compose run');
+    expect(t.log()).not.toContain(' run ');
     const t2 = setup();
     expect(t2.run(['run', 'zcode']).status).toBe(0);
-    expect(t2.log()).toContain('docker compose run --rm -T llmpod run zcode --no-open');
+    expect(t2.log()).toContain(' run --rm -T llmpod run zcode --no-open');
   });
 
   it('run claude: se prepare fallisce esce con lo stesso codice senza eseguire nulla', () => {
@@ -62,7 +64,7 @@ describe('bin/llmpod', () => {
     const t = setup();
     expect(t.run(['run', '--help']).status).toBe(0);
     const log = t.log();
-    expect(log).toContain('docker compose run --rm -T llmpod run --help');
+    expect(log).toContain(' run --rm -T llmpod run --help');
     expect(log).not.toContain('prepare');
   });
 
@@ -81,6 +83,51 @@ describe('bin/llmpod', () => {
     fs.symlinkSync(path.join(ROOT, 'bin/llmpod'), path.join(dir, 'a'));
     fs.symlinkSync('a', path.join(dir, 'b'));
     expect(t.run(['status'], path.join(dir, 'b')).status).toBe(0);
-    expect(t.log()).toContain('docker compose run --rm -T llmpod status');
+    expect(t.log()).toContain(' run --rm -T llmpod status');
+  });
+
+  it('non cambia la cartella corrente: il client parte dalla cartella del chiamante', () => {
+    const t = setup({ prepareOutput: "exec 'pwd'" });
+    const elsewhere = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-cwd-')));
+    const r = t.run(['run', 'claude'], path.join(ROOT, 'bin/llmpod'), { cwd: elsewhere });
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe(elsewhere);
+    expect(t.log()).toContain(`docker compose --project-directory ${ROOTDIR} -f ${ROOTDIR}/compose.yaml run --rm -T llmpod prepare claude`);
+  });
+
+  it('comandi normali: stessa cartella del chiamante e --project-directory', () => {
+    const t = setup();
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-cwd-'));
+    expect(t.run(['status'], path.join(ROOT, 'bin/llmpod'), { cwd: elsewhere }).status).toBe(0);
+    expect(t.log()).toContain(`docker compose --project-directory ${ROOTDIR} -f ${ROOTDIR}/compose.yaml run --rm -T llmpod status`);
+  });
+
+  it('logs: segue gli ultimi 200 log del servizio llmpod (o di un altro servizio)', () => {
+    const t = setup();
+    expect(t.run(['logs']).status).toBe(0);
+    expect(t.log()).toMatch(/compose.yaml logs --tail 200 -f llmpod\n/);
+    expect(t.run(['logs', 'open-webui']).status).toBe(0);
+    expect(t.log()).toMatch(/compose.yaml logs --tail 200 -f open-webui\n/);
+  });
+
+  it('ui: nel setup Docker la avvia scripts/start, uscita 1, niente Docker', () => {
+    const t = setup();
+    const r = t.run(['ui']);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("Nel setup Docker l'interfaccia la avvia scripts/start");
+    expect(t.log()).not.toContain('docker compose');
+  });
+
+  it('chat: apre Open WebUI sull\'host con localhost (porta configurabile) e stampa l\'URL', () => {
+    const t = setup();
+    const r = t.run(['chat']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('http://localhost:3000');
+    expect(t.log()).toContain('open http://localhost:3000');
+    expect(t.log()).not.toContain('docker compose');
+    const t2 = setup();
+    const r2 = t2.run(['chat'], undefined, { env: { LLMPOD_OPENWEBUI_PORT: '3456' } });
+    expect(r2.stdout).toContain('http://localhost:3456');
+    expect(t2.log()).toContain('open http://localhost:3456');
   });
 });
