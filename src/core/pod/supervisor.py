@@ -239,7 +239,10 @@ class Supervisor:
                     self.proc.wait(timeout)
                 except subprocess.TimeoutExpired:
                     self.proc.kill()
-                    self.proc.wait()
+                    try:
+                        self.proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        self.log('[llmpod] vLLM non risponde a SIGKILL')
 
     def try_begin_reload(self):
         """Prenota la ricarica: False se ce n'è già una in corso."""
@@ -296,20 +299,25 @@ class Supervisor:
     def step(self):
         """Un controllo: aggiorna fase e inattività, restituisce il motivo di terminazione o None."""
         now = self.clock()
-        with self.proc_lock:
-            if (self.phase != 'terminating' and self.proc is not None
-                    and self.proc.poll() is not None and not self.expected_exit):
-                code = self.proc.returncode
-                self.log(f'[llmpod] vLLM terminato con codice {code}')
-                if self.restarts < self.cfg['max_restarts']:
-                    self.restarts += 1
-                    self.phase = 'loading'
-                    self.start_vllm()
-                else:
-                    self.phase = 'error'
-                    self.last_error = f'vLLM terminato con codice {code} dopo {self.restarts} riavvii'
-                    if self.tracker is None:
-                        self.tracker = IdleTracker(now)
+        # Non attendere mai proc_lock: durante una ricarica si salta il rilevamento crash,
+        # così il controllo di terminazione non resta bloccato.
+        if self.proc_lock.acquire(blocking=False):
+            try:
+                if (self.phase != 'terminating' and self.proc is not None
+                        and self.proc.poll() is not None and not self.expected_exit):
+                    code = self.proc.returncode
+                    self.log(f'[llmpod] vLLM terminato con codice {code}')
+                    if self.restarts < self.cfg['max_restarts']:
+                        self.restarts += 1
+                        self.phase = 'loading'
+                        self.start_vllm()
+                    else:
+                        self.phase = 'error'
+                        self.last_error = f'vLLM terminato con codice {code} dopo {self.restarts} riavvii'
+                        if self.tracker is None:
+                            self.tracker = IdleTracker(now)
+            finally:
+                self.proc_lock.release()
         if self.phase in ('downloading', 'loading'):
             if self.check_ready():
                 self.phase = 'ready'

@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -186,6 +187,46 @@ class SupervisorIntegration(unittest.TestCase):
         self.assertEqual(self.sup.phase, 'terminating')
         self.assertEqual([c['path'] for c in self.runpod.calls], ['/v2/pods/POD123'])
         self.assertTrue(any('errore nel controllo' in l['line'] for l in self.sup.logs_since(0)))
+
+    def test_watchdog_non_attende_proc_lock(self):
+        self.sup.tracker = sv.IdleTracker(self.now[0])
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with self.sup.proc_lock:
+                held.set()
+                release.wait(30)
+
+        t = threading.Thread(target=hold, daemon=True)
+        t.start()
+        self.assertTrue(held.wait(5))
+        result = []
+        self.now[0] += 61
+        w = threading.Thread(target=lambda: result.append(self.sup.tick()), daemon=True)
+        w.start()
+        w.join(5)
+        release.set()
+        self.assertFalse(w.is_alive(), 'tick() bloccato su proc_lock')
+        self.assertEqual(result, ['idle'])
+        self.assertEqual([c['path'] for c in self.runpod.calls], ['/v2/pods/POD123'])
+
+    def test_stop_vllm_non_si_blocca_su_sigkill(self):
+        class Stuck:
+            killed = False
+            def poll(self):
+                return None
+            def terminate(self):
+                pass
+            def kill(self):
+                self.killed = True
+            def wait(self, timeout=None):
+                raise subprocess.TimeoutExpired('vllm', timeout)
+
+        self.sup.proc = Stuck()
+        self.sup.stop_vllm(0.01)
+        self.assertTrue(self.sup.proc.killed)
+        self.assertTrue(any('non risponde a SIGKILL' in l['line'] for l in self.sup.logs_since(0)))
+        self.sup.proc = None
 
     def test_ora_di_avvio_persistita(self):
         self.assertEqual(self.sup.started_at, 1000.0)
