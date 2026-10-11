@@ -12,7 +12,7 @@ beforeAll(async () => {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
-      seen.push({ url: req.url, auth: req.headers.authorization, ua: req.headers['user-agent'], body });
+      seen.push({ url: req.url, cookie: req.headers.cookie, xApiKey: req.headers['x-api-key'], auth: req.headers.authorization, ua: req.headers['user-agent'], body });
       if (req.url.startsWith('/v1/chat/completions')) {
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         let i = 0;
@@ -68,6 +68,7 @@ describe('proxy Open WebUI', () => {
 
   it('Pod irraggiungibile → 502 e il proxy resta in piedi', async () => {
     registerSecret(POD_KEY);
+    registerSecret(INTERNAL);
     await withProxy({ resolveTarget: async () => ({ baseUrl: 'http://127.0.0.1:1', apiKey: POD_KEY }) }, async (base) => {
       const r = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${INTERNAL}` } });
       expect(r.status).toBe(502);
@@ -176,5 +177,103 @@ describe('proxy Open WebUI', () => {
     await expect(resolve()).rejects.toThrow('rete');
     await expect(resolve()).rejects.toThrow('rete');
     expect(endpoint).toHaveBeenCalledTimes(2);
+  });
+
+  it('createOpenwebuiProxy rifiuta una chiave interna assente o corta (niente fail-open)', () => {
+    for (const bad of [undefined, '', 'corta', 12345678901234567, null]) {
+      expect(() => createOpenwebuiProxy({ resolveTarget: async () => null, internalKey: bad, userAgent: 'x' })).toThrow(/internalKey/);
+    }
+  });
+
+  it('risposta 3xx dell\'upstream → 502 mascherato, nessun redirect seguito', async () => {
+    let followed = false;
+    const other = http.createServer((req, res) => { followed = true; res.end('segreto'); });
+    await new Promise((r) => other.listen(0, '127.0.0.1', r));
+    const redirecting = http.createServer((req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${other.address().port}/x` });
+      res.end();
+    });
+    await new Promise((r) => redirecting.listen(0, '127.0.0.1', r));
+    try {
+      await withProxy({ resolveTarget: async () => ({ baseUrl: `http://127.0.0.1:${redirecting.address().port}`, apiKey: POD_KEY }) }, async (base) => {
+        const r = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${INTERNAL}` } });
+        expect(r.status).toBe(502);
+        expect((await r.json()).error.message).toMatch(/reindirizzamento/);
+        expect(followed).toBe(false);
+      });
+    } finally { redirecting.close(); other.close(); }
+  });
+
+  it('errore di resolveTarget → 502 "Impossibile determinare il Pod", distinto dagli errori di rete', async () => {
+    await withProxy({ resolveTarget: async () => { throw new Error('config illeggibile'); } }, async (base) => {
+      const r = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${INTERNAL}` } });
+      expect(r.status).toBe(502);
+      expect((await r.json()).error.message).toMatch(/^Impossibile determinare il Pod: config illeggibile/);
+    });
+  });
+
+  it('errore di rete → 502 con il codice della causa e invalida la cache del resolver', async () => {
+    const dead = http.createServer();
+    await new Promise((r) => dead.listen(0, '127.0.0.1', r));
+    const deadPort = dead.address().port;
+    await new Promise((r) => dead.close(r));
+    const resolveTarget = Object.assign(async () => ({ baseUrl: `http://127.0.0.1:${deadPort}`, apiKey: POD_KEY }), { invalidate: vi.fn() });
+    await withProxy({ resolveTarget }, async (base) => {
+      const r = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${INTERNAL}` } });
+      expect(r.status).toBe(502);
+      const msg = (await r.json()).error.message;
+      expect(msg).toMatch(/^Pod non raggiungibile: /);
+      expect(msg).toMatch(/ECONNREFUSED/);
+      expect(resolveTarget.invalidate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('più Pod attivi senza profilo scelto → 503 con messaggio dedicato', async () => {
+    const store = { readConfig: () => ({}), readState: () => ({ pods: { a: {}, b: {} } }) };
+    const resolve = createTargetResolver({ store, getOps: () => ({ endpoint: vi.fn() }) });
+    await withProxy({ resolveTarget: resolve }, async (base) => {
+      const r = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${INTERNAL}` } });
+      expect(r.status).toBe(503);
+      expect((await r.json()).error.message).toBe('Più Pod attivi: scegli il profilo per Open WebUI nella pagina Prova veloce');
+    });
+  });
+
+  it('createTargetResolver.invalidate() svuota la cache positiva', async () => {
+    const endpoint = vi.fn(async () => ({ baseUrl: 'https://x-8000.proxy.runpod.net', apiKey: POD_KEY }));
+    const resolve = createTargetResolver({ store: { readConfig: () => ({ openwebuiProfile: 'x' }), readState: () => ({ pods: {} }) }, getOps: () => ({ endpoint }) });
+    await resolve(); await resolve();
+    expect(endpoint).toHaveBeenCalledTimes(1);
+    resolve.invalidate();
+    await resolve();
+    expect(endpoint).toHaveBeenCalledTimes(2);
+  });
+
+  it('percorsi insidiosi non escono da baseUrl; Authorization e cookie del client non arrivano al Pod; la chiave interna non compare nel 502', async () => {
+    seen = [];
+    const raw = (base, path, headers) => new Promise((resolve, reject) => {
+      const u = new URL(base);
+      http.get({ host: u.hostname, port: u.port, path, headers }, (res) => {
+        let b = ''; res.on('data', (c) => { b += c; }); res.on('end', () => resolve({ status: res.statusCode, body: b }));
+      }).on('error', reject);
+    });
+    await withProxy({ resolveTarget: async () => target() }, async (base) => {
+      const auth = { authorization: `Bearer ${INTERNAL}`, cookie: 'llmpod_session=sessione-segreta-123', 'x-api-key': 'altra-chiave' };
+      const a = await raw(base, '//evil.example/v1/models', auth);
+      expect([200, 404]).toContain(a.status);
+      expect((await raw(base, '/v1/../x', auth)).status).toBe(404);
+      expect((await raw(base, '/v1/%2e%2e/x', auth)).status).toBe(404);
+      expect((await raw(base, '/v1/%2e%2e%2fx', auth)).status).not.toBe(500);
+      for (const s of seen) {
+        expect(s.url.startsWith('/v1/')).toBe(true);
+        expect(s.auth).toBe(`Bearer ${POD_KEY}`);
+        expect(s.cookie).toBeUndefined();
+        expect(s.xApiKey).toBeUndefined();
+      }
+    });
+    await withProxy({ resolveTarget: async () => ({ baseUrl: 'http://127.0.0.1:1', apiKey: POD_KEY }) }, async (base) => {
+      const r = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${INTERNAL}` } });
+      expect(r.status).toBe(502);
+      expect(await r.text()).not.toContain(INTERNAL);
+    });
   });
 });

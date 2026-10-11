@@ -35,18 +35,27 @@ function readBody(req) {
 }
 
 export function createOpenwebuiProxy({ resolveTarget, internalKey, userAgent, fetchImpl = fetch }) {
+  if (typeof internalKey !== 'string' || internalKey.length < 16) {
+    throw new Error('internalKey del proxy Open WebUI mancante o troppo corta (minimo 16 caratteri)');
+  }
   return async (req, res) => {
+    // Registrato subito: se il client chiude mentre si risolve il Pod o si legge il corpo, l'upstream non parte/si annulla.
+    const ac = new AbortController();
+    res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+    let phase = 'pod';
     try {
       const url = new URL(req.url, 'http://proxy');
       if (!url.pathname.startsWith('/v1/')) return fail(res, 404, 'Percorso non supportato dal proxy di llmpod');
       if (!safeEqual(req.headers.authorization, `Bearer ${internalKey}`)) return fail(res, 401, 'Chiave del proxy non valida');
       const target = await resolveTarget();
       if (!target) return fail(res, 503, 'Nessun Pod attivo: avvia un profilo con "llmpod up" e scegli il profilo per Open WebUI');
+      phase = 'body';
       const body = ['GET', 'HEAD'].includes(req.method) ? undefined : await readBody(req);
-      const ac = new AbortController();
-      res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+      if (ac.signal.aborted) return undefined;
+      phase = 'network';
       const upstream = await fetchImpl(`${target.baseUrl}${url.pathname}${url.search}`, {
         method: req.method,
+        redirect: 'manual',
         headers: {
           authorization: `Bearer ${target.apiKey}`,
           'content-type': req.headers['content-type'] ?? 'application/json',
@@ -56,22 +65,35 @@ export function createOpenwebuiProxy({ resolveTarget, internalKey, userAgent, fe
         body,
         signal: ac.signal,
       });
+      if (upstream.status >= 300 && upstream.status < 400) {
+        upstream.body?.cancel().catch(() => {});
+        resolveTarget.invalidate?.();
+        return fail(res, 502, `Pod non raggiungibile: risposta con reindirizzamento (HTTP ${upstream.status}) non seguita`);
+      }
       res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') ?? 'application/json', 'cache-control': 'no-store' });
       if (!upstream.body) return res.end();
       Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res);
       return undefined;
     } catch (err) {
       if (err instanceof TooLargeError) return fail(res, 413, err.message);
-      return fail(res, 502, `Pod non raggiungibile: ${redact(err.message)}`);
+      if (err.code === 'MULTIPLE_PODS') return fail(res, 503, err.message);
+      if (phase === 'pod') return fail(res, 502, `Impossibile determinare il Pod: ${redact(err.message)}`);
+      if (phase === 'body') return fail(res, 400, `Lettura della richiesta fallita: ${redact(err.message)}`);
+      resolveTarget.invalidate?.();
+      const code = err.cause?.code ? ` (${err.cause.code})` : '';
+      return fail(res, 502, `Pod non raggiungibile: ${redact(err.message)}${redact(code)}`);
     }
   };
 }
 
 export function createTargetResolver({ store, getOps, ttlMs = 30_000 }) {
   let cache = null;
-  return async () => {
+  const resolve = async () => {
     const cfg = store.readConfig();
     const active = Object.keys(store.readState().pods ?? {});
+    if (!cfg.openwebuiProfile && active.length > 1) {
+      throw Object.assign(new Error('Più Pod attivi: scegli il profilo per Open WebUI nella pagina Prova veloce'), { code: 'MULTIPLE_PODS' });
+    }
     const profile = cfg.openwebuiProfile ?? (active.length === 1 ? active[0] : null);
     if (!profile) return null;
     if (cache && cache.profile === profile && Date.now() - cache.at < (cache.target ? ttlMs : NEGATIVE_TTL_MS)) return cache.target;
@@ -84,4 +106,6 @@ export function createTargetResolver({ store, getOps, ttlMs = 30_000 }) {
       throw err;
     }
   };
+  resolve.invalidate = () => { cache = null; };
+  return resolve;
 }
