@@ -14,14 +14,25 @@ export function PlanView({ data, onPlanChange }) {
   const [applyError, setApplyError] = useState(null);
   const [saveError, setSaveError] = useState(null);
   const [busy, setBusy] = useState(null);
+  const [confirmName, setConfirmName] = useState(null);
 
   async function applyAdvice() {
     setBusy('apply'); setApplyError(null);
     try { const r = await api('/api/plan/apply-advice', { method: 'POST', body: {} }); setApplied(true); onPlanChange(r.plan); } catch (e) { setApplyError(e); } finally { setBusy(null); }
   }
-  async function save() {
+  // R28: se il nome esiste già si chiede conferma prima di sovrascrivere il profilo.
+  async function save(overwrite = false) {
     setBusy('save'); setSaveError(null); setSaved(null);
-    try { const r = await api('/api/profiles', { method: 'POST', body: { name } }); setSaved(r.profile.name); } catch (e) { setSaveError(e); } finally { setBusy(null); }
+    try {
+      if (!overwrite) {
+        let existing = [];
+        try { existing = (await api('/api/overview')).profiles?.map((p) => p.name) ?? []; } catch { /* elenco non disponibile: il server decide */ }
+        if (existing.includes(name)) { setConfirmName(name); return; }
+      }
+      setConfirmName(null);
+      const r = await api('/api/profiles', { method: 'POST', body: { name } });
+      setSaved(r.profile.name);
+    } catch (e) { setSaveError(e); } finally { setBusy(null); }
   }
 
   const m = plan.model;
@@ -97,12 +108,21 @@ export function PlanView({ data, onPlanChange }) {
       <Card title="Salva come profilo">
         <div className="flex flex-wrap items-end gap-3">
           <Field label="Nome del profilo">
-            <input aria-label="Nome del profilo" className={inputClass} value={name} onChange={(e) => setName(e.target.value)} pattern="^[a-z0-9][a-z0-9-]{0,40}$" placeholder="qwen3-coder" />
+            <input aria-label="Nome del profilo" className={inputClass} value={name} onChange={(e) => { setName(e.target.value); setConfirmName(null); }} pattern="^[a-z0-9][a-z0-9-]{0,40}$" placeholder="qwen3-coder" />
           </Field>
-          <Button onClick={save} loading={busy === 'save'} disabled={busy !== null || !plan.gpu || !nameValid}>Salva come profilo</Button>
+          <Button onClick={() => save()} loading={busy === 'save'} disabled={busy !== null || !plan.gpu || !nameValid}>Salva come profilo</Button>
         </div>
         {!plan.gpu && <p className="mt-2 text-xs text-amber-300">Nessuna GPU disponibile: non è possibile salvare il profilo.</p>}
         {plan.gpu && !nameValid && <p className="mt-2 text-xs text-gray-500">Il nome usa solo minuscole, cifre e trattini (massimo 41 caratteri) e inizia con una lettera o una cifra.</p>}
+        {confirmName && confirmName === name && (
+          <div className="fade-up mt-3 space-y-2 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-sm" role="alert">
+            <p className="text-amber-200">Il profilo "{confirmName}" esiste già: salvando verrà sovrascritto.</p>
+            <div className="flex gap-2">
+              <Button variant="danger" onClick={() => save(true)} loading={busy === 'save'} disabled={busy !== null}>Sovrascrivi</Button>
+              <Button variant="ghost" onClick={() => setConfirmName(null)} disabled={busy !== null}>Annulla</Button>
+            </div>
+          </div>
+        )}
         {saved && <p className="mt-3 text-sm text-emerald-300">Profilo salvato: avvialo dalla scheda Profili ({saved}).</p>}
         <div className="mt-3"><ErrorBox error={saveError} /></div>
       </Card>

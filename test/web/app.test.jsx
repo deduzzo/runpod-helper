@@ -23,12 +23,12 @@ describe('App', () => {
   });
 
   it('con sessione mostra le cinque schede e cambia pagina', async () => {
-    mockApi({ 'GET /api/session': { ok: true, version: '0.1.0' } });
+    mockApi({ 'GET /api/session': { ok: true, version: '0.1.0' }, 'GET /api/overview': { profiles: [], jobs: [], config: {}, advisor: {} } });
     render(<App />);
     await screen.findByText(/v0\.1\.0/);
     for (const label of ['Modelli', 'Profili', 'Stato e costi', 'Client', 'Prova veloce']) expect(screen.getByRole('button', { name: label })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Profili' }));
-    expect(screen.getByRole('heading', { name: 'Profili' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Profili' })).toBeTruthy();
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
