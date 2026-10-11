@@ -56,6 +56,7 @@ export function profileFromPlan(plan, { name, volume, watchdog }) {
     watchdog,
     estimate: { ...plan.estimate, hourlyUSD: plan.hourlyUSD },
     warnings: plan.warnings,
+    advisor: plan.advisor ?? null,
     createdAt: new Date().toISOString(),
   };
 }

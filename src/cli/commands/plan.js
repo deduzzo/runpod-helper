@@ -2,7 +2,10 @@ import { LlmpodError, Codes } from '../../core/errors.js';
 import { makePlan } from '../../core/planner/plan.js';
 import { loadFlags } from '../../core/planner/vllm-args.js';
 import { fmtUSD } from '../../core/confirm.js';
-import { table, fmtGiB, attachRenderer } from '../render.js';
+import { advisePlan } from '../../core/advisor/advisor.js';
+import { makeFitsWith } from '../../core/advisor/advice.js';
+import { createRecipes } from '../../core/advisor/recipes.js';
+import { table, fmtGiB, attachRenderer, renderAdvice } from '../render.js';
 
 const toInt = (v) => Number.parseInt(v, 10);
 const collect = (v, acc) => [...acc, v];
@@ -16,6 +19,9 @@ export function register(program, getCtx) {
     .option('--extra-arg <arg>', 'aggiunge un argomento di vLLM (ripetibile)', collect, [])
     .option('--image <immagine>', 'immagine vLLM (default da config.json)')
     .option('--allow-trust-remote-code', 'consente --trust-remote-code')
+    .option('--advisor', 'usa il consulente anche se disattivato nella configurazione')
+    .option('--no-advisor', 'non usare il consulente')
+    .option('--yes', 'applica la proposta del consulente senza chiedere')
     .option('--json', 'output JSON')
     .action(async (modelRef, opts) => {
       const ctx = getCtx();
@@ -33,6 +39,27 @@ export function register(program, getCtx) {
         });
       } finally {
         off();
+      }
+      plan.advisor = null;
+      const advisorWanted = opts.advisor === true || (opts.advisor !== false && cfg.advisor?.enabled);
+      if (advisorWanted) {
+        try {
+          const provider = ctx.advisor.provider();
+          if (!provider) {
+            ctx.io.err('ℹ Consulente non configurato o disponibile solo per le correzioni dopo up: uso gli argomenti di base');
+          } else {
+            ctx.io.err(`▸ Consulto ${provider.label}`);
+            const advice = await advisePlan({ provider, plan, hf: ctx.hf, recipes: createRecipes({ http: ctx.http }), flags: loadFlags(), fitsWith: makeFitsWith(plan), allowTrustRemoteCode: Boolean(opts.allowTrustRemoteCode) });
+            const hasChanges = advice.accepted.length > 0;
+            if (!opts.json) renderAdvice(ctx.io, advice);
+            const apply = hasChanges && (opts.yes || (!opts.json && await ctx.io.ask('Applicare le modifiche proposte dal consulente?', false)));
+            if (apply) plan.vllm.args = advice.args;
+            plan.advisor = { preset: ctx.advisor.config()?.preset ?? null, applied: Boolean(apply), rationale: advice.rationale, notes: advice.warnings, recipePath: advice.recipePath, rejected: advice.rejected };
+          }
+        } catch (err) {
+          if (err.code === 'CANCELLED') throw err;
+          ctx.io.err(`⚠ Consulente non disponibile: ${err.message}; uso gli argomenti di base`);
+        }
       }
       ctx.store.writeJson('last-plan.json', plan);
       if (opts.json) return ctx.io.raw(JSON.stringify(plan, null, 2));

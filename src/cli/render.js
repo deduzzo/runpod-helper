@@ -38,3 +38,14 @@ export function fmtDuration(seconds) {
   const m = Math.floor((s % 3600) / 60);
   return h ? `${h} h ${m} min` : `${m} min ${s % 60} s`;
 }
+
+export function renderAdvice(io, advice) {
+  if (advice.rationale) io.out(`Consulente: ${advice.rationale}`);
+  const { added, removed, changed } = advice.changes;
+  for (const a of added) io.out(`  + ${a}`);
+  for (const r of removed) io.out(`  - ${r}`);
+  for (const c of changed) io.out(`  ~ ${c.flag}: ${c.from ?? '(senza valore)'} → ${c.to ?? '(senza valore)'}`);
+  if (!added.length && !removed.length && !changed.length) io.out('  (nessuna modifica proposta)');
+  for (const r of advice.rejected) io.out(`  ✗ scartato ${r.key}: ${r.reason}`);
+  for (const w of advice.warnings) io.out(`⚠ ${w}`);
+}
