@@ -1,0 +1,34 @@
+#!/usr/bin/env sh
+# Wrapper della CLI llmpod con Docker: esegue i comandi nel container, avvia i client sull'host.
+set -eu
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+. "$ROOT/scripts/lib.sh"
+llmpod_env
+
+TTY=-T
+if [ -t 0 ] && [ -t 1 ]; then TTY=-it; fi
+
+client=""
+if [ "${1:-}" = "claude" ]; then client=claude; shift
+elif [ "${1:-}" = "run" ] && [ -n "${2:-}" ]; then client="$2"; shift 2
+fi
+
+case "$client" in
+  "")
+    exec docker compose run --rm "$TTY" llmpod "$@" ;;
+  zcode)
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x ZCode >/dev/null 2>&1; then
+      echo "Chiudi ZCode e riprova: lo riscrive all'uscita e le modifiche andrebbero perse" >&2
+      exit 1
+    fi
+    docker compose run --rm -T llmpod run zcode --no-open "$@"
+    if [ "$(uname -s)" = "Darwin" ]; then open -a ZCode >/dev/null 2>&1 || true; fi ;;
+  *)
+    # L'output di prepare contiene la chiave del profilo: non va mai stampato né scritto su file, solo valutato.
+    # Se prepare fallisce si esce con lo stesso codice, senza eseguire nulla.
+    rc=0
+    SCRIPT="$(docker compose run --rm -T llmpod prepare "$client" --format sh --host-config-dir "$LLMPOD_CONFIG_DIR" --host-pi-dir "$PI_DIR" "$@")" || rc=$?
+    if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+    eval "$SCRIPT" ;;
+esac
