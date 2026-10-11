@@ -54,9 +54,13 @@ Ogni operazione che costa denaro mostra il **costo orario stimato e chiede confe
   container.
 - **Chiave API di vLLM per profilo**, salvata localmente e rigenerabile.
 - **Parametri di vLLM su tre livelli**: regole deterministiche (architettura → tool-call parser,
-  reasoning parser, dtype, quantizzazione); un consulente LLM opzionale che legge la scheda del
-  modello e le recipe ufficiali di vLLM, con proposte validate su uno schema e sui flag ammessi;
-  verifica dopo l'avvio con correzioni proposte e applicate solo previa conferma.
+  reasoning parser, dtype, quantizzazione); un consulente LLM che legge la scheda del modello e
+  le recipe ufficiali di vLLM, con proposte validate su uno schema e sui flag ammessi; verifica
+  dopo l'avvio con correzioni proposte e applicate solo previa conferma.
+- **IA esterna modulare** per il consulente: protocolli Anthropic e OpenAI con preset
+  (Z.ai GLM, Anthropic, OpenAI, endpoint personalizzato, il modello sul Pod, `claude -p`).
+- **Deploy con Docker Compose** (web UI, core e Open WebUI) e script di avvio per macOS,
+  Linux e Windows.
 - **Credenziali** in `~/.config/llmpod/.env` con permessi `600`. Chiavi e token non vengono mai
   scritti nei log.
 
@@ -93,4 +97,4 @@ User-Agent predefinito di Python (`Python-urllib/…`); serve uno User-Agent per
 
 ## Licenza
 
-Da definire.
+[MIT](LICENSE)

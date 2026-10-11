@@ -44,7 +44,7 @@ profilo salvato.
 | Chiave vLLM | Una per profilo, rigenerabile con `rotate-key` |
 | Volume/datacenter | Network volume nel DC preferito; ripiego, con consenso, su altri DC senza volume |
 | Parametri vLLM | 3 livelli: regole → consulente LLM → verifica/correzione dopo `up` |
-| Consulente LLM | Backend configurabile (compatibile OpenAI o Anthropic); preimpostato API Z.ai a consumo (GLM-5.3); opzionale `claude -p` reale. **Non** si imita alcun client e non si usano gli endpoint del Coding Plan Z.ai dall'applicazione (vietato dalle condizioni Z.ai) |
+| Consulente LLM | IA esterna modulare con preset (Z.ai Coding Plan via endpoint Anthropic, Z.ai a consumo, Anthropic, OpenAI, custom, Pod, `claude -p`); default `zai-coding-plan` con GLM-5.3, scelta dell'utente. User-Agent onesto `llmpod/<versione>`, nessuna imitazione di altri client (§11) |
 | Deploy | Docker Compose + script di avvio per piattaforma + wrapper CLI sull'host |
 
 ## 3. Verifiche fatte (11 ottobre 2026)
@@ -93,7 +93,9 @@ src/
       vram.js               pesi + KV cache + overhead
       gpu-select.js         candidati (GPU, N, DC) per prezzo/disponibilità
       vllm-args.js          livello 1: tabella architettura → argomenti
-      advisor.js            livelli 2–3: backend LLM, schema, flag ammessi
+      advisor/
+        advisor.js          livelli 2–3: prompt, schema, flag ammessi, ricalcolo VRAM
+        providers/          anthropic.js  openai.js  claude-cli.js  presets.js
     pod/
       launcher.js           creazione con fallback, attesa, timeout
       smoke.js              smoke test /v1/messages e /v1/chat/completions
@@ -306,9 +308,27 @@ template aggiungerebbe solo uno stato da sincronizzare.
   `data/vllm-flags-<versione>.json`, nessun flag che apra accessi (`--host` diverso, `--api-key`,
   `--allowed-local-media-path`, `--trust-remote-code` solo con conferma esplicita), ricalcolo VRAM.
 - Mostrato come differenza rispetto al livello 1; applicato solo con conferma.
-- Backend: `LLMPOD_ADVISOR_PROTOCOL` (`openai`|`anthropic`), `…_BASE_URL`, `…_MODEL`, `…_API_KEY`;
-  preimpostato API Z.ai a consumo con GLM-5.3. Backend alternativo `claude-cli` (`claude -p
-  --output-format json`), disattivato di default.
+- **IA esterna modulare** (`src/core/advisor/providers/`): un'interfaccia unica
+  `complete({ system, messages, jsonSchema }) → { text, usage }` con due implementazioni di
+  protocollo (`anthropic` → `POST {base}/v1/messages`; `openai` → `POST {base}/v1/chat/completions`)
+  più il backend `claude-cli` (`claude -p --output-format json`). Preset selezionabili in `init`,
+  da CLI (`--advisor <preset>`) e da web UI:
+
+  | Preset | Protocollo | Base URL predefinito | Modello predefinito |
+  |---|---|---|---|
+  | `zai-coding-plan` (default) | anthropic | endpoint Anthropic di Z.ai usato da Claude Code | GLM-5.3 |
+  | `zai` (a consumo) | openai | API Z.ai a consumo | GLM-5.3 |
+  | `anthropic` | anthropic | `https://api.anthropic.com` | ultimo Claude Sonnet |
+  | `openai` | openai | `https://api.openai.com` | modello scelto dall'utente |
+  | `custom` | anthropic o openai | a scelta | a scelta |
+  | `pod` (solo livello 3) | openai | Pod corrente | nome servito |
+  | `claude-cli` | — | — | — |
+
+  Configurazione in `.env`: `LLMPOD_ADVISOR_PRESET`, e per ogni preset `…_BASE_URL`, `…_MODEL`,
+  `…_API_KEY` sovrascrivibili. Le richieste usano lo User-Agent `llmpod/<versione>`: nessun
+  header o identità di altri client. Selezionando `zai-coding-plan`, `init` mostra una volta
+  l'avviso che le condizioni Z.ai limitano l'uso della quota del piano agli strumenti supportati
+  e registra la presa visione in `config.json`.
 
 ### Livello 3 (dopo `up`)
 
@@ -328,6 +348,8 @@ template aggiungerebbe solo uno stato da sincronizzare.
 3. Nome della variabile d'ambiente con cui OpenCode accetta un file di configurazione.
 4. Se Open WebUI può essere incorporata in un iframe (altrimenti pulsante "Apri").
 5. Permesso di creazione Pod della chiave iniettata (non determinato; non cambia il design).
+6. Base URL esatti e nomi modello dei preset del consulente (endpoint Anthropic Z.ai, API Z.ai a
+   consumo, ultimo Sonnet), dalla documentazione ufficiale di ciascun provider.
 
 ## 13. Errori
 
@@ -353,4 +375,4 @@ gli stessi codici (zero GPU, modello gated, OOM, tool calling che non funziona).
 
 - README in italiano: installazione (Docker + script), primo utilizzo end-to-end, costi tipici,
   troubleshooting.
-- Licenza: da scegliere con l'utente.
+- Licenza: MIT.
