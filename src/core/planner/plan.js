@@ -64,6 +64,10 @@ export async function makePlan({
 
   const tp = sel.choice?.count ?? 1;
   const args = applyOverrides(buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype }), { set, extra });
+  // vLLM accetta --tool-call-parser solo insieme a --enable-auto-tool-choice
+  if (args.some((a) => a === '--tool-call-parser' || a.startsWith('--tool-call-parser=')) && !args.includes('--enable-auto-tool-choice')) {
+    args.push('--enable-auto-tool-choice');
+  }
   const { unknown, forbidden } = validateArgs(args, flags, { allowTrustRemoteCode });
   if (forbidden.length) {
     throw new LlmpodError(Codes.INVALID_INPUT, `Argomenti vLLM non consentiti: ${forbidden.join(', ')}`, { hint: 'llmpod gestisce da solo chiave, host, porta e nome servito' });

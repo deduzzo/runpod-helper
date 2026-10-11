@@ -60,6 +60,15 @@ describe('makePlan', () => {
     expect(plan.warnings.join(' ')).toMatch(/--flag-inventato/);
   });
 
+  it('architettura sconosciuta + --set tool-call-parser=<nome> abilita anche auto-tool-choice', async () => {
+    const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
+    hf.getConfig.mockResolvedValue({ ...fx('config-qwen3-coder-30b.json'), architectures: ['FooForCausalLM'], model_type: 'foo' });
+    const plan = await makePlan({ hf, runpod, ...base, set: ['tool-call-parser=hermes'] });
+    expect(plan.parsers.tool).toBeNull();
+    expect(plan.vllm.args).toEqual(expect.arrayContaining(['--tool-call-parser', 'hermes', '--enable-auto-tool-choice']));
+    expect(plan.vllm.args.filter((a) => a === '--enable-auto-tool-choice')).toHaveLength(1);
+  });
+
   it('contesto oltre il massimo del modello viene ridotto con avviso', async () => {
     const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
     const plan = await makePlan({ hf, runpod, ...base, context: 10_000_000 });
