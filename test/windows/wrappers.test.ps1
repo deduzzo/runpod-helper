@@ -40,6 +40,8 @@ $env:ANTHROPIC_BASE_URL = 'originale'
 Set-Location $caller
 $expectedDir = (Get-Location).Path
 
+# Con 'Stop' lo stderr dei comandi nativi (2>&1) sarebbe un errore bloccante in Windows PowerShell 5.1: gli esiti si verificano con i controlli.
+$ErrorActionPreference = 'Continue'
 $script:failures = 0
 function Check([bool]$Condition, [string]$Message) {
   if ($Condition) { Write-Host "ok: $Message" } else { Write-Host "FAIL: $Message"; $script:failures++ }
