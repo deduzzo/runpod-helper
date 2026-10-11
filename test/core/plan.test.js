@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
-import { makePlan } from '../../src/core/planner/plan.js';
+import { makePlan, syncDerivedFields } from '../../src/core/planner/plan.js';
 import { loadFlags } from '../../src/core/planner/vllm-args.js';
 
 const fx = (p) => JSON.parse(fs.readFileSync(new URL(`../fixtures/hf/${p}`, import.meta.url), 'utf8'));
@@ -64,7 +64,7 @@ describe('makePlan', () => {
     const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
     hf.getConfig.mockResolvedValue({ ...fx('config-qwen3-coder-30b.json'), architectures: ['FooForCausalLM'], model_type: 'foo' });
     const plan = await makePlan({ hf, runpod, ...base, set: ['tool-call-parser=hermes'] });
-    expect(plan.parsers.tool).toBeNull();
+    expect(plan.parsers.tool).toBe('hermes');
     expect(plan.vllm.args).toEqual(expect.arrayContaining(['--tool-call-parser', 'hermes', '--enable-auto-tool-choice']));
     expect(plan.vllm.args.filter((a) => a === '--enable-auto-tool-choice')).toHaveLength(1);
   });
@@ -74,5 +74,22 @@ describe('makePlan', () => {
     const plan = await makePlan({ hf, runpod, ...base, context: 10_000_000 });
     expect(plan.context).toBe(262144);
     expect(plan.warnings.join(' ')).toMatch(/262144/);
+  });
+});
+
+describe('syncDerivedFields', () => {
+  it('aggiorna parsers dal --reasoning-parser aggiunto', () => {
+    const t = syncDerivedFields({ vllm: { args: ['--reasoning-parser', 'qwen3'] }, parsers: { tool: null, reasoning: null }, warnings: [] });
+    expect(t.parsers).toEqual({ tool: null, reasoning: 'qwen3' });
+  });
+  it('--tool-call-parser senza auto-tool-choice: aggiunge il flag', () => {
+    const t = syncDerivedFields({ vllm: { args: ['--tool-call-parser=hermes'] } });
+    expect(t.vllm.args).toContain('--enable-auto-tool-choice');
+    expect(t.parsers.tool).toBe('hermes');
+  });
+  it('--kv-cache-dtype auto su un target fp8: kvCacheDtype null e avviso rimosso', () => {
+    const t = syncDerivedFields({ vllm: { args: ['--kv-cache-dtype', 'auto'] }, kvCacheDtype: 'fp8', warnings: ['KV cache in FP8 (--kv-cache-dtype fp8): in BF16 non entra', 'altro'] });
+    expect(t.kvCacheDtype).toBeNull();
+    expect(t.warnings).toEqual(['altro']);
   });
 });

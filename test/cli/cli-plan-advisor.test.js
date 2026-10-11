@@ -67,4 +67,12 @@ describe('plan con consulente', () => {
     expect(await s.run(['save', 'qwen3-coder'])).toBe(0);
     expect(s.store.readProfile('qwen3-coder').advisor).toMatchObject({ applied: true });
   });
+
+  it('riallinea parsers dopo l\'applicazione della proposta', async () => {
+    const s = setup({ ask: [true] });
+    await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'], { hf: hf(), runpod: runpod(), http: advisorHttp('{"set":{"reasoning-parser":"qwen3"},"rationale":"r","warnings":[]}') });
+    const plan = s.store.readJson('last-plan.json');
+    expect(plan.vllm.args).toContain('--reasoning-parser');
+    expect(plan.parsers.reasoning).toBe('qwen3');
+  });
 });

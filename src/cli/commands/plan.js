@@ -1,5 +1,5 @@
 import { LlmpodError, Codes } from '../../core/errors.js';
-import { makePlan } from '../../core/planner/plan.js';
+import { makePlan, syncDerivedFields } from '../../core/planner/plan.js';
 import { loadFlags } from '../../core/planner/vllm-args.js';
 import { fmtUSD } from '../../core/confirm.js';
 import { advisePlan } from '../../core/advisor/advisor.js';
@@ -53,7 +53,10 @@ export function register(program, getCtx) {
             const hasChanges = advice.accepted.length > 0;
             if (!opts.json) renderAdvice(ctx.io, advice);
             const apply = hasChanges && (opts.yes || (!opts.json && await ctx.io.ask('Applicare le modifiche proposte dal consulente?', false)));
-            if (apply) plan.vllm.args = advice.args;
+            if (apply) {
+              plan.vllm.args = advice.args;
+              syncDerivedFields(plan);
+            }
             plan.advisor = { preset: ctx.advisor.config()?.preset ?? null, applied: Boolean(apply), rationale: advice.rationale, notes: advice.warnings, recipePath: advice.recipePath, rejected: advice.rejected };
           }
         } catch (err) {
