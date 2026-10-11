@@ -1,0 +1,37 @@
+name: llmpod
+
+services:
+  llmpod:
+    build: .
+    image: llmpod:local
+    user: "${LLMPOD_UID:-1000}:${LLMPOD_GID:-1000}"
+    environment:
+      LLMPOD_UI_TOKEN: ${LLMPOD_UI_TOKEN:-}
+      LLMPOD_UI_PORT: ${LLMPOD_UI_PORT:-7860}
+    ports:
+      - "127.0.0.1:${LLMPOD_UI_PORT:-7860}:${LLMPOD_UI_PORT:-7860}"
+    volumes:
+      - "${LLMPOD_CONFIG_DIR:?imposta LLMPOD_CONFIG_DIR (usa scripts/start)}:/config"
+      - "${ZCODE_DIR:?imposta ZCODE_DIR (usa scripts/start)}:/zcode"
+      - "${PI_DIR:?imposta PI_DIR (usa scripts/start)}:/pi"
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.11.4
+    profiles: ["openwebui"]
+    depends_on:
+      - llmpod
+    environment:
+      OPENAI_API_BASE_URL: http://llmpod:8081/v1
+      OPENAI_API_KEY: ${LLMPOD_OPENWEBUI_KEY:-}
+      ENABLE_PERSISTENT_CONFIG: "false"
+      WEBUI_AUTH: "false"
+      ENABLE_OLLAMA_API: "false"
+    ports:
+      - "127.0.0.1:3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  open-webui-data: {}
