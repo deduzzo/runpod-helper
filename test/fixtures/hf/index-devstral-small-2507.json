@@ -1,0 +1,18 @@
+{
+ "metadata": {
+  "total_parameters": 23572403200,
+  "total_size": 47144806400
+ },
+ "weight_map": {
+  "lm_head.weight": "model-00010-of-00010.safetensors",
+  "model.embed_tokens.weight": "model-00001-of-00010.safetensors",
+  "model.layers.10.input_layernorm.weight": "model-00003-of-00010.safetensors",
+  "model.layers.11.input_layernorm.weight": "model-00004-of-00010.safetensors",
+  "model.layers.16.input_layernorm.weight": "model-00005-of-00010.safetensors",
+  "model.layers.20.input_layernorm.weight": "model-00006-of-00010.safetensors",
+  "model.layers.24.input_layernorm.weight": "model-00007-of-00010.safetensors",
+  "model.layers.29.input_layernorm.weight": "model-00008-of-00010.safetensors",
+  "model.layers.3.input_layernorm.weight": "model-00002-of-00010.safetensors",
+  "model.layers.33.input_layernorm.weight": "model-00009-of-00010.safetensors"
+ }
+}

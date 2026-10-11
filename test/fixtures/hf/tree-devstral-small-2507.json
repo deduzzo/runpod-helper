@@ -1,0 +1,287 @@
+[
+ {
+  "type": "directory",
+  "path": "assets",
+  "size": 0
+ },
+ {
+  "type": "directory",
+  "path": "assets/mistral_common_coverage",
+  "size": 0
+ },
+ {
+  "type": "directory",
+  "path": "assets/space_invaders_pong",
+  "size": 0
+ },
+ {
+  "type": "file",
+  "path": ".gitattributes",
+  "size": 2314
+ },
+ {
+  "type": "file",
+  "path": "README.md",
+  "size": 18756
+ },
+ {
+  "type": "file",
+  "path": "SYSTEM_PROMPT.txt",
+  "size": 5651
+ },
+ {
+  "type": "file",
+  "path": "assets/cline_config.png",
+  "size": 136880,
+  "lfs": {
+   "oid": "663138f00523ef3cc15cb9fd1cd6369d4625245df65028f2fcc372c85ca7d29b",
+   "size": 136880,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "assets/mistral_common_coverage/coverage_distribution.png",
+  "size": 25600
+ },
+ {
+  "type": "file",
+  "path": "assets/mistral_common_coverage/coverage_pie.png",
+  "size": 41537
+ },
+ {
+  "type": "file",
+  "path": "assets/mistral_common_coverage/coverage_summary.png",
+  "size": 94947
+ },
+ {
+  "type": "file",
+  "path": "assets/mistral_common_coverage/dependencies.png",
+  "size": 255036,
+  "lfs": {
+   "oid": "278825d73c9f5d674ca2875e386fced3902dc93f9711f317c785c02589c2ff35",
+   "size": 255036,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "assets/mistral_common_coverage/navigate.png",
+  "size": 556736,
+  "lfs": {
+   "oid": "c2638a6e966005e92755f30c9dfb5eccf030825211cc55b65dc844e92a7481d6",
+   "size": 556736,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "assets/mistral_common_coverage/prompt.png",
+  "size": 236054,
+  "lfs": {
+   "oid": "3f8031ebe12cc351386bbbd285642275d4c2ef0ea6132381cb603ec86ddbbe4e",
+   "size": 236054,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "assets/mistral_common_coverage/visualization.png",
+  "size": 240673,
+  "lfs": {
+   "oid": "4d75d000ca8a4456ca6c788358ee6977bcce703c8f37a7c81796983d3d539870",
+   "size": 240673,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "assets/open_hands_config.png",
+  "size": 80894
+ },
+ {
+  "type": "file",
+  "path": "assets/space_invaders_pong/base_structure.png",
+  "size": 997604,
+  "lfs": {
+   "oid": "468519868d6006c469fb8517680b554f6ef2778e2fab4c9b2ada4a9cd2254983",
+   "size": 997604,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "assets/space_invaders_pong/game.png",
+  "size": 87455
+ },
+ {
+  "type": "file",
+  "path": "assets/space_invaders_pong/prompt.png",
+  "size": 949135,
+  "lfs": {
+   "oid": "978ddbf5324d6a73f6a99d1301252930cd983ab9dfbe374a3465285d7f196143",
+   "size": 949135,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "assets/space_invaders_pong/task completed.png",
+  "size": 637340,
+  "lfs": {
+   "oid": "cfd6872e857a82535daee755ef94f1d6ff7476fb9ec2a4d46fcaabbc51b529e7",
+   "size": 637340,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "assets/swe_benchmark.png",
+  "size": 150842,
+  "lfs": {
+   "oid": "565a98c83187dbd4eed29e7aa79146336cafbe1c5c26250515769b364078435f",
+   "size": 150842,
+   "pointerSize": 131
+  }
+ },
+ {
+  "type": "file",
+  "path": "config.json",
+  "size": 641
+ },
+ {
+  "type": "file",
+  "path": "consolidated.safetensors",
+  "size": 47144846024,
+  "lfs": {
+   "oid": "ed57cdadcdfe28e026bafa56ee1b5c91866e1d85cd33b772c8216415926d5727",
+   "size": 47144846024,
+   "pointerSize": 136
+  }
+ },
+ {
+  "type": "file",
+  "path": "generation_config.json",
+  "size": 132
+ },
+ {
+  "type": "file",
+  "path": "model-00001-of-00010.safetensors",
+  "size": 4781571736,
+  "lfs": {
+   "oid": "43f7a78bb630fb3f5ad9e679ffac422cb4c8be9177a45f4233195790e20413b8",
+   "size": 4781571736,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00002-of-00010.safetensors",
+  "size": 4781592784,
+  "lfs": {
+   "oid": "c303664647345cdc0731ae01f42d62f810c5a77d5c1c5a0f22ada962838397ad",
+   "size": 4781592784,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00003-of-00010.safetensors",
+  "size": 4781592800,
+  "lfs": {
+   "oid": "7386182831c269ea5e0eccb57b26bef401009be7ad365507d57a5925b1b77151",
+   "size": 4781592800,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00004-of-00010.safetensors",
+  "size": 4886471600,
+  "lfs": {
+   "oid": "dfc0a79a4696991dc1d90d08fdcf9b2128ac16a1fa42adb7cef5f701b058289b",
+   "size": 4886471600,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00005-of-00010.safetensors",
+  "size": 4781592824,
+  "lfs": {
+   "oid": "aff0ed987386e65b93d2deee6e26c628df9a38a26710846ccdd30deafe5bb61a",
+   "size": 4781592824,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00006-of-00010.safetensors",
+  "size": 4781592816,
+  "lfs": {
+   "oid": "1f4f0b1e5989747bff575a070cba9867750b8680b45ac4819d95095a8084d3ec",
+   "size": 4781592816,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00007-of-00010.safetensors",
+  "size": 4886471600,
+  "lfs": {
+   "oid": "028b18d10e8ba4383606308370570119dabdeb1adab4dadf789cd1e082d6bc9f",
+   "size": 4886471600,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00008-of-00010.safetensors",
+  "size": 4781592824,
+  "lfs": {
+   "oid": "865a94910b075066ec83ea4ec920c1d2c0cabcfbca97604872edea253d460aea",
+   "size": 4781592824,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00009-of-00010.safetensors",
+  "size": 4781592816,
+  "lfs": {
+   "oid": "a44a52d009b2c19755707560cc64de2cbabfec7876a804cc2d13ae169ae8cd84",
+   "size": 4781592816,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model-00010-of-00010.safetensors",
+  "size": 3900777072,
+  "lfs": {
+   "oid": "8437d281d1fb8c512d7f9b81069d3d4700fc0c1524a792308f16738538b043bc",
+   "size": 3900777072,
+   "pointerSize": 135
+  }
+ },
+ {
+  "type": "file",
+  "path": "model.safetensors.index.json",
+  "size": 29931
+ },
+ {
+  "type": "file",
+  "path": "params.json",
+  "size": 225
+ },
+ {
+  "type": "file",
+  "path": "tekken.json",
+  "size": 19399650,
+  "lfs": {
+   "oid": "839c48629ff570bd664586800aa3ee17ee628f56efc7fd8e145cc01467a1c188",
+   "size": 19399650,
+   "pointerSize": 133
+  }
+ }
+]

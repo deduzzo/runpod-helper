@@ -38,6 +38,9 @@ export function summarizeModel(m) {
     paramsByDtype: m.safetensors?.parameters ?? null,
     dtypes: Object.keys(m.safetensors?.parameters ?? {}),
     libraryName: m.library_name ?? null,
+    // Formato MLX (Apple Silicon): vLLM non lo carica.
+    isMlx: m.library_name === 'mlx' || (m.tags ?? []).includes('mlx'),
+    quantBits: Number.isFinite(m.config?.quantization_config?.bits) ? m.config.quantization_config.bits : null,
     architectures: m.config?.architectures ?? [],
     modelType: m.config?.model_type ?? null,
     hasChatTemplate: Boolean(tok?.chat_template || m.config?.chat_template_jinja),
@@ -98,6 +101,16 @@ export function createHf({ http, token } = {}) {
         url = nextLink(r.headers);
       }
       return files;
+    },
+    // weight_map di model.safetensors.index.json (file piccolo); null se manca o non è leggibile: il piano ripiega sull'albero dei file.
+    async getWeightIndex(id, sha) {
+      try {
+        const idx = await resolveFile(id, sha, 'model.safetensors.index.json', `Indice dei pesi di ${id}`);
+        const map = idx?.weight_map;
+        return map && typeof map === 'object' && !Array.isArray(map) ? map : null;
+      } catch {
+        return null;
+      }
     },
     async getConfig(id, sha) {
       const cfg = await resolveFile(id, sha, 'config.json', `Config di ${id}`);

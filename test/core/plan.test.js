@@ -77,6 +77,32 @@ describe('makePlan', () => {
   });
 });
 
+describe('makePlan: MLX e pesi (R3, R4b)', () => {
+  it('R3: un modello MLX è rifiutato con INVALID_INPUT prima di qualunque chiamata a Runpod', async () => {
+    const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
+    hf.getModel.mockResolvedValue(fx('model-mlx-qwen3-coder-30b-4bit.json'));
+    const err = await makePlan({ hf, runpod, ...base, modelRef: 'mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit' }).catch((e) => e);
+    expect(err).toMatchObject({ code: 'INVALID_INPUT', message: expect.stringContaining('Formato MLX non supportato da vLLM') });
+    expect(err.hint).toMatch(/safetensors|AWQ/);
+    expect(runpod.listGpus).not.toHaveBeenCalled();
+  });
+
+  it('R4b: Devstral-Small-2507 pesa 43,9 GiB (non il doppio) con e senza indice dei pesi', async () => {
+    const devstral = { ...fx('model-qwen3-coder-30b.json'), id: 'mistralai/Devstral-Small-2507' };
+    const run = async (index) => {
+      const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
+      hf.getModel.mockResolvedValue(devstral);
+      hf.listFiles.mockResolvedValue(fx('tree-devstral-small-2507.json'));
+      if (index !== undefined) hf.getWeightIndex = vi.fn().mockResolvedValue(index);
+      return makePlan({ hf, runpod, ...base, modelRef: 'mistralai/Devstral-Small-2507' });
+    };
+    for (const index of [undefined, null, fx('index-devstral-small-2507.json').weight_map]) {
+      const plan = await run(index);
+      expect(plan.model.weightsBytes / 1024 ** 3).toBeCloseTo(43.9, 1);
+    }
+  });
+});
+
 describe('syncDerivedFields', () => {
   it('aggiorna parsers dal --reasoning-parser aggiunto', () => {
     const t = syncDerivedFields({ vllm: { args: ['--reasoning-parser', 'qwen3'] }, parsers: { tool: null, reasoning: null }, warnings: [] });

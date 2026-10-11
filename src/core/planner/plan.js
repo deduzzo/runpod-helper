@@ -43,11 +43,17 @@ export async function makePlan({
 
   onProgress(`Lettura di ${id} da Hugging Face`);
   const info = await hf.getModel(id);
+  // R3: prima di qualunque chiamata a pagamento (e prima di leggere l'albero dei file).
+  if (summarizeModel(info).isMlx) {
+    throw new LlmpodError(Codes.INVALID_INPUT, `Formato MLX non supportato da vLLM: ${id}`, { hint: 'Cerca la versione safetensors/AWQ dello stesso modello (ad esempio quella dell\'organizzazione originale, non mlx-community)' });
+  }
   const sha = SHA_RE.test(revision) ? revision : await hf.resolveSha(id, revision);
   const [tree, config] = await Promise.all([hf.listFiles(id, sha), hf.getConfig(id, sha)]);
   const summary = summarizeModel(info);
 
-  const wBytes = weightsBytes(tree);
+  // Con l'indice dei pesi (file piccolo) contano solo gli shard elencati; se non è leggibile vale la regola sull'albero.
+  const weightMap = await hf.getWeightIndex?.(id, sha);
+  const wBytes = weightsBytes(tree, { weightMap });
   if (!wBytes) {
     throw new LlmpodError(Codes.INVALID_INPUT, `${id} non contiene file .safetensors`, { hint: 'vLLM su llmpod supporta modelli safetensors (i repository solo GGUF non sono supportati)' });
   }

@@ -2,10 +2,23 @@ export const GiB = 1024 ** 3;
 
 const textConfig = (config) => config.text_config ?? config;
 
-export function weightsBytes(tree) {
-  return tree
-    .filter((f) => f.type === 'file' && f.path.endsWith('.safetensors'))
-    .reduce((sum, f) => sum + (f.lfs?.size ?? f.size ?? 0), 0);
+const sizeOf = (f) => f.lfs?.size ?? f.size ?? 0;
+
+// Peso dei file safetensors da scaricare. Con l'indice (weight_map di model.safetensors.index.json) contano solo i file
+// elencati; senza indice: niente sottocartelle e, se esistono gli shard model-*.safetensors, niente consolidated*.safetensors
+// (copia alternativa degli stessi pesi, in formato Mistral, che vLLM non carica insieme agli shard).
+export function weightsBytes(tree, { weightMap } = {}) {
+  const files = tree.filter((f) => f.type === 'file' && f.path.endsWith('.safetensors'));
+  if (weightMap && typeof weightMap === 'object') {
+    const listed = new Set(Object.values(weightMap));
+    const matched = files.filter((f) => listed.has(f.path));
+    if (matched.length) return matched.reduce((sum, f) => sum + sizeOf(f), 0);
+  }
+  const top = files.filter((f) => !f.path.includes('/'));
+  const hasShards = top.some((f) => /^model-.*\.safetensors$/.test(f.path));
+  return top
+    .filter((f) => !(hasShards && /^consolidated.*\.safetensors$/.test(f.path)))
+    .reduce((sum, f) => sum + sizeOf(f), 0);
 }
 
 export function kvBytesPerToken(config, kvDtypeBytes = 2) {
@@ -49,7 +62,15 @@ export function tpSizes(config) {
 
 const DTYPE_BYTES = { F64: 8, I64: 8, F32: 4, I32: 4, U32: 4, BF16: 2, F16: 2, I16: 2, U16: 2, F8_E4M3: 1, F8_E5M2: 1, I8: 1, U8: 1, BOOL: 1 };
 
-export function bytesFromSafetensorsParams(parameters) {
+// I32/U32 sono i contenitori dei pesi compressi (AWQ/GPTQ/MLX): il conteggio di HF è già in parametri, non in elementi
+// da 4 byte. Con i bit della quantizzazione si stima parametri totali × bits/8; senza, la stima non è affidabile (null).
+const PACKED = ['I32', 'U32'];
+
+export function bytesFromSafetensorsParams(parameters, { bits } = {}) {
   if (!parameters) return null;
+  if (PACKED.some((d) => d in parameters)) {
+    if (!(Number.isFinite(bits) && bits > 0)) return null;
+    return Object.values(parameters).reduce((sum, count) => sum + count, 0) * bits / 8;
+  }
   return Object.entries(parameters).reduce((sum, [dtype, count]) => sum + count * (DTYPE_BYTES[dtype] ?? 2), 0);
 }

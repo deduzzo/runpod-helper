@@ -5,7 +5,7 @@ export function register(program, getCtx) {
   program.command('search <query...>')
     .description('Cerca su Hugging Face modelli text-generation adatti all\'uso agentico')
     .option('--limit <n>', 'numero di risultati', (v) => Number.parseInt(v, 10), 20)
-    .option('--all', 'includi i modelli senza chat template')
+    .option('--all', 'includi i modelli senza chat template e quelli in formato MLX')
     .option('--json', 'output JSON')
     .action(async (query, opts) => {
       const ctx = getCtx();
