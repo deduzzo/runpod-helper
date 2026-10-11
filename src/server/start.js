@@ -5,6 +5,8 @@ import { registerSecret } from '../core/secrets.js';
 import { isZcodeRunning } from '../core/clients/zcode.js';
 import { createInterruptHandler } from '../cli/commands/up.js';
 import { createApp } from './app.js';
+import { setFrameSources } from './http-utils.js';
+import { resolveOpenwebuiUrl, frameSources } from './openwebui-url.js';
 import { createRoutes } from './routes.js';
 import { createJobs } from './jobs.js';
 import { createSse } from './sse.js';
@@ -53,6 +55,9 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
   }
   // Come il ctx della CLI: il controllo "ZCode in esecuzione" usato da /api/clients/zcode.
   ctx.isZcodeRunning ??= () => isZcodeRunning({ platform: ctx.platform });
+
+  // R27: la CSP deve permettere l'iframe di Open WebUI all'indirizzo configurato (valore non valido → errore chiaro).
+  setFrameSources(frameSources(resolveOpenwebuiUrl(ctx.env)));
 
   const sse = createSse();
   // Una voce per ogni chiamata a ops.up: Pod creato, fase di creazione e ritorno di ops.up. Serve a chiudere "ui"

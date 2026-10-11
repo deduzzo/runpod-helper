@@ -8,6 +8,7 @@ import { testAdvisor } from '../core/advisor/advisor.js';
 import { clientExports } from '../core/clients/env-format.js';
 import { updateZcode, zcodeDir, isZcodeRunning } from '../core/clients/zcode.js';
 import { HttpError, sendJson, readJson } from './http-utils.js';
+import { resolveOpenwebuiUrl } from './openwebui-url.js';
 
 const adviceView = (a) => a && { accepted: a.accepted, rejected: a.rejected, changes: a.changes, rationale: a.rationale, warnings: a.warnings, recipePath: a.recipePath };
 // Identificativo del piano: lega la proposta del consulente al piano per cui è stata generata.
@@ -142,7 +143,7 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     return testAdvisor(provider);
   }));
 
-  add('GET', '/api/openwebui', json(() => ({ url: 'http://127.0.0.1:3000', profile: ctx.store.readConfig().openwebuiProfile ?? null, proxy: state.proxy ?? null })));
+  add('GET', '/api/openwebui', json(() => ({ url: resolveOpenwebuiUrl(ctx.env), profile: ctx.store.readConfig().openwebuiProfile ?? null, proxy: state.proxy ?? null })));
   add('POST', '/api/openwebui/profile', json(async ({ req }) => {
     const { profile } = await readJson(req);
     assertProfileName(profile);

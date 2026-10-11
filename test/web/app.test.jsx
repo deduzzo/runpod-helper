@@ -35,10 +35,10 @@ describe('App', () => {
   it('R19b: funziona anche se localStorage lancia', async () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('bloccato'); });
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('bloccato'); });
-    mockApi({ 'GET /api/session': { ok: true, version: '0.1.0' } });
+    mockApi({ 'GET /api/session': { ok: true, version: '0.1.0' }, 'GET /api/overview': { profiles: [], jobs: [], config: {}, advisor: {} } });
     render(<App />);
     await screen.findByText(/v0\.1\.0/);
     fireEvent.click(screen.getByRole('button', { name: 'Client' }));
-    expect(screen.getByRole('heading', { name: 'Client' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Profilo' })).toBeTruthy();
   });
 });

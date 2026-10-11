@@ -9,11 +9,20 @@ export class HttpError extends Error {
   }
 }
 
+const DEFAULT_FRAME_SOURCES = ['http://127.0.0.1:3000', 'http://localhost:3000'];
+const buildCsp = (frameSources) => `default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src ${frameSources.join(' ')}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`;
+
 export const SECURITY_HEADERS = {
-  'content-security-policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src http://127.0.0.1:3000 http://localhost:3000; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  'content-security-policy': buildCsp(DEFAULT_FRAME_SOURCES),
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
 };
+
+// Imposta le origini consentite per l'iframe di Open WebUI (porta/host di LLMPOD_OPENWEBUI_URL). Un solo server per
+// processo: l'oggetto è condiviso e viene letto a ogni risposta. Senza argomenti ripristina i valori predefiniti.
+export function setFrameSources(origins = DEFAULT_FRAME_SOURCES) {
+  SECURITY_HEADERS['content-security-policy'] = buildCsp(origins);
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',

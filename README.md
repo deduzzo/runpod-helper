@@ -87,6 +87,33 @@ llmpod plan <modello>     # il consulente interviene in automatico (--no-advisor
 
 La chiave del consulente sta in `~/.config/llmpod/.env` (permessi 600) e non viene mai mostrata.
 
+## Interfaccia web
+
+```bash
+npm run build:web      # una volta (o dopo un aggiornamento)
+llmpod ui              # apre il browser su http://127.0.0.1:7860
+```
+
+L'interfaccia (installabile come app dal browser) copre ricerca dei modelli, piano con il
+consulente, profili, avvio e spegnimento con le stesse conferme di costo della CLI, stato e
+costi, configurazione dei client e una prova veloce con Open WebUI. È raggiungibile solo dal tuo
+computer e richiede il link con il token stampato da `llmpod ui`.
+
+Il proxy per Open WebUI (porta 8081) inoltra le richieste al Pod del profilo scelto nella scheda
+"Prova veloce"; Open WebUI va puntato su `http://127.0.0.1:8081/v1` con la chiave
+`LLMPOD_OPENWEBUI_KEY` del file `.env` (con Docker è automatico).
+
+Note sulla scheda "Prova veloce":
+
+- Open WebUI si trova di default su `http://127.0.0.1:3000` (cambialo con `LLMPOD_OPENWEBUI_URL`;
+  il server ne ammette l'incorporamento nella pagina). Se apri l'interfaccia su `127.0.0.1`, la
+  finestra e il link usano `localhost` per Open WebUI, e viceversa: il cookie di sessione
+  (`llmpod_session`) è legato al nome dell'host, non alla porta, e in questo modo il browser non lo
+  invia a Open WebUI. Non aprire Open WebUI sullo stesso nome di host dell'interfaccia.
+- Se Open WebUI rifiuta di essere incorporato, usa il link "Apri in una nuova scheda".
+- La scheda "Client" mostra gli `export` (con la chiave del profilo) solo dopo il clic su
+  "Mostra gli export": non vengono memorizzati nel browser.
+
 ## Costi tipici
 
 Prezzi di listino Runpod Secure Cloud letti dall'API il 11/10/2026 (possono cambiare;

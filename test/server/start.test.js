@@ -5,7 +5,8 @@ import path from 'node:path';
 import { startUi } from '../../src/server/start.js';
 import { createStore } from '../../src/core/config.js';
 import { clearSecrets, redact } from '../../src/core/secrets.js';
-import { apiClient } from './helpers.js';
+import { setFrameSources } from '../../src/server/http-utils.js';
+import { apiClient, request } from './helpers.js';
 
 function ctx(extra = {}) {
   const store = createStore({ dir: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-ui-')), 'cfg'), platform: 'linux' });
@@ -13,7 +14,7 @@ function ctx(extra = {}) {
   return { store, env: {}, platform: 'linux', ops: { endpoint: async () => { throw Object.assign(new Error('x'), { code: 'NOT_FOUND' }); } }, makeOps: () => ({}), advisor: { config: () => null, provider: () => null }, ...extra };
 }
 
-beforeEach(() => clearSecrets());
+beforeEach(() => { clearSecrets(); setFrameSources(); });
 
 describe('startUi', () => {
   it('avvia interfaccia e proxy, genera la chiave interna, autentica con il token', async () => {
@@ -90,6 +91,20 @@ describe('startUi', () => {
     } finally {
       await ui2.close();
     }
+  });
+
+  it('R27: LLMPOD_OPENWEBUI_URL guida sia /api/openwebui sia la CSP (frame-src); valore non valido → errore all\'avvio', async () => {
+    const token = 'tok-0123456789abcdef';
+    const c = ctx({ env: { LLMPOD_OPENWEBUI_URL: 'http://localhost:3100/' } });
+    const ui = await startUi(c, { port: 0, proxy: false, token, staticDir: null });
+    try {
+      expect((await apiClient({ port: ui.port, token })('/api/openwebui')).json.url).toBe('http://localhost:3100');
+      const csp = (await request(ui.port, '/api/health')).headers['content-security-policy'];
+      expect(csp).toContain('frame-src http://127.0.0.1:3100 http://localhost:3100;');
+    } finally {
+      await ui.close();
+    }
+    await expect(startUi(ctx({ env: { LLMPOD_OPENWEBUI_URL: 'non-un-url' } }), { port: 0, proxy: false, token, staticDir: null })).rejects.toThrow(/LLMPOD_OPENWEBUI_URL non valido/);
   });
 
   it('il ctx del server espone isZcodeRunning (come quello della CLI)', async () => {

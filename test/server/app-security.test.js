@@ -180,6 +180,7 @@ describe('sicurezza del server', () => {
     expect(page.status).toBe(200);
     expect(page.body).toContain('<title>llmpod</title>');
     expect(page.headers['content-security-policy']).toMatch(/frame-ancestors 'none'/);
+    expect(page.headers['content-security-policy']).toContain('frame-src http://127.0.0.1:3000 http://localhost:3000;');
     expect(page.headers['content-security-policy']).toContain("base-uri 'none'");
     expect(page.headers['content-security-policy']).toContain("form-action 'self'");
     expect(page.headers['x-content-type-options']).toBe('nosniff');
