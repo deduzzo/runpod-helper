@@ -1,0 +1,670 @@
+{
+  "gpus": [
+    {
+      "availability": "HIGH",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": true,
+          "version": "12.8"
+        },
+        {
+          "available": true,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "AP-IN-1",
+          "name": "AP-IN-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "AP-JP-1",
+          "name": "AP-JP-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "CA-MTL-1",
+          "name": "CA-MTL-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EU-FR-1",
+          "name": "EU-FR-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EU-NL-1",
+          "name": "EU-NL-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EUR-IS-3",
+          "name": "EUR-IS-3"
+        },
+        {
+          "availability": "LOW",
+          "id": "EUR-NO-2",
+          "name": "EUR-NO-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-CA-2",
+          "name": "US-CA-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-GA-2",
+          "name": "US-GA-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-MO-1",
+          "name": "US-MO-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-NE-1",
+          "name": "US-NE-1"
+        }
+      ],
+      "id": "NVIDIA H100 80GB HBM3",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 1,
+        "secure": 8
+      },
+      "memory": 80,
+      "name": "H100 SXM",
+      "pool": "ADA_80_PRO",
+      "price": {
+        "community": 2.69,
+        "secure": 3.99,
+        "serverless": 4.79
+      },
+      "secure": true
+    },
+    {
+      "availability": "LOW",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": true,
+          "version": "13.0"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "US-KS-2",
+          "name": "US-KS-2"
+        }
+      ],
+      "id": "NVIDIA H100 PCIe",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 1,
+        "secure": 8
+      },
+      "memory": 80,
+      "name": "H100 PCIe",
+      "pool": "ADA_80_PRO",
+      "price": {
+        "community": 1.99,
+        "secure": 2.89,
+        "serverless": 4.79
+      },
+      "secure": true
+    },
+    {
+      "availability": "HIGH",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": true,
+          "version": "12.8"
+        },
+        {
+          "available": true,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "CA-MTL-3",
+          "name": "CA-MTL-3"
+        },
+        {
+          "availability": "LOW",
+          "id": "EU-FR-1",
+          "name": "EU-FR-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EUR-IS-4",
+          "name": "EUR-IS-4"
+        },
+        {
+          "availability": "LOW",
+          "id": "EUR-IS-5",
+          "name": "EUR-IS-5"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-CA-2",
+          "name": "US-CA-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-CO-1",
+          "name": "US-CO-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-GA-2",
+          "name": "US-GA-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-NC-1",
+          "name": "US-NC-1"
+        }
+      ],
+      "id": "NVIDIA H200",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 8,
+        "secure": 8
+      },
+      "memory": 141,
+      "name": "H200 SXM",
+      "pool": "HOPPER_141",
+      "price": {
+        "community": 3.59,
+        "secure": 5.29,
+        "serverless": 5.93
+      },
+      "secure": true
+    },
+    {
+      "availability": "MEDIUM",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": true,
+          "version": "12.8"
+        },
+        {
+          "available": true,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "EUR-IS-1",
+          "name": "EUR-IS-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-KS-2",
+          "name": "US-KS-2"
+        },
+        {
+          "availability": "MEDIUM",
+          "id": "US-MD-1",
+          "name": "US-MD-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-MO-1",
+          "name": "US-MO-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-WA-1",
+          "name": "US-WA-1"
+        }
+      ],
+      "id": "NVIDIA A100-SXM4-80GB",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 8,
+        "secure": 8
+      },
+      "memory": 80,
+      "name": "A100 SXM",
+      "pool": "AMPERE_80",
+      "price": {
+        "community": 1.39,
+        "secure": 1.79,
+        "serverless": 2.72
+      },
+      "secure": true
+    },
+    {
+      "availability": "LOW",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": false,
+          "version": "12.8"
+        },
+        {
+          "available": false,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "CA-MTL-3",
+          "name": "CA-MTL-3"
+        }
+      ],
+      "id": "NVIDIA A100 80GB PCIe",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 6,
+        "secure": 8
+      },
+      "memory": 80,
+      "name": "A100 PCIe",
+      "pool": "AMPERE_80",
+      "price": {
+        "community": 1.19,
+        "secure": 1.79,
+        "serverless": 2.72
+      },
+      "secure": true
+    },
+    {
+      "availability": "LOW",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": false,
+          "version": "12.8"
+        },
+        {
+          "available": true,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "OC-AU-1",
+          "name": "OC-AU-1"
+        }
+      ],
+      "id": "NVIDIA L40S",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 8,
+        "secure": 8
+      },
+      "memory": 48,
+      "name": "L40S",
+      "pool": "ADA_48_PRO",
+      "price": {
+        "community": 0.79,
+        "secure": 1.09,
+        "serverless": 1.75
+      },
+      "secure": true
+    },
+    {
+      "availability": "LOW",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": true,
+          "version": "12.8"
+        },
+        {
+          "available": false,
+          "version": "13.0"
+        },
+        {
+          "available": false,
+          "version": "13.2"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "US-WA-1",
+          "name": "US-WA-1"
+        }
+      ],
+      "id": "NVIDIA RTX 6000 Ada Generation",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 8,
+        "secure": 8
+      },
+      "memory": 48,
+      "name": "RTX 6000 Ada",
+      "pool": "ADA_48_PRO",
+      "price": {
+        "community": 0.74,
+        "secure": 0.99,
+        "serverless": 1.75
+      },
+      "secure": true
+    },
+    {
+      "availability": "HIGH",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": true,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        },
+        {
+          "available": true,
+          "version": "13.3"
+        },
+        {
+          "available": true,
+          "version": "13.4"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "CA-MTL-3",
+          "name": "CA-MTL-3"
+        },
+        {
+          "availability": "LOW",
+          "id": "EU-CZ-1",
+          "name": "EU-CZ-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EU-NL-1",
+          "name": "EU-NL-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EUR-IS-1",
+          "name": "EUR-IS-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EUR-IS-2",
+          "name": "EUR-IS-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-MO-2",
+          "name": "US-MO-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-NC-1",
+          "name": "US-NC-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-NC-2",
+          "name": "US-NC-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-NE-1",
+          "name": "US-NE-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-PA-1",
+          "name": "US-PA-1"
+        }
+      ],
+      "id": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 9,
+        "secure": 9
+      },
+      "memory": 96,
+      "name": "RTX PRO 6000",
+      "pool": "BLACKWELL_96",
+      "price": {
+        "community": 1.69,
+        "secure": 2.49,
+        "serverless": 3.49
+      },
+      "secure": true
+    },
+    {
+      "availability": "LOW",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": false,
+          "version": "12.8"
+        },
+        {
+          "available": true,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        },
+        {
+          "available": true,
+          "version": "13.3"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "EU-CZ-1",
+          "name": "EU-CZ-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EU-RO-1",
+          "name": "EU-RO-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EUR-IS-1",
+          "name": "EUR-IS-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-IL-1",
+          "name": "US-IL-1"
+        }
+      ],
+      "id": "NVIDIA GeForce RTX 4090",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 8,
+        "secure": 8
+      },
+      "memory": 24,
+      "name": "RTX 4090",
+      "pool": "ADA_24",
+      "price": {
+        "community": 0.34,
+        "secure": 0.89,
+        "serverless": 1.1
+      },
+      "secure": true
+    },
+    {
+      "availability": "NONE",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": false,
+          "version": "12.8"
+        },
+        {
+          "available": false,
+          "version": "13.0"
+        },
+        {
+          "available": false,
+          "version": "13.1"
+        },
+        {
+          "available": false,
+          "version": "13.2"
+        },
+        {
+          "available": false,
+          "version": "13.3"
+        }
+      ],
+      "id": "NVIDIA GeForce RTX 5090",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 8,
+        "secure": 8
+      },
+      "memory": 32,
+      "name": "RTX 5090",
+      "pool": "ADA_32_PRO",
+      "price": {
+        "community": 0.69,
+        "secure": 1.19,
+        "serverless": 1.58
+      },
+      "secure": true
+    },
+    {
+      "availability": "MEDIUM",
+      "community": false,
+      "cudaVersions": [
+        {
+          "available": true,
+          "version": "12.8"
+        },
+        {
+          "available": true,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "CA-MTL-1",
+          "name": "CA-MTL-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "EU-SE-1",
+          "name": "EU-SE-1"
+        }
+      ],
+      "id": "NVIDIA A40",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 1,
+        "secure": 10
+      },
+      "memory": 48,
+      "name": "A40",
+      "pool": "AMPERE_48",
+      "price": {
+        "community": 0.35,
+        "secure": 0.59,
+        "serverless": 1.22
+      },
+      "secure": true
+    },
+    {
+      "availability": "LOW",
+      "community": true,
+      "cudaVersions": [
+        {
+          "available": true,
+          "version": "12.8"
+        },
+        {
+          "available": true,
+          "version": "13.0"
+        },
+        {
+          "available": true,
+          "version": "13.2"
+        }
+      ],
+      "dataCenters": [
+        {
+          "availability": "LOW",
+          "id": "EU-RO-1",
+          "name": "EU-RO-1"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-CA-2",
+          "name": "US-CA-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-NC-2",
+          "name": "US-NC-2"
+        },
+        {
+          "availability": "LOW",
+          "id": "US-NE-1",
+          "name": "US-NE-1"
+        }
+      ],
+      "id": "NVIDIA B200",
+      "manufacturer": "NVIDIA",
+      "maxCount": {
+        "community": 0,
+        "secure": 8
+      },
+      "memory": 180,
+      "name": "B200",
+      "pool": "BLACKWELL_180",
+      "price": {
+        "community": 5.98,
+        "secure": 7.99,
+        "serverless": 8.64
+      },
+      "secure": true
+    }
+  ]
+}

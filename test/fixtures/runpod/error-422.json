@@ -1,0 +1,8 @@
+{
+  "detail": "Request validation failed.",
+  "errors": [
+    "$: minimum: got 0, want 1"
+  ],
+  "status": 422,
+  "title": "Unprocessable Entity"
+}
