@@ -8,15 +8,33 @@ export function EventsProvider({ children }) {
   const value = useRef({ listeners: new Set(), reconnects: new Set() });
   useEffect(() => {
     const { listeners, reconnects } = value.current;
-    const es = new EventSource('/api/events');
-    es.addEventListener('job', (e) => {
-      let data;
-      try { data = JSON.parse(e.data); } catch { return; }
-      for (const fn of [...listeners]) fn(data);
-    });
-    // EventSource si riconnette da solo: ogni `open` dopo una caduta può aver perso eventi.
-    es.onopen = () => { for (const fn of [...reconnects]) fn(); };
-    return () => es.close();
+    let es = null;
+    let timer = null;
+    let delay = 1000;
+    let stopped = false;
+    function connect() {
+      es = new EventSource('/api/events');
+      es.addEventListener('job', (e) => {
+        let data;
+        try { data = JSON.parse(e.data); } catch { return; }
+        for (const fn of [...listeners]) fn(data);
+      });
+      // Ogni `open` (anche il primo e quelli dopo una caduta) può aver lasciato buchi: i pannelli si riallineano.
+      es.onopen = () => {
+        delay = 1000;
+        for (const fn of [...reconnects]) fn();
+      };
+      // Se il browser si riconnette da solo (CONNECTING) non si fa nulla; se il flusso è CLOSED (es. 401 dopo il riavvio
+      // del server) il browser non riprova più: ricreiamo l'EventSource con backoff esponenziale fino a 30 s.
+      es.onerror = () => {
+        if (stopped || es.readyState !== 2) return;
+        es.close();
+        timer = setTimeout(connect, delay);
+        delay = Math.min(delay * 2, 30_000);
+      };
+    }
+    connect();
+    return () => { stopped = true; clearTimeout(timer); es?.close(); };
   }, []);
   return <Ctx.Provider value={value.current}>{children}</Ctx.Provider>;
 }

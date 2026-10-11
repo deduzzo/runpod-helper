@@ -26,17 +26,20 @@ export default function App() {
   const [tab, setTab] = useState(readTab);
 
   useEffect(() => {
-    api('/api/session').then((s) => setSession(s)).catch(() => setSession(null));
+    api('/api/session').then((s) => setSession(s)).catch((err) => setSession({ error: err }));
   }, []);
   useEffect(() => { try { localStorage.setItem('llmpod.tab', tab); } catch { /* storage non disponibile */ } }, [tab]);
 
   if (session === 'loading') return <div className="flex min-h-screen items-center justify-center"><Spinner /></div>;
-  if (!session) {
+  if (session.error) {
+    const invalid = session.error.status === 401;
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="glass fade-up max-w-md p-8 text-center">
           <h1 className="mb-3 text-2xl font-bold neon-text">llmpod</h1>
-          <p className="text-gray-300">Sessione non valida. Apri il link stampato nel terminale da <code className="text-cyan-300">llmpod ui</code>.</p>
+          {invalid
+            ? <p className="text-gray-300">Sessione non valida: riapri il link stampato da <code className="text-cyan-300">llmpod ui</code>.</p>
+            : <p className="text-gray-300">Server non raggiungibile. Controlla che <code className="text-cyan-300">llmpod ui</code> sia ancora in esecuzione e ricarica la pagina.</p>}
         </div>
       </div>
     );

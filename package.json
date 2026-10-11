@@ -20,6 +20,7 @@
     "test:js": "vitest run",
     "test:py": "python3 -m unittest discover -s test/supervisor -v",
     "build:web": "vite build --config web/vite.config.js",
+    "prepack": "npm run build:web",
     "e2e:cpu": "node scripts/e2e-cpu.js",
     "prepare": "git config core.hooksPath .githooks || true"
   },

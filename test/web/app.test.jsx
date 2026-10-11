@@ -11,8 +11,15 @@ describe('App', () => {
   it('senza sessione (401) mostra le istruzioni per llmpod ui', async () => {
     mockApi({ 'GET /api/session': { __status: 401, body: { error: { code: 'UNAUTHORIZED', message: 'Sessione non valida' } } } });
     render(<App />);
-    await screen.findByText(/Apri il link stampato nel terminale/);
+    await screen.findByText(/Sessione non valida: riapri il link stampato da/);
     expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it('errore diverso da 401: "Server non raggiungibile"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+    render(<App />);
+    await screen.findByText(/Server non raggiungibile/);
+    expect(screen.queryByText(/Sessione non valida/)).toBeNull();
   });
 
   it('con sessione mostra le cinque schede e cambia pagina', async () => {

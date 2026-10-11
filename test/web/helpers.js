@@ -26,16 +26,17 @@ export class FakeEventSource {
     this.url = url;
     this.listeners = {};
     this.closed = false;
+    this.readyState = 0;
     FakeEventSource.instances.push(this);
   }
 
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
 
-  close() { this.closed = true; }
+  close() { this.closed = true; this.readyState = 2; }
 
   emit(type, data) { for (const fn of this.listeners[type] ?? []) fn({ data: JSON.stringify(data) }); }
 
-  open() { this.onopen?.(); }
+  open() { this.readyState = 1; this.onopen?.(); }
 
   static reset() { FakeEventSource.instances = []; }
 

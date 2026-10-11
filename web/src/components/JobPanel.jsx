@@ -152,6 +152,11 @@ function JobPanelInner({ jobId, onFinished }) {
       await api(`/api/jobs/${jobId}/answer`, { method: 'POST', body: { questionId: q.id, answer: value } });
     } catch (err) {
       setActionError(err);
+      // 409: la domanda non è più attiva (superata o scaduta), resta chiusa. Rete/500: l'utente può riprovare.
+      if (err?.status !== 409) {
+        answered.current.delete(q.id);
+        setQuestion(q);
+      }
     }
   }
 

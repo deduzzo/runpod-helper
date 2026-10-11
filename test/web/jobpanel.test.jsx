@@ -99,7 +99,53 @@ describe('JobPanel', () => {
     const [, init] = fetchMock.mock.calls.find(([p]) => p === '/api/jobs/j1/answer');
     expect(JSON.parse(init.body)).toEqual({ questionId: 'q1', answer: true });
     expect(init.headers['content-type']).toBe('application/json');
-    await waitFor(() => expect(screen.queryByText('Terminare il Pod?')).toBeNull());
+  });
+
+  it('la domanda si chiude con l\'evento answer (senza risposta locale) e non per un answer di un\'altra domanda', async () => {
+    mockApi({ 'GET /api/jobs/j1': { job: job(), events: [ev(0, 'question', { questionId: 'q1', text: 'Terminare il Pod?', defYes: true })] } });
+    mount();
+    await screen.findByText('Terminare il Pod?');
+    await act(async () => { FakeEventSource.last.emit('job', ev(1, 'answer', { questionId: 'altra', answer: false })); });
+    expect(screen.getByText('Terminare il Pod?')).toBeTruthy();
+    await act(async () => { FakeEventSource.last.emit('job', ev(2, 'answer', { questionId: 'q1', answer: false })); });
+    expect(screen.queryByText('Terminare il Pod?')).toBeNull();
+  });
+
+  it('l\'onopen iniziale del flusso SSE rifà il fetch (since = ultimo seq + 1)', async () => {
+    const fetchMock = mockApi({ 'GET /api/jobs/j1': { job: job(), events: [ev(0, 'phase', { message: 'Inizio' })] } });
+    mount();
+    await screen.findByText(/Inizio/);
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    await act(async () => { FakeEventSource.last.open(); });
+    await waitFor(() => expect(fetchMock.mock.calls.map(([p]) => p)).toContain('/api/jobs/j1?since=1'));
+    expect(screen.getAllByText(/Inizio/)).toHaveLength(1);
+  });
+
+  it('POST fallito (rete/500): la domanda torna visibile con l\'errore e si può riprovare', async () => {
+    let calls = 0;
+    const fetchMock = mockApi({
+      'GET /api/jobs/j1': { job: job(), events: [ev(0, 'question', { questionId: 'q1', text: 'Confermi la spesa?', defYes: false })] },
+      'POST /api/jobs/j1/answer': () => (++calls === 1 ? { __status: 500, body: { error: { code: 'INTERNAL', message: 'Errore interno' } } } : { ok: true }),
+    });
+    mount();
+    await screen.findByText('Confermi la spesa?');
+    fireEvent.click(screen.getByRole('button', { name: 'Sì' }));
+    await screen.findByText('Errore interno');
+    expect(screen.getByText('Confermi la spesa?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Sì' }));
+    await waitFor(() => expect(screen.queryByText('Confermi la spesa?')).toBeNull());
+    expect(screen.queryByText('Errore interno')).toBeNull();
+    expect(fetchMock.mock.calls.filter(([p]) => p === '/api/jobs/j1/answer')).toHaveLength(2);
+  });
+
+  it('POST fallito per errore di rete (fetch rifiuta): domanda di nuovo visibile', async () => {
+    mockApi({ 'GET /api/jobs/j1': { job: job(), events: [ev(0, 'question', { questionId: 'q1', text: 'Confermi?', defYes: false })] } });
+    mount();
+    await screen.findByText('Confermi?');
+    globalThis.fetch.mockImplementation(async () => { throw new TypeError('Failed to fetch'); });
+    fireEvent.click(screen.getByRole('button', { name: 'No' }));
+    await screen.findByText('Failed to fetch');
+    expect(screen.getByText('Confermi?')).toBeTruthy();
   });
 
   it('risposta rifiutata (409): domanda chiusa e messaggio, nessun crash', async () => {
