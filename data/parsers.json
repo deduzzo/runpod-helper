@@ -1,0 +1,32 @@
+{
+  "vllmVersion": "v0.30.0",
+  "rules": [
+    { "modelType": "kimi_k2", "idPattern": "thinking", "tool": "kimi_k2", "reasoning": "kimi_k2" },
+    { "modelType": "kimi_k2", "tool": "kimi_k2" },
+    { "architectures": ["DeepseekV32ForCausalLM"], "tool": "deepseek_v32", "reasoning": "deepseek_v3" },
+    { "modelType": "deepseek_v3", "idPattern": "v3\\.1", "tool": "deepseek_v31", "reasoning": "deepseek_v3",
+      "warning": "DeepSeek-V3.1 richiede il chat template per gli strumenti di vLLM (examples/tool_chat_template_deepseekv31.jinja): verificarne la presenza nell'immagine" },
+    { "modelType": "deepseek_v3", "tool": "deepseek_v3", "reasoning": "deepseek_v3",
+      "warning": "DeepSeek-V3 richiede il chat template per gli strumenti di vLLM (examples/tool_chat_template_deepseekv3.jinja): verificarne la presenza nell'immagine" },
+    { "architectures": ["GlmMoeDsaForCausalLM", "Glm5NextForConditionalGeneration", "Glm4MoeLiteForCausalLM"], "tool": "glm47", "reasoning": "glm47" },
+    { "architectures": ["Glm4MoeForCausalLM"], "idPattern": "4\\.[7-9]", "tool": "glm47", "reasoning": "glm47" },
+    { "architectures": ["Glm4MoeForCausalLM"], "tool": "glm45", "reasoning": "glm45" },
+    { "architectures": ["MiniMaxM2ForCausalLM"], "tool": "minimax_m2", "reasoning": "minimax_m2" },
+    { "architectures": ["GptOssForCausalLM"], "tool": "openai", "reasoning": "openai_gptoss" },
+    { "architectures": ["Qwen3NextForCausalLM"], "idPattern": "coder", "tool": "qwen3_coder" },
+    { "architectures": ["Qwen3NextForCausalLM"], "tool": "hermes", "reasoning": "qwen3" },
+    { "architectures": ["Qwen3MoeForCausalLM", "Qwen3ForCausalLM"], "idPattern": "coder", "tool": "qwen3_coder" },
+    { "architectures": ["Qwen3MoeForCausalLM", "Qwen3ForCausalLM"], "idPattern": "instruct-2507", "tool": "hermes" },
+    { "architectures": ["Qwen3MoeForCausalLM", "Qwen3ForCausalLM"], "tool": "hermes", "reasoning": "qwen3" },
+    { "architectures": ["Qwen2ForCausalLM"], "tool": "hermes" },
+    { "architectures": ["Llama4ForConditionalGeneration"], "tool": "llama4_pythonic",
+      "warning": "Llama 4 richiede un chat template per gli strumenti: verificare che quello del modello supporti tool calling" },
+    { "architectures": ["LlamaForCausalLM"], "idPattern": "hermes", "tool": "hermes" },
+    { "architectures": ["LlamaForCausalLM"], "tool": "llama3_json",
+      "warning": "Llama 3.x richiede un chat template per gli strumenti: verificare che quello del modello supporti tool calling" },
+    { "modelType": ["mistral", "mistral3"], "idPattern": "magistral", "tool": "mistral", "reasoning": "mistral", "extraArgs": ["--tokenizer-mode", "mistral"] },
+    { "modelType": ["mistral", "mistral3"], "tool": "mistral", "extraArgs": ["--tokenizer-mode", "mistral"] },
+    { "architectures": ["GraniteMoeHybridForCausalLM"], "tool": "granite4" },
+    { "architectures": ["GraniteForCausalLM"], "tool": "granite", "reasoning": "granite" }
+  ]
+}

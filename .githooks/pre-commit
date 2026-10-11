@@ -7,7 +7,7 @@ staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -z "$staged" ] && exit 0
 
 # File che non devono mai essere committati
-bad_files=$(printf '%s\n' "$staged" | grep -E '(^|/)\.env($|\.)|\.(pem|key|p12|pfx)$|(^|/)state\.json$' || true)
+bad_files=$(printf '%s\n' "$staged" | grep -E '(^|/)\.env($|\.)|\.(pem|key|p12|pfx)$|(^|/)state\.json$' | grep -vE '(^|/)\.env\.example$' || true)
 if [ -n "$bad_files" ]; then
   echo "pre-commit: file sensibili in stage, commit bloccato:" >&2
   printf '  %s\n' $bad_files >&2

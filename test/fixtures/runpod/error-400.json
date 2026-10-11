@@ -1,0 +1,5 @@
+{
+  "detail": "product is required with include=AVAILABILITY; availability differs by product context",
+  "status": 400,
+  "title": "Bad Request"
+}

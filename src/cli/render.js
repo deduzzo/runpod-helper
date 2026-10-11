@@ -1,0 +1,40 @@
+import { redact } from '../core/secrets.js';
+
+export function createIo({ stdout = process.stdout, stderr = process.stderr, prompt }) {
+  return {
+    out: (t) => stdout.write(`${redact(t)}\n`),
+    raw: (t) => stdout.write(`${t}\n`),
+    err: (t) => stderr.write(`${redact(t)}\n`),
+    ask: prompt.ask,
+    askText: prompt.askText,
+    askSecret: prompt.askSecret,
+  };
+}
+
+export function attachRenderer(events, io, { verbose = false } = {}) {
+  let lastProgress = '';
+  return events.on((e) => {
+    if (e.type === 'phase') io.err(`▸ ${e.message}`);
+    else if (e.type === 'progress' && e.message !== lastProgress) { lastProgress = e.message; io.err(`  … ${e.message}`); }
+    else if (e.type === 'log' && verbose) io.err(`  │ ${e.line}`);
+    else if (e.type === 'warning') io.err(`⚠ ${e.message}`);
+    else if (e.type === 'info') io.err(`ℹ ${e.message}`);
+    else if (e.type === 'pod') io.err(`  Pod creato: ${e.podId}`);
+  });
+}
+
+export function table(rows, columns) {
+  const cells = rows.map((r) => columns.map((c) => String(c.value ? c.value(r) : r[c.key] ?? '')));
+  const widths = columns.map((c, i) => Math.max(c.label.length, ...cells.map((row) => row[i].length)));
+  const line = (vals) => vals.map((v, i) => (columns[i].align === 'right' ? v.padStart(widths[i]) : v.padEnd(widths[i]))).join('  ').trimEnd();
+  return [line(columns.map((c) => c.label)), line(widths.map((w) => '─'.repeat(w))), ...cells.map(line)].join('\n');
+}
+
+export const fmtGiB = (n) => `${Number(n).toFixed(1).replace('.', ',')} GiB`;
+
+export function fmtDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h ? `${h} h ${m} min` : `${m} min ${s % 60} s`;
+}

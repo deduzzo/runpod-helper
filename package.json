@@ -1,0 +1,30 @@
+{
+  "name": "llmpod",
+  "version": "0.1.0",
+  "description": "LLM self-hosted su Runpod come backend di coding agent",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "llmpod": "src/cli/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "src",
+    "data"
+  ],
+  "scripts": {
+    "test": "npm run test:js && npm run test:py",
+    "test:js": "vitest run",
+    "test:py": "python3 -m unittest discover -s test/supervisor -v",
+    "e2e:cpu": "node scripts/e2e-cpu.js",
+    "prepare": "git config core.hooksPath .githooks || true"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.7"
+  }
+}
