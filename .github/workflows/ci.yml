@@ -1,11 +1,11 @@
 name: CI
 
-# Push su main e pull request. I push sui branch feat/** servono a verificare un branch prima di aprire la PR
-# (da togliere quando non servono più: con una PR aperta partirebbero due esecuzioni).
+# Push su main e pull request; i branch di lavoro si verificano aprendo una PR (o con workflow_dispatch).
 on:
   push:
-    branches: [main, 'feat/**']
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

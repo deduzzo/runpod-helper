@@ -61,7 +61,8 @@ ogni avvio e compare anche nei log del container (`bin/llmpod logs`).
 registrazione di altri account è disattivata (`ENABLE_SIGNUP=false`; il primo account non ne
 dipende, verificato sul codice di Open WebUI v0.11.4). Senza autenticazione una pagina web
 malevola (o un attacco di DNS rebinding) potrebbe usare Open WebUI su `localhost` come se fosse
-l'utente, quindi l'accesso senza account non è previsto. Le credenziali dell'account restano nel
+l'utente, quindi l'accesso senza account non è previsto. **Crea l'account subito dopo il primo
+avvio**: finché non esiste, chiunque raggiunga `127.0.0.1:3000` dal tuo computer potrebbe crearlo per primo. Le credenziali dell'account restano nel
 volume Docker di Open WebUI. La porta si cambia con `LLMPOD_OPENWEBUI_PORT` (predefinita 3000).
 
 Per fermare tutto: `scripts/stop.sh` (o `scripts\stop.bat`); configurazione e dati di Open WebUI
