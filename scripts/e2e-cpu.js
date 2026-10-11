@@ -79,6 +79,49 @@ async function streamCheck(url) {
   }
 }
 
+const ALERT = (id) => `⚠ ATTENZIONE: il Pod ${id} potrebbe essere ancora attivo, terminalo da https://www.runpod.io/console/pods`;
+const RUNNING_STATES = ['TERMINATED', 'EXITED'];
+let cleanupFailed = false;
+let cleanupPromise = null;
+
+// Termina sempre il Pod (fino a 5 tentativi) e verifica che non restino Pod di prova attivi.
+// Idempotente: le chiamate successive ricevono la stessa promise (già risolta o in corso).
+function cleanup(podId) {
+  if (!cleanupPromise) cleanupPromise = doCleanup(podId);
+  return cleanupPromise;
+}
+
+async function doCleanup(podId) {
+  let deleted = false;
+  for (let attempt = 1; attempt <= 5 && !deleted; attempt++) {
+    try {
+      await runpod.deletePod(podId); // il 404 (Pod già assente) è tollerato da deletePod
+      deleted = true;
+      log(`Pod ${podId} terminato (tentativo ${attempt})`);
+    } catch (err) {
+      log(`Terminazione del Pod ${podId} fallita (tentativo ${attempt}/5): ${err.message}`);
+      if (attempt < 5) await sleep(5000);
+    }
+  }
+  if (!deleted) {
+    console.error(redact(ALERT(podId)));
+    cleanupFailed = true;
+  }
+  try {
+    const left = (await runpod.listPods()).filter((x) => x.name === 'llmpod-e2e-cpu' && !RUNNING_STATES.includes(x.status));
+    if (left.length) {
+      for (const x of left) console.error(redact(ALERT(x.id)));
+      cleanupFailed = true;
+    } else {
+      log('Nessun Pod di prova rimasto attivo');
+    }
+  } catch (err) {
+    log(`Verifica dei Pod di prova fallita: ${err.message}`);
+    console.error(redact(ALERT(podId)));
+    cleanupFailed = true;
+  }
+}
+
 const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok, detail }); log(`${ok ? '✓' : '✗'} ${name}${detail ? ` — ${detail}` : ''}`); };
 
@@ -92,6 +135,18 @@ if (created.status !== 201) {
 }
 const podId = created.data.id;
 log(`Pod ${podId} creato`);
+let signals = 0;
+const onSignal = (sig) => {
+  signals += 1;
+  if (signals > 1) {
+    console.error(redact('Pulizia in corso, attendere…'));
+    return;
+  }
+  console.error(redact(`Interrotto (${sig}): termino il Pod…`));
+  cleanup(podId).then(() => process.exit(130));
+};
+process.on('SIGINT', onSignal);
+process.on('SIGTERM', onSignal);
 try {
   await until('RUNNING', async () => (await runpod.getPod(podId))?.status === 'RUNNING', 300_000, 5000);
   const sup = createSupervisorClient({ http, podId, apiKey });
@@ -120,14 +175,9 @@ try {
 } catch (err) {
   check('Esecuzione della prova', false, err.message);
 } finally {
-  const p = await runpod.getPod(podId).catch(() => null);
-  if (p && p.status !== 'TERMINATED') {
-    await runpod.deletePod(podId);
-    log(`Pod ${podId} terminato dallo script (sicurezza)`);
-  }
-  const left = (await runpod.listPods()).filter((x) => x.name === 'llmpod-e2e-cpu' && !['TERMINATED', 'EXITED'].includes(x.status));
-  log(left.length ? `⚠ Pod di prova ancora attivi: ${left.map((x) => x.id).join(', ')}` : 'Nessun Pod di prova rimasto attivo');
+  await cleanup(podId);
 }
 const failed = checks.filter((c) => !c.ok);
 log(failed.length ? `${failed.length} controlli falliti` : 'Tutti i controlli superati');
-process.exit(failed.length ? 1 : 0);
+if (cleanupFailed) log('Pulizia del Pod non riuscita: verificare la console Runpod');
+process.exit(failed.length || cleanupFailed ? 1 : 0);
