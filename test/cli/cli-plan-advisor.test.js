@@ -111,4 +111,14 @@ describe('plan con consulente', () => {
     await s2.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'], { hf: hf(), runpod: runpod(), http: http2 });
     expect(s2.store.readJson('last-plan.json').advisor).toBeNull();
   });
+
+  it('il diff mostrato riflette gli argomenti dopo il riallineamento (rimuovere il parser toglie anche --enable-auto-tool-choice)', async () => {
+    const s = setup({ ask: [true] });
+    await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'], { hf: hf(), runpod: runpod(), http: advisorHttp('{"set":{"tool-call-parser":false},"rationale":"r","warnings":[]}') });
+    expect(s.out()).toMatch(/^ {2}- --tool-call-parser$/m);
+    expect(s.out()).toMatch(/^ {2}- --enable-auto-tool-choice$/m);
+    const plan = s.store.readJson('last-plan.json');
+    expect(plan.vllm.args).not.toContain('--enable-auto-tool-choice');
+    expect(plan.parsers.tool).toBeNull();
+  });
 });

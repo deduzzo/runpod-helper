@@ -114,4 +114,18 @@ describe('advisePlan / adviseRepair', () => {
     expect(r.args).toEqual(expect.arrayContaining(['--gpu-memory-utilization', '0.85', '--kv-cache-dtype', 'fp8']));
     expect(r.warnings).toEqual(['ridotto']);
   });
+
+  it('chiede fino a 16000 token di risposta (piano e correzione)', async () => {
+    const provider = { complete: vi.fn(async () => ({ text: '{"set":{}}' })) };
+    await advisePlan({ provider, plan, hf: { getReadme: async () => null }, recipes: { find: async () => null }, flags, fitsWith: () => true });
+    await adviseRepair({ provider, profile: { model: plan.model, servedName: 'q', context: 65536 }, args: plan.vllm.args, error: { code: 'OOM', message: 'oom' }, lastLines: [], smoke: null, flags });
+    expect(provider.complete.mock.calls.map((c) => c[0].maxTokens)).toEqual([16000, 16000]);
+  });
+
+  it('advisePlan: args e diff riallineati (parser rimosso → via anche --enable-auto-tool-choice)', async () => {
+    const provider = { complete: vi.fn(async () => ({ text: '{"set":{"tool-call-parser":false}}' })) };
+    const r = await advisePlan({ provider, plan, hf: { getReadme: async () => null }, recipes: { find: async () => null }, flags, fitsWith: () => true });
+    expect(r.args).not.toContain('--enable-auto-tool-choice');
+    expect(r.changes.removed).toEqual(expect.arrayContaining(['--tool-call-parser', '--enable-auto-tool-choice']));
+  });
 });

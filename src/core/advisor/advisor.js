@@ -1,5 +1,6 @@
 import { VLLM_VERSION } from '../planner/vllm-args.js';
-import { parseAdvice, reviewAdvice, ADVISOR_ALLOWED, LOCKED } from './advice.js';
+import { parseAdvice, reviewAdvice, diffArgs, ADVISOR_ALLOWED, LOCKED } from './advice.js';
+import { syncDerivedFields } from '../planner/plan.js';
 import { redact } from '../secrets.js';
 
 const README_MAX = 12000;
@@ -72,15 +73,18 @@ export async function advisePlan({ provider, plan, hf, recipes, flags, fitsWith,
     recipes.find(plan.model.id).catch(() => null),
   ]);
   const { system, user } = buildPlanPrompt({ plan, readme, recipe });
-  const { text } = await provider.complete({ system, user, maxTokens: 2000 });
+  const { text } = await provider.complete({ system, user, maxTokens: 16000 });
   const advice = parseAdvice(text);
   const review = reviewAdvice({ advice, baseArgs: plan.vllm.args, flags, allowTrustRemoteCode, fitsWith });
+  // Argomenti e diff come verranno davvero salvati: parser e --enable-auto-tool-choice riallineati.
+  review.args = syncDerivedFields({ vllm: { args: [...review.args] } }).vllm.args;
+  review.changes = diffArgs(plan.vllm.args, review.args);
   return { ...review, rationale: advice.rationale, warnings: advice.warnings, recipePath: recipe?.path ?? null };
 }
 
 export async function adviseRepair({ provider, profile, args, error, lastLines, smoke, flags }) {
   const { system, user } = buildRepairPrompt({ profile, args, error, lastLines, smoke });
-  const { text } = await provider.complete({ system, user, maxTokens: 2000 });
+  const { text } = await provider.complete({ system, user, maxTokens: 16000 });
   const advice = parseAdvice(text);
   const review = reviewAdvice({ advice, baseArgs: args, flags });
   return { ...review, rationale: advice.rationale, warnings: advice.warnings };

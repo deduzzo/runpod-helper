@@ -20,6 +20,9 @@ async function post(http, url, headers, json, timeoutMs) {
   return r.data;
 }
 
+const truncated = () => new LlmpodError(Codes.ADVISOR_FAILED, 'La risposta del consulente è stata troncata per il limite di token', { hint: 'Riprova; se si ripete, scegli un modello più conciso con: llmpod advisor' });
+const refused = () => new LlmpodError(Codes.ADVISOR_FAILED, 'Il consulente ha rifiutato la richiesta', { hint: 'Riprova o scegli un altro modello/preset con: llmpod advisor' });
+
 function requireText(text) {
   if (!text || !String(text).trim()) throw new LlmpodError(Codes.ADVISOR_FAILED, 'Il consulente ha restituito una risposta vuota');
   return { text: String(text) };
@@ -31,6 +34,8 @@ function anthropicProvider(cfg, http) {
     async complete({ system, user, maxTokens = 2000 }) {
       const d = await post(http, `${cfg.baseUrl}/v1/messages`, { ...authHeaders(cfg), 'anthropic-version': '2023-06-01' },
         { model: cfg.model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }] }, cfg.timeoutMs);
+      if (d?.stop_reason === 'max_tokens') throw truncated();
+      if (d?.stop_reason === 'refusal') throw refused();
       return requireText((d?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join(''));
     },
   };
@@ -42,7 +47,10 @@ function openaiProvider(cfg, http) {
     async complete({ system, user, maxTokens = 2000 }) {
       const d = await post(http, `${cfg.baseUrl}/chat/completions`, authHeaders(cfg),
         { model: cfg.model, max_tokens: maxTokens, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, cfg.timeoutMs);
-      return requireText(d?.choices?.[0]?.message?.content);
+      const choice = d?.choices?.[0];
+      if (choice?.finish_reason === 'length') throw truncated();
+      if (choice?.message?.refusal) throw refused();
+      return requireText(choice?.message?.content);
     },
   };
 }

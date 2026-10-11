@@ -36,6 +36,26 @@ describe('provider HTTP', () => {
     expect(opts.json).toEqual({ model: 'glm-5.3', max_tokens: 500, messages: [{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }] });
   });
 
+  it('anthropic: stop_reason max_tokens o refusal → errore chiaro in italiano, senza parsing', async () => {
+    const cfg = { preset: 'anthropic', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'm', apiKey: KEY, auth: 'x-api-key', timeoutMs: 1 };
+    const cut = { request: vi.fn(async () => ok({ stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"set":{"a"' }] })) };
+    await expect(createProvider(cfg, { http: cut }).complete({ system: 's', user: 'u' })).rejects.toMatchObject({ code: 'ADVISOR_FAILED', message: expect.stringMatching(/troncata.*limite di token/) });
+    const refused = { request: vi.fn(async () => ok({ stop_reason: 'refusal', content: [] })) };
+    await expect(createProvider(cfg, { http: refused }).complete({ system: 's', user: 'u' })).rejects.toMatchObject({ code: 'ADVISOR_FAILED', message: expect.stringMatching(/rifiutato/) });
+    const fine = { request: vi.fn(async () => ok({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] })) };
+    expect((await createProvider(cfg, { http: fine }).complete({ system: 's', user: 'u' })).text).toBe('ok');
+  });
+
+  it('openai: finish_reason length o rifiuto → errore chiaro in italiano', async () => {
+    const cfg = { preset: 'zai', protocol: 'openai', baseUrl: 'https://x', model: 'm', apiKey: KEY, auth: 'bearer', timeoutMs: 1 };
+    const cut = { request: vi.fn(async () => ok({ choices: [{ finish_reason: 'length', message: { content: '{"set":' } }] })) };
+    await expect(createProvider(cfg, { http: cut }).complete({ system: 's', user: 'u' })).rejects.toMatchObject({ code: 'ADVISOR_FAILED', message: expect.stringMatching(/troncata.*limite di token/) });
+    const refused = { request: vi.fn(async () => ok({ choices: [{ finish_reason: 'stop', message: { content: null, refusal: 'non posso' } }] })) };
+    await expect(createProvider(cfg, { http: refused }).complete({ system: 's', user: 'u' })).rejects.toMatchObject({ code: 'ADVISOR_FAILED', message: expect.stringMatching(/rifiutato/) });
+    const fine = { request: vi.fn(async () => ok({ choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] })) };
+    expect((await createProvider(cfg, { http: fine }).complete({ system: 's', user: 'u' })).text).toBe('ok');
+  });
+
   it('401 → ADVISOR_FAILED con suggerimento e senza la chiave nel messaggio', async () => {
     const http = { request: vi.fn(async () => ({ ok: false, status: 401, data: { error: { message: `invalid key ${KEY}` } } })) };
     const p = createProvider({ preset: 'anthropic', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'm', apiKey: KEY, auth: 'x-api-key', timeoutMs: 1 }, { http });
