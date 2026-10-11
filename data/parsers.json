@@ -13,6 +13,8 @@
     { "architectures": ["Glm4MoeForCausalLM"], "tool": "glm45", "reasoning": "glm45" },
     { "architectures": ["MiniMaxM2ForCausalLM"], "tool": "minimax_m2", "reasoning": "minimax_m2" },
     { "architectures": ["GptOssForCausalLM"], "tool": "openai", "reasoning": "openai_gptoss" },
+    { "architectures": ["Qwen3NextForCausalLM"], "idPattern": "coder", "tool": "qwen3_coder" },
+    { "architectures": ["Qwen3NextForCausalLM"], "tool": "hermes", "reasoning": "qwen3" },
     { "architectures": ["Qwen3MoeForCausalLM", "Qwen3ForCausalLM"], "idPattern": "coder", "tool": "qwen3_coder" },
     { "architectures": ["Qwen3MoeForCausalLM", "Qwen3ForCausalLM"], "idPattern": "instruct-2507", "tool": "hermes" },
     { "architectures": ["Qwen3MoeForCausalLM", "Qwen3ForCausalLM"], "tool": "hermes", "reasoning": "qwen3" },

@@ -17,6 +17,8 @@ describe('detectParsers', () => {
     ['moonshotai/Kimi-K2-Instruct', cfg(['DeepseekV3ForCausalLM'], 'kimi_k2'), 'kimi_k2', null],
     ['moonshotai/Kimi-K2-Thinking', cfg(['DeepseekV3ForCausalLM'], 'kimi_k2'), 'kimi_k2', 'kimi_k2'],
     ['openai/gpt-oss-120b', cfg(['GptOssForCausalLM'], 'gpt_oss'), 'openai', 'openai_gptoss'],
+    ['Qwen/Qwen3-Coder-Next', cfg(['Qwen3NextForCausalLM'], 'qwen3_next'), 'qwen3_coder', null],
+    ['Qwen/Qwen3-Next-80B-A3B-Instruct', cfg(['Qwen3NextForCausalLM'], 'qwen3_next'), 'hermes', 'qwen3'],
     ['unsloth/Llama-3.3-70B-Instruct', fx('config-llama.json'), 'llama3_json', null],
   ])('%s → %s / %s', (modelId, config, tool, reasoning) => {
     const p = detectParsers({ modelId, config });
@@ -81,6 +83,27 @@ describe('validateArgs', () => {
     expect(r.unknown).toEqual(['--inventato']);
     expect(r.forbidden).toEqual(['--api-key', '--host', '--trust-remote-code']);
     expect(validateArgs(['--trust-remote-code'], flags, { allowTrustRemoteCode: true }).forbidden).toEqual([]);
+  });
+
+  it.each([
+    ['--api_key', '--api_key'],
+    ['--HOST', '--HOST'],
+    ['--por', '--por'],
+    ['--config', '--config'],
+    ['--API_KEY=x', '--API_KEY'],
+    ['--served_model_name', '--served_model_name'],
+    ['--allowed-local', '--allowed-local'],
+  ])('normalizza e vieta %s', (token, reported) => {
+    expect(validateArgs([token, 'x'], flags).forbidden).toEqual([reported]);
+  });
+
+  it('il prefisso vale anche per --trust-remote-code solo se non consentito', () => {
+    expect(validateArgs(['--trust-remote'], flags).forbidden).toEqual(['--trust-remote']);
+    expect(validateArgs(['--trust-remote'], flags, { allowTrustRemoteCode: true }).forbidden).toEqual([]);
+  });
+
+  it('i flag legittimi non vengono scambiati per vietati', () => {
+    expect(validateArgs(['--max_model_len', '1', '--tensor-parallel-size', '2', '--po'], flags).forbidden).toEqual([]);
   });
 
   it('accetta la forma --flag=valore', () => {

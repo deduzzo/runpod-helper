@@ -3,7 +3,7 @@ import fs from 'node:fs';
 export const VLLM_VERSION = 'v0.30.0';
 const dataFile = (name) => new URL(`../../../data/${name}`, import.meta.url);
 const RULES = JSON.parse(fs.readFileSync(dataFile('parsers.json'), 'utf8')).rules;
-const ALWAYS_FORBIDDEN = ['--api-key', '--host', '--port', '--allowed-local-media-path', '--served-model-name'];
+const ALWAYS_FORBIDDEN = ['--api-key', '--host', '--port', '--allowed-local-media-path', '--served-model-name', '--config'];
 
 function matches(rule, modelId, config) {
   if (rule.modelType && ![rule.modelType].flat().includes(config.model_type)) return false;
@@ -82,14 +82,24 @@ export function loadFlags(version = VLLM_VERSION) {
   return new Set(JSON.parse(fs.readFileSync(dataFile(`vllm-flags-${version}.json`), 'utf8')));
 }
 
+// argparse accetta '_' al posto di '-', maiuscole non normalizzate dal nostro controllo e prefissi
+// univoci (--por → --port): il confronto avviene sul nome normalizzato e sui prefissi dei nomi vietati.
+const normalizeFlag = (token) => token.split('=')[0].toLowerCase().replaceAll('_', '-');
+
+function isForbidden(name, forbiddenNames) {
+  return forbiddenNames.some((f) => name === f || (name.length >= 5 && f.startsWith(name)));
+}
+
 export function validateArgs(args, flags, { allowTrustRemoteCode = false } = {}) {
   const unknown = [];
   const forbidden = [];
+  const forbiddenNames = allowTrustRemoteCode ? ALWAYS_FORBIDDEN : [...ALWAYS_FORBIDDEN, '--trust-remote-code'];
   for (const token of args) {
     if (!token.startsWith('--')) continue;
     const flag = token.split('=')[0];
-    if (ALWAYS_FORBIDDEN.includes(flag) || (flag === '--trust-remote-code' && !allowTrustRemoteCode)) forbidden.push(flag);
-    else if (!flags.has(flag)) unknown.push(flag);
+    const name = normalizeFlag(token);
+    if (isForbidden(name, forbiddenNames)) forbidden.push(flag);
+    else if (!flags.has(name)) unknown.push(flag);
   }
   return { unknown, forbidden };
 }
