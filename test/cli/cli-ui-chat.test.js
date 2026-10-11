@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { sandbox } from './helpers.js';
 import { redact, clearSecrets } from '../../src/core/secrets.js';
@@ -17,7 +19,10 @@ describe('llmpod ui', () => {
     for (let i = 0; i < 100 && !/Interfaccia llmpod: http/.test(s.out()); i++) await new Promise((r) => setTimeout(r, 20));
     expect(s.out()).toMatch(new RegExp(`Interfaccia llmpod: http://127\\.0\\.0\\.1:\\d+/\\?t=${TOKEN}`));
     expect(s.out()).toContain('Proxy per Open WebUI su 127.0.0.1:');
-    expect(s.err()).toContain('Interfaccia non compilata');
+    // L'avviso dipende dalla presenza della build (dist/web, creata da `npm run build:web`).
+    const built = fs.existsSync(fileURLToPath(new URL('../../dist/web/index.html', import.meta.url)));
+    if (built) expect(s.err()).not.toContain('Interfaccia non compilata');
+    else expect(s.err()).toContain('Interfaccia non compilata');
     expect(redact(`x ${TOKEN}`)).not.toContain(TOKEN);
     expect(spawn).not.toHaveBeenCalled();
     process.emit('SIGINT');
