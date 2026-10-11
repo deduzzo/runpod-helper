@@ -1,6 +1,43 @@
 import { attachRenderer } from '../render.js';
 import { fmtUSD } from '../../core/confirm.js';
 
+// Gestione di Ctrl+C durante "up": non deve mai lasciare un Pod acceso senza avvisare.
+export function createInterruptHandler({ ops, runpod, io, name, getPodId, exit = (c) => process.exit(c) }) {
+  let running = false;
+  return async () => {
+    if (running) {
+      io.err('  Terminazione in corso, attendere…');
+      return;
+    }
+    running = true;
+    try {
+      let id = getPodId();
+      if (!id) {
+        try {
+          const pod = (await runpod.listPods()).find((p) => p.name === `llmpod-${name}` && !['TERMINATED', 'EXITED'].includes(p.status));
+          id = pod?.id ?? null;
+        } catch { /* ricerca best-effort */ }
+      }
+      if (!id) return;
+      let terminate = true;
+      try {
+        terminate = await io.ask(`\nInterrotto. Terminare il Pod ${id} per non continuare a pagare?`, true);
+      } catch { /* risposta non ottenibile (es. secondo Ctrl+C): meglio spegnere */ }
+      if (!terminate) {
+        io.err(`⚠ Pod ${id} lasciato acceso: spegnilo con "llmpod down ${name}"`);
+        return;
+      }
+      try {
+        await ops.down(name, { yes: true });
+      } catch (err) {
+        io.err(`⚠ Il Pod ${id} potrebbe essere ancora attivo: ${err.message}. Controlla su https://www.runpod.io/console/pods`);
+      }
+    } finally {
+      exit(130);
+    }
+  };
+}
+
 export function register(program, getCtx) {
   program.command('up <profilo>')
     .description('Crea il Pod, attende vLLM ed esegue lo smoke test')
@@ -12,11 +49,7 @@ export function register(program, getCtx) {
       const off = attachRenderer(ctx.events, io, { verbose: program.opts().verbose });
       let podId = null;
       const offPod = ctx.events.on((e) => { if (e.type === 'pod') podId = e.podId; });
-      const onSigint = async () => {
-        process.off('SIGINT', onSigint);
-        if (podId && await io.ask(`\nInterrotto. Terminare il Pod ${podId} per non continuare a pagare?`, true)) await ctx.ops.down(name, { yes: true });
-        process.exit(130);
-      };
+      const onSigint = createInterruptHandler({ ops: ctx.ops, runpod: ctx.runpod, io, name, getPodId: () => podId });
       process.on('SIGINT', onSigint);
       try {
         const r = await ctx.ops.up(name, { yes: opts.yes, dryRun: opts.dryRun });
