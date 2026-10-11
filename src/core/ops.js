@@ -8,6 +8,7 @@ import { proxyUrl } from './runpod.js';
 import { confirmCost, confirmAction, fmtUSD } from './confirm.js';
 import { buildPodBody, argsForCount } from './pod/body.js';
 import { adviseRepair } from './advisor/advisor.js';
+import { diffArgs } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
 import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs } from './pod/launcher.js';
@@ -176,13 +177,16 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       events.emit('warning', { message: `Consulente non disponibile: ${e.message}` });
       return null;
     }
-    events.emit('advice', { rationale: advice.rationale, changes: advice.changes, rejected: advice.rejected, warnings: advice.warnings });
+    // Gli argomenti proposti vanno riallineati (tool-call-parser <=> --enable-auto-tool-choice) PRIMA di mostrarli e applicarli.
+    const fixed = syncDerivedFields({ vllm: { args: [...advice.args] } });
+    const changes = diffArgs(currentArgs, fixed.vllm.args);
+    events.emit('advice', { rationale: advice.rationale, changes, rejected: advice.rejected, warnings: advice.warnings });
     if (!advice.accepted.length) {
       events.emit('warning', { message: 'Il consulente non ha proposto modifiche applicabili' });
       return null;
     }
     if (!(await ask('Applicare le modifiche e riavviare vLLM sul Pod?', true))) return null;
-    const r = await sup.reload(advice.args).catch((e) => ({ ok: false, status: 0, data: e.message }));
+    const r = await sup.reload(fixed.vllm.args).catch((e) => ({ ok: false, status: 0, data: e.message }));
     if (!r.ok) {
       events.emit('warning', { message: `Riavvio di vLLM non riuscito (HTTP ${r.status})` });
       return null;
@@ -193,7 +197,7 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
     const deadline = now() + 60_000;
     for (;;) {
       const st = await sup.status();
-      if (st && (st.phase === 'error' || (JSON.stringify(st.args) === JSON.stringify(advice.args) && st.phase !== 'ready'))) return advice.args;
+      if (st && (st.phase === 'error' || (JSON.stringify(st.args) === JSON.stringify(fixed.vllm.args) && st.phase !== 'ready'))) return fixed.vllm.args;
       if (now() >= deadline) {
         events.emit('warning', { message: 'Il supervisore non ha confermato il riavvio di vLLM entro 60 secondi' });
         return null;
@@ -334,6 +338,8 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
           attempts += 1;
           currentArgs = next;
           repairedArgs = next;
+          // il parser di reasoning può essere cambiato dalla riparazione: i client (ZCode, pi) devono vederlo
+          endpoint.reasoning = Boolean(syncDerivedFields({ vllm: { args: [...next] } }).parsers.reasoning);
         }
       }
       await refreshZcode(endpoint);

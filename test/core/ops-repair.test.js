@@ -6,6 +6,12 @@ import { createOps } from '../../src/core/ops.js';
 import { createStore } from '../../src/core/config.js';
 import { createEvents } from '../../src/core/events.js';
 import { clearSecrets } from '../../src/core/secrets.js';
+import * as zcodeModule from '../../src/core/clients/zcode.js';
+
+vi.mock('../../src/core/clients/zcode.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, updateZcode: vi.fn((...a) => actual.updateZcode(...a)) };
+});
 
 const plan = {
   model: { id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct', revision: 'a'.repeat(40), gated: false, weightsBytes: 61066575656, maxContext: 262144 },
@@ -16,12 +22,12 @@ const plan = {
 };
 
 // statusFn({ reloaded, sinceReload, args }) → risposta di /status; logLines: righe del supervisore (con numero progressivo)
-function setup({ smokeResults, advisorText, answers = [], statusFn, logLines = [], podOnly = false, advisorFails = false, reloadOk = true }) {
+function setup({ smokeResults, advisorText, answers = [], statusFn, logLines = [], podOnly = false, advisorFails = false, reloadOk = true, planArgs, planParsers }) {
   clearSecrets();
   const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-rep-')), 'cfg');
   const store = createStore({ dir, platform: 'linux' });
   store.writeConfig({ dataCenterId: 'EU-A', volume: { id: 'vol1', name: 'v', size: 150, dataCenterId: 'EU-A' } });
-  store.writeJson('last-plan.json', plan);
+  store.writeJson('last-plan.json', { ...plan, vllm: { ...plan.vllm, args: planArgs ?? plan.vllm.args }, parsers: planParsers ?? plan.parsers });
   let deleted = false;
   const runpod = {
     listPods: vi.fn(async () => []), getBalance: vi.fn(async () => ({ balance: 50 })),
@@ -64,7 +70,7 @@ function setup({ smokeResults, advisorText, answers = [], statusFn, logLines = [
   const sleep = vi.fn(async () => {});
   const ops = createOps({ store, runpod, hf: {}, http, events, ask, now: (() => { let t = 0; return () => (t += 1000); })(), sleep, zcode: { dir: path.join(dir, 'z'), isRunning: async () => false }, advisor });
   ops.saveProfile('qwen3-coder');
-  return { ops, http, provider, advisor, runpod, ask, seen, store, sleep };
+  return { ops, http, provider, advisor, runpod, ask, seen, store, sleep, dir };
 }
 
 const FIX = '{"set":{"tool-call-parser":"qwen3_coder"},"rationale":"parser corretto per Qwen3-Coder","warnings":[]}';
@@ -223,5 +229,54 @@ describe('up: correzione con il consulente (livello 3)', () => {
     const saved = t.store.readProfile('qwen3-coder');
     expect(saved.parsers.reasoning).toBe('qwen3');
     expect(saved.kvCacheDtype).toBe('fp8');
+  });
+});
+
+describe('up: argomenti riallineati prima del reload (livello 3)', () => {
+  const reloadArgs = (t) => t.http.request.mock.calls.find(([, url]) => url.endsWith('/reload'))[2].json.args;
+
+  it('proposta tool-call-parser: false → il reload non contiene --enable-auto-tool-choice', async () => {
+    const t = setup({ smokeResults: [false, true], advisorText: '{"set":{"tool-call-parser":false},"rationale":"niente parser","warnings":[]}' });
+    const r = await t.ops.up('qwen3-coder', {});
+    expect(reloadArgs(t)).not.toContain('--tool-call-parser');
+    expect(reloadArgs(t)).not.toContain('--enable-auto-tool-choice');
+    expect(r.repairedArgs).toEqual(reloadArgs(t));
+    // il diff mostrato all'utente riflette ciò che viene davvero applicato
+    const advice = t.seen.find((e) => e.type === 'advice');
+    expect(advice.changes.removed).toEqual(expect.arrayContaining(['--tool-call-parser', '--enable-auto-tool-choice']));
+  });
+
+  it('proposta che aggiunge tool-call-parser → il reload contiene anche --enable-auto-tool-choice', async () => {
+    const t = setup({
+      smokeResults: [false, true], advisorText: '{"set":{"tool-call-parser":"qwen3_coder"},"rationale":"r","warnings":[]}',
+      planArgs: ['--max-model-len', '65536', '--tensor-parallel-size', '1'], planParsers: { tool: null, reasoning: null },
+    });
+    const r = await t.ops.up('qwen3-coder', {});
+    expect(reloadArgs(t)).toEqual(expect.arrayContaining(['--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice']));
+    expect(r.repairedArgs).toEqual(reloadArgs(t));
+    // l'attesa post-reload ha usato gli stessi argomenti: nessun avviso di mancata conferma
+    expect(t.seen.some((e) => e.type === 'warning' && /60 secondi/.test(e.message))).toBe(false);
+  });
+
+  it('proposta che aggiunge reasoning-parser → la configurazione ZCode scritta riflette il nuovo reasoning', async () => {
+    const t = setup({
+      smokeResults: [false, true], advisorText: '{"set":{"reasoning-parser":"qwen3"},"rationale":"r","warnings":[]}',
+      planParsers: { tool: 'hermes', reasoning: null },
+    });
+    fs.mkdirSync(path.join(t.dir, 'z'), { recursive: true });
+    fs.writeFileSync(path.join(t.dir, 'z', 'config.json'), JSON.stringify({ provider: { llmpod: {} } }));
+    zcodeModule.updateZcode.mockClear();
+    await t.ops.up('qwen3-coder', {});
+    expect(zcodeModule.updateZcode).toHaveBeenCalledTimes(1);
+    expect(zcodeModule.updateZcode.mock.calls[0][0].reasoning).toBe(true);
+  });
+
+  it('senza riparazione il reasoning resta quello del profilo', async () => {
+    const t = setup({ smokeResults: [true], advisorText: FIX, planParsers: { tool: 'hermes', reasoning: null } });
+    fs.mkdirSync(path.join(t.dir, 'z'), { recursive: true });
+    fs.writeFileSync(path.join(t.dir, 'z', 'config.json'), JSON.stringify({ provider: { llmpod: {} } }));
+    zcodeModule.updateZcode.mockClear();
+    await t.ops.up('qwen3-coder', {});
+    expect(zcodeModule.updateZcode.mock.calls[0][0].reasoning).toBe(false);
   });
 });
