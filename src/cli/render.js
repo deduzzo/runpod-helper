@@ -12,6 +12,14 @@ export function createIo({ stdout = process.stdout, stderr = process.stderr, pro
   };
 }
 
+const CLI_COMMANDS = 'init|search|plan|save|up|down|status|env|run|rotate-key|destroy-volume|advisor|ui|chat|prepare|logs';
+
+// Dentro Docker il comando si lancia dal wrapper: negli errori "llmpod <comando>" diventa "bin/llmpod <comando>".
+export function dockerCommands(text, env = process.env) {
+  if (typeof text !== 'string' || env.LLMPOD_IN_DOCKER !== '1') return text;
+  return text.replace(new RegExp(`(?<![\\w/.-])llmpod (?=(?:${CLI_COMMANDS})(?![\\w-]))`, 'g'), 'bin/llmpod ');
+}
+
 export function attachRenderer(events, io, { verbose = false } = {}) {
   let lastProgress = '';
   return events.on((e) => {
