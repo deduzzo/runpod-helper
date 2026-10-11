@@ -50,7 +50,7 @@ npm link             # rende disponibile il comando "llmpod"
 
 ```bash
 llmpod init                                   # chiave Runpod, token HF, datacenter, network volume
-llmpod search qwen3 coder                     # modelli con chat template e tool parser noto
+llmpod search qwen3 coder                     # modelli con chat template e tool parser noto (esclusi i modelli MLX, non supportati da vLLM; --all li include)
 llmpod plan Qwen/Qwen3-Coder-30B-A3B-Instruct --context 65536
 llmpod save qwen3-coder
 llmpod up qwen3-coder                         # mostra il costo orario e chiede conferma
@@ -97,7 +97,10 @@ llmpod ui              # apre il browser su http://127.0.0.1:7860
 L'interfaccia (installabile come app dal browser) copre ricerca dei modelli, piano con il
 consulente, profili, avvio e spegnimento con le stesse conferme di costo della CLI, stato e
 costi, configurazione dei client e una prova veloce con Open WebUI. È raggiungibile solo dal tuo
-computer e richiede il link con il token stampato da `llmpod ui`.
+computer e richiede il link con il token stampato da `llmpod ui`. Il controllo dell'intestazione
+Host accetta solo `127.0.0.1` e `localhost` (anche `[::1]` se ascolti su IPv6 o su `localhost`):
+con `--host` diverso l'interfaccia non è utilizzabile da altri computer. Con `--host localhost`
+o IPv6 il proxy resta su `127.0.0.1`, salvo `--proxy-host` o `LLMPOD_PROXY_HOST`.
 
 Il proxy per Open WebUI (porta 8081) inoltra le richieste al Pod del profilo scelto nella scheda
 "Prova veloce"; Open WebUI va puntato su `http://127.0.0.1:8081/v1` con la chiave

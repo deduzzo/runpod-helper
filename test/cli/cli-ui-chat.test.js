@@ -64,8 +64,21 @@ describe('llmpod chat', () => {
     const http = { request: vi.fn(async () => ({ ok: true, status: 200, data: '' })) };
     expect(await s.run(['chat'], { http, spawn })).toBe(0);
     expect(http.request).toHaveBeenCalledWith('GET', 'http://127.0.0.1:3000/', expect.objectContaining({ retry: false }));
-    expect(s.out()).toContain('http://127.0.0.1:3000/');
+    // R27: la verifica usa l'indirizzo configurato, il browser riceve l'altro nome loopback (niente cookie llmpod_session a Open WebUI)
+    expect(s.out()).toContain('Open WebUI: http://localhost:3000/');
     expect(spawn).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(spawn.mock.calls[0])).toContain('http://localhost:3000/');
+    expect(JSON.stringify(spawn.mock.calls[0])).not.toContain('127.0.0.1');
+  });
+
+  it('R27: indirizzi già diversi da 127.0.0.1 restano invariati (localhost, host remoto)', async () => {
+    for (const [configured, shown] of [['http://localhost:4000', 'http://localhost:4000/'], ['https://owui.example.org/chat', 'https://owui.example.org/chat']]) {
+      const s = sandbox();
+      s.env.LLMPOD_OPENWEBUI_URL = configured;
+      const http = { request: vi.fn(async () => ({ ok: true, status: 200, data: '' })) };
+      expect(await s.run(['chat', '--no-open'], { http, spawn: vi.fn(child) })).toBe(0);
+      expect(s.out()).toContain(`Open WebUI: ${shown}`);
+    }
   });
 
   it('--no-open stampa solo l\'URL; usa LLMPOD_OPENWEBUI_URL', async () => {

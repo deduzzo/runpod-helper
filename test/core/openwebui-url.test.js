@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { resolveOpenwebuiUrl, frameSources, DEFAULT_OPENWEBUI_URL } from '../../src/core/openwebui-url.js';
+import { resolveOpenwebuiUrl, frameSources, embedUrl, DEFAULT_OPENWEBUI_URL } from '../../src/core/openwebui-url.js';
 import { SECURITY_HEADERS, setFrameSources } from '../../src/server/http-utils.js';
 import { LlmpodError } from '../../src/core/errors.js';
 
@@ -56,5 +56,15 @@ describe('indirizzo di Open WebUI (R27)', () => {
     expect(SECURITY_HEADERS['content-security-policy']).toContain("frame-ancestors 'none'");
     setFrameSources();
     expect(SECURITY_HEADERS['content-security-policy']).toBe(base);
+  });
+});
+
+describe('embedUrl nel core (condiviso da web e CLI)', () => {
+  it('scambia 127.0.0.1 <-> localhost solo se coincide con l\'host dell\'interfaccia', () => {
+    expect(embedUrl('http://127.0.0.1:3000', '127.0.0.1')).toBe('http://localhost:3000');
+    expect(embedUrl('http://localhost:3100', 'localhost')).toBe('http://127.0.0.1:3100');
+    expect(embedUrl('http://localhost:3100', '127.0.0.1')).toBe('http://localhost:3100');
+    expect(embedUrl('https://owui.example.org', '127.0.0.1')).toBe('https://owui.example.org');
+    expect(embedUrl('non un url', '127.0.0.1')).toBe('non un url');
   });
 });

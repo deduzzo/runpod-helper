@@ -1,5 +1,5 @@
 import { LlmpodError, Codes } from '../../core/errors.js';
-import { resolveOpenwebuiUrl } from '../../core/openwebui-url.js';
+import { resolveOpenwebuiUrl, embedUrl } from '../../core/openwebui-url.js';
 import { openBrowser } from '../open-browser.js';
 
 export function register(program, getCtx) {
@@ -20,7 +20,10 @@ export function register(program, getCtx) {
         throw notRunning;
       }
       if (res.status >= 500) throw notRunning;
-      ctx.io.out(`Open WebUI: ${url.href}`);
-      if (opts.open) openBrowser(url.href, { platform: ctx.platform, spawn: ctx.spawn });
+      // R27: l'interfaccia llmpod gira su 127.0.0.1; se Open WebUI usa lo stesso nome host il browser invierebbe
+      // anche a lui il cookie llmpod_session: si apre l'altro nome loopback (localhost). La verifica sopra usa l'indirizzo originale.
+      const target = new URL(embedUrl(url.href, '127.0.0.1')).href;
+      ctx.io.out(`Open WebUI: ${target}`);
+      if (opts.open) openBrowser(target, { platform: ctx.platform, spawn: ctx.spawn });
     });
 }
