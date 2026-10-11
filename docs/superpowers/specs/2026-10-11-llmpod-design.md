@@ -365,8 +365,8 @@ Verificati con documentazione ufficiale e chiamate in sola lettura:
 Ancora aperti:
 
 6. Permesso di creazione Pod della chiave iniettata (non determinato; non cambia il design).
-7. Esito dello streaming oltre 100 s attraverso il proxy (prova `e2e:cpu` del piano 1); se
-   fallisce, ripiego su porta TCP diretta per i client.
+7. ~~Streaming oltre 100 s attraverso il proxy~~ — verificato l'11/10/2026 con `e2e:cpu`:
+   150 s di streaming completi; nessun ripiego TCP necessario.
 
 ## 13. Errori
 

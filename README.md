@@ -91,7 +91,7 @@ Network volume: 0,07 $/GB al mese (150 GB = 10,50 $/mese), pagato anche a Pod sp
 | `SMOKE_TEST_FAILED` / `UNKNOWN_TOOL_PARSER` | Le chiamate a strumento non funzionano | Verifica il parser con `llmpod plan … --set tool-call-parser=<nome>`; elenco: https://docs.vllm.ai/en/v0.30.0/features/tool_calling/ |
 | `ZCODE_RUNNING` | ZCode è aperto e sovrascriverebbe la configurazione | Chiudi ZCode e ripeti `llmpod run zcode` |
 | `CONFIG_PERMISSIONS` | `.env` leggibile da altri utenti | `chmod 600 ~/.config/llmpod/.env` |
-| Risposte interrotte dopo ~100 s | Limite del proxy HTTPS di Runpod (Cloudflare) | Esito della prova reale: _compilare con il risultato del controllo streaming_ |
+| Risposte interrotte dopo ~100 s | Limite del proxy HTTPS di Runpod (Cloudflare) | Verificato l'11/10/2026 con `npm run e2e:cpu`: uno streaming di 150 s attraverso il proxy arriva completo, quindi le risposte in streaming non vengono tagliate. Le richieste *non* in streaming oltre i 100 s invece sì: usa client in streaming (Claude Code, OpenCode e pi lo sono) |
 
 ## Sicurezza
 
