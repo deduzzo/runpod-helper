@@ -343,19 +343,30 @@ template aggiungerebbe solo uno stato da sincronizzare.
   argomenti (stessa validazione), conferma con costo orario, `POST :8001/reload`, nuovo smoke
   test; massimo 3 tentativi. Gli argomenti funzionanti possono essere salvati nel profilo.
 
-## 12. Punti da verificare in fase di implementazione
+## 12. Punti verificati (11 ottobre 2026) e aperti
 
-1. Versione stabile di `vllm/vllm-openai` da fissare, relativi nomi di tool-call/reasoning parser,
-   flag ammessi e CUDA minima.
-2. Endpoint v2 per network volume (`/v2/networkvolumes` ha risposto 404 nella prova, quindi il
-   percorso è diverso) e per credito residuo/prezzo del volume. Se il credito non è disponibile
-   in v2 si usa GraphQL `myself { clientBalance }` con la chiave locale; se il prezzo del volume
-   non è ottenibile via API **va chiesto all'utente** prima di inserire una costante.
-3. Nome della variabile d'ambiente con cui OpenCode accetta un file di configurazione.
-4. Se Open WebUI può essere incorporata in un iframe (altrimenti pulsante "Apri").
-5. Permesso di creazione Pod della chiave iniettata (non determinato; non cambia il design).
-6. Base URL esatti e nomi modello dei preset del consulente (endpoint Anthropic Z.ai, API Z.ai a
-   consumo, ultimo Sonnet), dalla documentazione ufficiale di ciascun provider.
+Verificati con documentazione ufficiale e chiamate in sola lettura:
+
+1. vLLM: `vllm/vllm-openai:v0.30.0-cu129` (rilascio del 22/09/2026, CUDA 12.9, `minCudaVersion
+   "12.9"`); parser e 382 flag ammessi della v0.30.0 salvati in `data/`. `VLLM_API_KEY` letta
+   dall'ambiente; solo `Authorization: Bearer`; `/v1/messages` attivo senza flag; `/metrics` e
+   `/health` non protetti (rischio accettato: solo contatori).
+2. Runpod: network volume su `/v2/network-volumes` (corpo `{ name, size, dataCenter }`); nessun
+   endpoint v2 per il credito → GraphQL `{ myself { clientBalance currentSpendPerHr } }`;
+   prezzo del volume non esposto da API → default `0.07` $/GB/mese dalla documentazione
+   (tipo STANDARD), **da confermare con l'utente**, sovrascrivibile in `config.json`.
+   Limite di frequenza 180 richieste/minuto. Proxy HTTPS con limite Cloudflare di 100 s: lo
+   streaming oltre i 100 s viene verificato dalla prova reale `e2e:cpu`.
+3. OpenCode: `OPENCODE_CONFIG` (percorso del file di configurazione).
+4. Open WebUI v0.11.4: nessun `X-Frame-Options`/CSP predefinito → incorporabile in iframe.
+5. Z.ai: endpoint Anthropic `https://api.z.ai/api/anthropic`, a consumo
+   `https://api.z.ai/api/paas/v4`; modello `glm-5.3`.
+
+Ancora aperti:
+
+6. Permesso di creazione Pod della chiave iniettata (non determinato; non cambia il design).
+7. Esito dello streaming oltre 100 s attraverso il proxy (prova `e2e:cpu` del piano 1); se
+   fallisce, ripiego su porta TCP diretta per i client.
 
 ## 13. Errori
 
