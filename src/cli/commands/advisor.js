@@ -25,7 +25,7 @@ export async function configureAdvisor(ctx, { preset: chosen } = {}) {
   next.LLMPOD_ADVISOR_PRESET = preset;
   if (preset === 'custom') {
     next.LLMPOD_ADVISOR_PROTOCOL = await io.askText('Protocollo (anthropic o openai):', env.LLMPOD_ADVISOR_PROTOCOL ?? 'openai');
-    next.LLMPOD_ADVISOR_BASE_URL = await io.askText('Base URL (https://…):', env.LLMPOD_ADVISOR_BASE_URL);
+    next.LLMPOD_ADVISOR_BASE_URL = await io.askText('Base URL (https://…; con protocollo openai includi /v1 (es. https://host/v1); con anthropic no (es. https://host)):', env.LLMPOD_ADVISOR_BASE_URL);
     next.LLMPOD_ADVISOR_MODEL = await io.askText('Modello:', env.LLMPOD_ADVISOR_MODEL);
     next.LLMPOD_ADVISOR_AUTH = await io.askText('Autenticazione (bearer o x-api-key):', env.LLMPOD_ADVISOR_AUTH ?? 'bearer');
   } else if (!['claude-cli', 'pod'].includes(preset)) {
@@ -33,9 +33,21 @@ export async function configureAdvisor(ctx, { preset: chosen } = {}) {
     if (model) next.LLMPOD_ADVISOR_MODEL = model;
   }
   if (!['claude-cli', 'pod'].includes(preset)) {
-    const sameProvider = env.LLMPOD_ADVISOR_PRESET === preset && env.LLMPOD_ADVISOR_API_KEY;
+    // La chiave salvata si può mantenere solo verso lo stesso provider; per "custom" contano anche URL, protocollo e autenticazione
+    // (altrimenti la chiave finirebbe a un host diverso da quello per cui è stata inserita).
+    const normUrl = (u) => (u ?? '').replace(/\/+$/, '');
+    const sameEndpoint = preset !== 'custom'
+      || (normUrl(env.LLMPOD_ADVISOR_BASE_URL) === normUrl(next.LLMPOD_ADVISOR_BASE_URL)
+        && env.LLMPOD_ADVISOR_PROTOCOL === next.LLMPOD_ADVISOR_PROTOCOL
+        && env.LLMPOD_ADVISOR_AUTH === next.LLMPOD_ADVISOR_AUTH);
+    const sameProvider = env.LLMPOD_ADVISOR_PRESET === preset && Boolean(env.LLMPOD_ADVISOR_API_KEY) && sameEndpoint;
     const key = await io.askSecret(sameProvider ? 'Chiave API del consulente (invio per mantenere quella attuale):' : 'Chiave API del consulente (input nascosto):');
-    next.LLMPOD_ADVISOR_API_KEY = key || (sameProvider ? env.LLMPOD_ADVISOR_API_KEY : undefined);
+    if (!key && !sameProvider) {
+      throw new LlmpodError(Codes.INVALID_INPUT, 'Chiave API del consulente mancante', {
+        hint: env.LLMPOD_ADVISOR_API_KEY ? 'La chiave salvata appartiene a un altro provider o endpoint e non viene riutilizzata: inseriscila di nuovo' : 'Esegui di nuovo: llmpod advisor',
+      });
+    }
+    next.LLMPOD_ADVISOR_API_KEY = key || env.LLMPOD_ADVISOR_API_KEY;
   }
   store.writeEnv(next);
   store.writeConfig({ advisor: { enabled: true, zaiNoticeAcknowledged } });
