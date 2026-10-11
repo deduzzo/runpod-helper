@@ -146,6 +146,38 @@ describe('startUi', () => {
     expect(String(err.hint ?? '')).not.toContain(bad);
   });
 
+  it('R2: con --host localhost l\'URL stampato usa localhost ed è raggiungibile; [::1] è ammesso dal controllo Host', async () => {
+    const token = 'tok-0123456789abcdef';
+    const ui = await startUi(ctx(), { host: 'localhost', port: 0, proxy: false, token, staticDir: null });
+    try {
+      expect(ui.url).toBe(`http://localhost:${ui.port}/?t=${token}`);
+      // connessione reale all'URL stampato (localhost può risolversi su IPv4 o IPv6)
+      const r = await fetch(`http://localhost:${ui.port}/api/health`);
+      expect(r.status).toBe(200);
+      const login = await fetch(ui.url, { redirect: 'manual' });
+      expect(login.status).toBe(302);
+    } finally {
+      await ui.close();
+    }
+  });
+
+  it('R2: URL stampato per IPv6 con parentesi quadre; Host [::1]:porta accettato (se IPv6 è disponibile)', async () => {
+    const token = 'tok-0123456789abcdef';
+    let ui;
+    try {
+      ui = await startUi(ctx(), { host: '::1', port: 0, proxy: false, token, staticDir: null });
+    } catch (err) {
+      if (['EADDRNOTAVAIL', 'EAFNOSUPPORT'].includes(err.code)) return; // IPv6 assente: niente da verificare
+      throw err;
+    }
+    try {
+      expect(ui.url).toBe(`http://[::1]:${ui.port}/?t=${token}`);
+      expect((await fetch(`http://[::1]:${ui.port}/api/health`)).status).toBe(200);
+    } finally {
+      await ui.close();
+    }
+  });
+
   it('porta occupata: errore chiaro in italiano', async () => {
     const c = ctx();
     const first = await startUi(c, { port: 0, proxy: false, token: 't'.repeat(20), staticDir: null });

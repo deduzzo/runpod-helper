@@ -5,8 +5,15 @@ import { HttpError, JSON_CT, SECURITY_HEADERS, sendJson, parseCookies, safeEqual
 export { HttpError };
 const COOKIE = 'llmpod_session';
 
-export function createApp({ ctx, token, port, staticDir, jobs, version, routes = () => null, isClosing = () => false }) {
-  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+// Valori ammessi per l'intestazione Host (anti DNS rebinding): solo nomi loopback. [::1] solo se si ascolta su IPv6/localhost.
+export function allowedHostsFor(host, port) {
+  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  if (host === 'localhost' || String(host).includes(':')) hosts.push(`[::1]:${port}`);
+  return new Set(hosts);
+}
+
+export function createApp({ ctx, token, port, host = '127.0.0.1', staticDir, jobs, version, routes = () => null, isClosing = () => false }) {
+  const allowedHosts = allowedHostsFor(host, port);
 
   async function handle(req, res) {
     const host = req.headers.host ?? '';

@@ -306,3 +306,29 @@ describe('serveStatic: errore di lettura', () => {
     }
   });
 });
+
+describe('controllo Host in base all\'indirizzo di ascolto (R2)', () => {
+  async function withHost(host, fn) {
+    const srv = http.createServer();
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const p = srv.address().port;
+    srv.on('request', createApp({ ctx: {}, token: TOKEN, port: p, staticDir: null, jobs: null, version: '0.1.0', host }));
+    try { await fn(p); } finally { srv.closeAllConnections?.(); await new Promise((r) => srv.close(r)); }
+  }
+
+  it.each(['::1', 'localhost'])('host di ascolto %s: ammette anche [::1]:porta', async (host) => {
+    await withHost(host, async (p) => {
+      expect((await request(p, '/api/health', { host: `[::1]:${p}` })).status).toBe(200);
+      expect((await request(p, '/api/health', { host: `localhost:${p}` })).status).toBe(200);
+      expect((await request(p, '/api/health', { host: `127.0.0.1:${p}` })).status).toBe(200);
+      expect((await request(p, '/api/health', { host: `[::2]:${p}` })).status).toBe(403);
+    });
+  });
+
+  it('host di ascolto 127.0.0.1: [::1] non è ammesso', async () => {
+    await withHost('127.0.0.1', async (p) => {
+      expect((await request(p, '/api/health', { host: `[::1]:${p}` })).status).toBe(403);
+      expect((await request(p, '/api/health', { host: `127.0.0.1:${p}` })).status).toBe(200);
+    });
+  });
+});

@@ -24,6 +24,7 @@ export function register(program, getCtx) {
     .description('Avvia l\'interfaccia web locale e il proxy per Open WebUI')
     .option('--host <host>', 'indirizzo di ascolto (predefinito: LLMPOD_UI_HOST o 127.0.0.1)')
     .option('--port <porta>', 'porta dell\'interfaccia (predefinita: LLMPOD_UI_PORT o 7860)')
+    .option('--proxy-host <host>', 'indirizzo di ascolto del proxy (predefinito: LLMPOD_PROXY_HOST, altrimenti come --host; 127.0.0.1 se --host è localhost o IPv6)')
     .option('--proxy-port <porta>', 'porta del proxy per Open WebUI (predefinita: LLMPOD_PROXY_PORT o 8081)')
     .option('--no-proxy', 'non avviare il proxy per Open WebUI')
     .option('--no-open', 'non aprire il browser')
@@ -33,18 +34,22 @@ export function register(program, getCtx) {
       const host = opts.host ?? envValue(env.LLMPOD_UI_HOST) ?? '127.0.0.1';
       const port = parsePort(opts.port ?? envValue(env.LLMPOD_UI_PORT) ?? 7860, 'Porta');
       const proxyPort = parsePort(opts.proxyPort ?? envValue(env.LLMPOD_PROXY_PORT) ?? 8081, 'Porta del proxy');
-      const proxyHost = envValue(env.LLMPOD_PROXY_HOST) ?? host;
+      // Con host localhost/IPv6 il proxy resta su 127.0.0.1 (non eredita), salvo scelta esplicita.
+      const proxyHost = opts.proxyHost ?? envValue(env.LLMPOD_PROXY_HOST) ?? (host === 'localhost' || host.includes(':') ? '127.0.0.1' : host);
 
       let token = envValue(env.LLMPOD_UI_TOKEN);
       if (token === undefined) token = randomBytes(24).toString('hex');
       else assertUiToken(token, { source: 'LLMPOD_UI_TOKEN' });
       registerSecret(token);
 
-      for (const h of new Set([host, ...(opts.proxy ? [proxyHost] : [])])) {
-        if (LOOPBACK.has(h)) continue;
+      // Il controllo Host dell'interfaccia accetta solo 127.0.0.1/localhost: un indirizzo diverso non la rende usabile da altri host.
+      if (!LOOPBACK.has(host)) {
         io.err(env.LLMPOD_IN_DOCKER === '1'
-          ? `⚠ Ascolto su ${h} dentro Docker: pubblica la porta solo su 127.0.0.1 (ad esempio -p 127.0.0.1:${port}:${port}), altrimenti l'interfaccia è raggiungibile dalla rete`
-          : `⚠ Ascolto su ${h}: l'interfaccia è raggiungibile da altri computer della rete e il token è l'unica protezione. Usa 127.0.0.1 se non ti serve`);
+          ? `⚠ Ascolto su ${host} dentro Docker: pubblica la porta solo su 127.0.0.1 (ad esempio -p 127.0.0.1:${port}:${port}), altrimenti il proxy è raggiungibile dalla rete`
+          : `⚠ Ascolto su ${host}: il controllo Host accetta solo 127.0.0.1 e localhost, quindi l'interfaccia non è utilizzabile da altri computer della rete (usa 127.0.0.1)`);
+      }
+      if (opts.proxy && !LOOPBACK.has(proxyHost) && env.LLMPOD_IN_DOCKER !== '1') {
+        io.err(`⚠ Ascolto su ${proxyHost} (proxy per Open WebUI): è raggiungibile da altri computer della rete e la chiave interna è l'unica protezione. Usa 127.0.0.1 se non ti serve`);
       }
 
       const staticDir = fs.existsSync(path.join(STATIC_DIR, 'index.html')) ? STATIC_DIR : null;
@@ -53,7 +58,7 @@ export function register(program, getCtx) {
       const ui = await startUi(ctx, { host, port, proxyHost, proxyPort, proxy: opts.proxy, token, staticDir, version: VERSION });
       // Uscita volutamente non mascherata: l'URL contiene il token, che serve all'utente per accedere.
       io.raw(`Interfaccia llmpod: ${ui.url}`);
-      if (ui.proxyPort) io.out(`Proxy per Open WebUI su ${proxyHost}:${ui.proxyPort}`);
+      if (ui.proxyPort) io.out(`Proxy per Open WebUI su ${proxyHost.includes(':') ? `[${proxyHost}]` : proxyHost}:${ui.proxyPort}`);
       if (opts.open && env.LLMPOD_IN_DOCKER !== '1') openBrowser(ui.url, { platform: ctx.platform, spawn: ctx.spawn });
       await new Promise((resolve) => {
         let stopping = false;
@@ -66,6 +71,7 @@ export function register(program, getCtx) {
             .finally(() => {
               process.off('SIGINT', stop);
               process.off('SIGTERM', stop);
+              process.off('SIGHUP', stop);
               // Il processo deve terminare davvero: nessun job rimasto (polling, consulente, domande) deve restare in vita.
               ctx.exit(0);
               resolve();
@@ -73,6 +79,7 @@ export function register(program, getCtx) {
         };
         process.on('SIGINT', stop);
         process.on('SIGTERM', stop);
+        process.on('SIGHUP', stop);
       });
     });
 }

@@ -22,6 +22,14 @@ export function assertUiToken(token, { source = 'Il token dell\'interfaccia' } =
   }
 }
 
+// Nome host da usare nell'URL stampato: quello effettivo per localhost e IPv6, altrimenti 127.0.0.1
+// (il controllo Host ammette solo nomi loopback, quindi un indirizzo come 0.0.0.0 non sarebbe usabile).
+export function urlHostFor(host) {
+  if (host === 'localhost') return 'localhost';
+  if (String(host).includes(':')) return '[::1]';
+  return '127.0.0.1';
+}
+
 const listen = (server, port, host, what) => new Promise((resolve, reject) => {
   server.once('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -95,7 +103,7 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
   let actualProxyPort = null;
   try {
     actualPort = await listen(uiServer, port, host, 'interfaccia');
-    uiServer.on('request', createApp({ ctx: serverCtx, token, port: actualPort, staticDir, jobs, version, routes: createRoutes({ ctx: serverCtx, jobs, sse, state }), isClosing: () => closing }));
+    uiServer.on('request', createApp({ ctx: serverCtx, token, port: actualPort, host, staticDir, jobs, version, routes: createRoutes({ ctx: serverCtx, jobs, sse, state }), isClosing: () => closing }));
     if (proxy) {
       const resolver = createTargetResolver({ store: ctx.store, getOps: () => ctx.ops });
       const proxyServer = http.createServer(createOpenwebuiProxy({ resolveTarget: resolver, internalKey: key, userAgent: `llmpod/${version}` }));
@@ -140,7 +148,7 @@ export async function startUi(ctx, { host = '127.0.0.1', port = 7860, proxyHost 
   }
 
   return {
-    url: `http://127.0.0.1:${actualPort}/?t=${token}`,
+    url: `http://${urlHostFor(host)}:${actualPort}/?t=${token}`,
     port: actualPort,
     proxyPort: actualProxyPort,
     trackedUps,
