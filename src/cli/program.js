@@ -13,7 +13,8 @@ import * as save from './commands/save.js';
 export const COMMANDS = [init, search, plan, save];
 
 export async function runCli(argv, { io, env = process.env, overrides = {} } = {}) {
-  io ??= createIo({ prompt: createPrompt() });
+  const ownPrompt = io ? null : createPrompt();
+  io ??= createIo({ prompt: ownPrompt });
   const result = { code: 0 };
   const program = new Command('llmpod')
     .description('LLM self-hosted su Runpod come backend di coding agent')
@@ -40,5 +41,7 @@ export async function runCli(argv, { io, env = process.env, overrides = {} } = {
     }
     io.err(`Errore inatteso: ${redact(program.opts().verbose ? err.stack : err.message)}`);
     return 1;
+  } finally {
+    ownPrompt?.close();
   }
 }
