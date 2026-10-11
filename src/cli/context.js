@@ -33,7 +33,10 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
       return overrides.hf ?? (cache.hf ??= createHf({ http, token: store.readEnv().HF_TOKEN }));
     },
     get ops() {
-      return (cache.ops ??= createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events, ask: io.ask, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning }, advisor: ctx.advisor }));
+      return (cache.ops ??= ctx.makeOps({ ask: io.ask, events }));
+    },
+    makeOps({ ask, events: ev }) {
+      return createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events: ev, ask, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning }, advisor: ctx.advisor });
     },
     get advisor() {
       return {
