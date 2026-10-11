@@ -15,7 +15,8 @@ const plan = {
   dataCenterId: 'EU-A', cloud: 'SECURE', kvCacheDtype: null, warnings: [], advisor: null,
 };
 
-function setup({ smokeResults, advisorText, answers = [] }) {
+// statusFn({ reloaded, sinceReload, args }) → risposta di /status; logLines: righe del supervisore (con numero progressivo)
+function setup({ smokeResults, advisorText, answers = [], statusFn, logLines = [], podOnly = false, advisorFails = false, reloadOk = true }) {
   clearSecrets();
   const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-rep-')), 'cfg');
   const store = createStore({ dir, platform: 'linux' });
@@ -30,25 +31,40 @@ function setup({ smokeResults, advisorText, answers = [] }) {
     deletePod: vi.fn(async () => { deleted = true; }),
   };
   const smoke = [...smokeResults];
+  const sv = { reloaded: false, sinceReload: 0, args: null };
+  const defaultStatus = ({ reloaded, sinceReload, args }) => (reloaded && sinceReload === 1 ? { phase: 'loading', args } : { phase: 'ready', kvCacheTokens: 1000, args });
   const http = { request: vi.fn(async (m, url, opts) => {
-    if (url.endsWith('/status')) return { ok: true, status: 200, data: { phase: 'ready', kvCacheTokens: 1000 } };
-    if (url.includes('/logs')) return { ok: true, status: 200, data: { lines: [] } };
-    if (url.endsWith('/reload')) return { ok: true, status: 202, data: { ok: true } };
+    if (url.endsWith('/status')) {
+      if (sv.reloaded) sv.sinceReload += 1;
+      return { ok: true, status: 200, data: (statusFn ?? defaultStatus)({ ...sv }) };
+    }
+    if (url.includes('/logs')) {
+      const since = Number(new URL(url).searchParams.get('since'));
+      return { ok: true, status: 200, data: { lines: logLines.filter((l) => l.n > since) } };
+    }
+    if (url.endsWith('/reload')) {
+      if (!reloadOk) return { ok: false, status: 409, data: { error: 'ricarica già in corso' } };
+      sv.reloaded = true;
+      sv.sinceReload = 0;
+      sv.args = opts.json.args;
+      return { ok: true, status: 202, data: { ok: true } };
+    }
     if (url.endsWith('/v1/models')) return { ok: true, status: 200, data: { data: [{ id: 'qwen3-coder' }] } };
     const good = smoke[0];
     if (url.endsWith('/v1/chat/completions')) smoke.shift();
     if (url.endsWith('/v1/messages')) return { ok: true, status: 200, data: { content: good ? [{ type: 'tool_use', name: 'get_weather' }] : [{ type: 'text', text: 'no' }] } };
     return { ok: true, status: 200, data: { choices: [{ message: { tool_calls: good ? [{ function: { name: 'get_weather' } }] : [] } }] } };
   }) };
-  const provider = { label: 'finto', complete: vi.fn(async () => ({ text: advisorText })) };
+  const provider = { label: 'finto', podOnly, complete: vi.fn(async () => { if (advisorFails) throw new Error('rete assente'); return { text: advisorText }; }) };
   const advisor = { provider: vi.fn(() => provider) };
   const ask = vi.fn(async () => (answers.length ? answers.shift() : true));
   const events = createEvents();
   const seen = [];
   events.on((e) => seen.push(e));
-  const ops = createOps({ store, runpod, hf: {}, http, events, ask, now: (() => { let t = 0; return () => (t += 1000); })(), sleep: async () => {}, zcode: { dir: path.join(dir, 'z'), isRunning: async () => false }, advisor });
+  const sleep = vi.fn(async () => {});
+  const ops = createOps({ store, runpod, hf: {}, http, events, ask, now: (() => { let t = 0; return () => (t += 1000); })(), sleep, zcode: { dir: path.join(dir, 'z'), isRunning: async () => false }, advisor });
   ops.saveProfile('qwen3-coder');
-  return { ops, http, provider, advisor, runpod, ask, seen, store };
+  return { ops, http, provider, advisor, runpod, ask, seen, store, sleep };
 }
 
 const FIX = '{"set":{"tool-call-parser":"qwen3_coder"},"rationale":"parser corretto per Qwen3-Coder","warnings":[]}';
@@ -83,9 +99,113 @@ describe('up: correzione con il consulente (livello 3)', () => {
     const t = setup({ smokeResults: [false], advisorText: '{"set":{"api-key":"x"}}' });
     await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
     expect(t.http.request.mock.calls.some(([, url]) => url.endsWith('/reload'))).toBe(false);
+    expect(t.runpod.deletePod).toHaveBeenCalled();
     const t2 = setup({ smokeResults: [false], advisorText: FIX, answers: [true, true, false] });
     await expect(t2.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
     expect(t2.http.request.mock.calls.some(([, url]) => url.endsWith('/reload'))).toBe(false);
+    expect(t2.runpod.deletePod).toHaveBeenCalled();
+  });
+
+  const OOM_LINES = [{ n: 1, line: 'torch.OutOfMemoryError: CUDA out of memory' }];
+  const erroring = ({ reloaded, sinceReload, args }) => (!reloaded ? { phase: 'error', lastError: 'vLLM terminato con codice 1' } : sinceReload === 1 ? { phase: 'loading', args } : { phase: 'ready', kvCacheTokens: 1000, args });
+
+  it('consulente solo-pod: con OOM o VLLM_ERROR nessuna consultazione, si propone la terminazione', async () => {
+    for (const logLines of [OOM_LINES, []]) {
+      const t = setup({ smokeResults: [true], advisorText: FIX, podOnly: true, statusFn: () => ({ phase: 'error', lastError: 'vLLM terminato con codice 1' }), logLines });
+      await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: logLines.length ? 'OOM' : 'VLLM_ERROR' });
+      expect(t.provider.complete).not.toHaveBeenCalled();
+      expect(t.ask.mock.calls.map((c) => c[0]).join('\n')).not.toMatch(/correzione al consulente/);
+      expect(t.runpod.deletePod).toHaveBeenCalled();
+    }
+  });
+
+  it('consulente che lancia → avviso e terminazione proposta', async () => {
+    const t = setup({ smokeResults: [false], advisorText: FIX, advisorFails: true });
+    await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
+    expect(t.seen.some((e) => e.type === 'warning' && /Consulente non disponibile: rete assente/.test(e.message))).toBe(true);
+    expect(t.http.request.mock.calls.some(([, url]) => url.endsWith('/reload'))).toBe(false);
+    expect(t.runpod.deletePod).toHaveBeenCalled();
+  });
+
+  it('reload non ok → avviso e terminazione proposta', async () => {
+    const t = setup({ smokeResults: [false], advisorText: FIX, reloadOk: false });
+    await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
+    expect(t.seen.some((e) => e.type === 'warning' && /Riavvio di vLLM non riuscito \(HTTP 409\)/.test(e.message))).toBe(true);
+    expect(t.runpod.deletePod).toHaveBeenCalled();
+  });
+
+  it('riparazione partita da un errore di waitForReady (OOM), non dallo smoke', async () => {
+    const t = setup({ smokeResults: [true], advisorText: FIX, statusFn: erroring, logLines: OOM_LINES });
+    const r = await t.ops.up('qwen3-coder', {});
+    expect(t.ask.mock.calls.map((c) => c[0]).join('\n')).toMatch(/Avvio non riuscito \(OOM\)/);
+    expect(t.provider.complete).toHaveBeenCalledTimes(1);
+    expect(t.provider.complete.mock.calls[0][0].user).toMatch(/OOM/);
+    expect(r.repairedArgs).toEqual(expect.arrayContaining(['--tool-call-parser', 'qwen3_coder']));
+    expect(t.http.request.mock.calls.filter(([, url]) => url.endsWith('/v1/chat/completions'))).toHaveLength(1); // un solo smoke, dopo il riavvio
+    expect(t.runpod.deletePod).not.toHaveBeenCalled();
+  });
+
+  it('dopo il reload attende args nuovi e fase non ready (60 s, ogni 2 s), poi waitForReady', async () => {
+    const seq = [{ phase: 'ready', args: ['vecchi'] }];
+    const statusFn = ({ reloaded, args }) => {
+      if (!reloaded) return { phase: 'ready', kvCacheTokens: 1000, args: ['vecchi'] };
+      seq.push(seq.length === 1 ? { phase: 'ready', args: ['vecchi'] } : seq.length === 2 ? { phase: 'loading', args } : { phase: 'ready', kvCacheTokens: 1000, args });
+      return seq[seq.length - 1];
+    };
+    const t = setup({ smokeResults: [false, true], advisorText: FIX, statusFn });
+    const r = await t.ops.up('qwen3-coder', {});
+    // dopo il reload: 1) ready con args vecchi (scartata), 2) loading con args nuovi (attesa finita), 3) ready letta da waitForReady
+    expect(seq.map((x) => x.phase)).toEqual(['ready', 'ready', 'loading', 'ready']);
+    expect(t.sleep.mock.calls.map((c) => c[0])).toContain(2000);
+    expect(t.sleep.mock.calls.map((c) => c[0])).not.toContain(10_000);
+    expect(r.repairedArgs).toBeTruthy();
+  });
+
+  it('se il supervisore non conferma il riavvio entro 60 s → avviso, nessun nuovo tentativo, terminazione proposta', async () => {
+    const statusFn = () => ({ phase: 'ready', kvCacheTokens: 1000, args: ['vecchi'] });
+    const t = setup({ smokeResults: [false, true], advisorText: FIX, statusFn });
+    await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
+    expect(t.seen.some((e) => e.type === 'warning' && /60 secondi/.test(e.message))).toBe(true);
+    expect(t.sleep.mock.calls.filter((c) => c[0] === 2000).length).toBeGreaterThan(20);
+    expect(t.http.request.mock.calls.filter(([, url]) => url.endsWith('/v1/chat/completions'))).toHaveLength(1);
+    expect(t.runpod.deletePod).toHaveBeenCalled();
+  });
+
+  it('se dopo il reload la fase è error l\'attesa finisce e waitForReady riporta l\'errore', async () => {
+    const statusFn = ({ reloaded }) => (reloaded ? { phase: 'error', lastError: 'boom' } : { phase: 'ready', kvCacheTokens: 1000 });
+    const t = setup({ smokeResults: [false], advisorText: FIX, statusFn, answers: [true, true, true, false] });
+    await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'VLLM_ERROR' });
+    expect(t.provider.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('dopo il riavvio i log ripartono dal cursore: un vecchio OOM non classifica il nuovo errore', async () => {
+    const statusFn = ({ reloaded, sinceReload, args }) => {
+      if (!reloaded) return { phase: 'error', lastError: 'vLLM terminato con codice 1' };
+      return sinceReload === 1 ? { phase: 'loading', args } : { phase: 'error', lastError: 'altro errore' };
+    };
+    const t = setup({ smokeResults: [true], advisorText: FIX, statusFn, logLines: OOM_LINES, answers: [true, true, true, false] });
+    await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'VLLM_ERROR' });
+    const asks = t.ask.mock.calls.map((c) => c[0]).join('\n');
+    expect(asks).toMatch(/Avvio non riuscito \(OOM\)/);
+    expect(asks).toMatch(/Avvio non riuscito \(VLLM_ERROR\)/);
+    const since = t.http.request.mock.calls.filter(([, url]) => url.includes('/logs')).map(([, url]) => new URL(url).searchParams.get('since'));
+    expect(since[0]).toBe('0');
+    expect(since.slice(1).every((x) => x === '1')).toBe(true);
+  });
+
+  it('smoke fallito: dopo il reload i log ripartono dal cursore della waitForReady riuscita', async () => {
+    const t = setup({ smokeResults: [false, true], advisorText: FIX, logLines: [{ n: 1, line: 'a' }, { n: 2, line: 'b' }, { n: 3, line: 'c' }] });
+    await t.ops.up('qwen3-coder', {});
+    const since = t.http.request.mock.calls.filter(([, url]) => url.includes('/logs')).map(([, url]) => new URL(url).searchParams.get('since'));
+    expect(since).toEqual(['0', '3']);
+  });
+
+  it('Pod in terminazione (watchdog): nessuna riparazione, si propone la terminazione', async () => {
+    const t = setup({ smokeResults: [true], advisorText: FIX, statusFn: () => ({ phase: 'terminating', terminateReason: 'idle' }), logLines: OOM_LINES });
+    await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'OOM', details: { terminating: true } });
+    expect(t.provider.complete).not.toHaveBeenCalled();
+    expect(t.ask.mock.calls.map((c) => c[0]).join('\n')).not.toMatch(/correzione al consulente/);
+    expect(t.runpod.deletePod).toHaveBeenCalled();
   });
 
   it('saveProfileArgs riporta il tensor parallel del profilo', () => {

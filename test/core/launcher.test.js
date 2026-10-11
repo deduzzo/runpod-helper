@@ -94,6 +94,32 @@ describe('attese', () => {
     await expect(waitForReady({ sup: supErr, timeoutMs: 60000, sleep })).rejects.toMatchObject({ code: 'OOM' });
   });
 
+  it('waitForReady riparte da `since` ed espone il cursore raggiunto (valore e errori)', async () => {
+    const lines = [{ n: 1, line: 'vecchio: out of memory' }, { n: 2, line: 'riga 2' }, { n: 3, line: 'riga 3' }];
+    const logs = vi.fn(async (since) => ({ lines: lines.filter((l) => l.n > since) }));
+    const ok = await waitForReady({ sup: { status: async () => ({ phase: 'ready' }), logs }, timeoutMs: 60000, sleep });
+    expect(ok.logCursor).toBe(3);
+    expect(logs).toHaveBeenLastCalledWith(0);
+    // ripartendo dal cursore il vecchio OOM non viene riletto: l'errore nuovo non è classificato come OOM
+    const err = await waitForReady({ sup: { status: async () => ({ phase: 'error', lastError: 'boom' }), logs }, since: 3, timeoutMs: 60000, sleep }).catch((e) => e);
+    expect(logs).toHaveBeenLastCalledWith(3);
+    expect(err).toMatchObject({ code: 'VLLM_ERROR', details: { logCursor: 3, lastLines: [] } });
+    const old = await waitForReady({ sup: { status: async () => ({ phase: 'error', lastError: 'boom' }), logs }, timeoutMs: 60000, sleep }).catch((e) => e);
+    expect(old).toMatchObject({ code: 'OOM', details: { logCursor: 3 } });
+    // anche il timeout riporta il cursore
+    const c = clock();
+    const t = await waitForReady({ sup: { status: async () => ({ phase: 'loading' }), logs }, since: 2, timeoutMs: 10000, sleep: async (ms) => c.tick(ms), now: c.now }).catch((e) => e);
+    expect(t).toMatchObject({ code: 'POD_START_TIMEOUT', details: { logCursor: 3 } });
+  });
+
+  it('waitForReady: fase terminating → details.terminating', async () => {
+    const sup = { status: async () => ({ phase: 'terminating', terminateReason: 'idle' }), logs: async () => ({ lines: [{ n: 1, line: 'CUDA out of memory' }] }) };
+    const err = await waitForReady({ sup, timeoutMs: 60000, sleep }).catch((e) => e);
+    expect(err.details.terminating).toBe(true);
+    const sup2 = { status: async () => ({ phase: 'error', lastError: 'x' }), logs: async () => ({ lines: [] }) };
+    expect((await waitForReady({ sup: sup2, timeoutMs: 60000, sleep }).catch((e) => e)).details.terminating).toBeUndefined();
+  });
+
   it('readyTimeoutMs: pesi a 50 MB/s + 10 minuti', () => {
     expect(readyTimeoutMs(50e6 * 600)).toBe(600_000 + 600_000);
   });

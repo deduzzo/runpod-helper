@@ -244,12 +244,20 @@ class Supervisor:
                     except subprocess.TimeoutExpired:
                         self.log('[llmpod] vLLM non risponde a SIGKILL')
 
-    def try_begin_reload(self):
-        """Prenota la ricarica: False se ce n'è già una in corso."""
+    def try_begin_reload(self, args=None):
+        """Prenota la ricarica: False se ce n'è già una in corso.
+
+        Con `args` imposta nello stesso istante (sotto lock) i nuovi argomenti e la fase 'loading',
+        prima che il vecchio processo venga fermato: lo stato non riporta mai 'ready' per il vecchio vLLM."""
         with self.lock:
             if self.reloading:
                 return False
             self.reloading = True
+            if args is not None:
+                self.args = list(args)
+                self.phase = 'loading'
+                self.restarts = 0
+                self.last_error = None
             return True
 
     def reload(self, args):
@@ -285,6 +293,14 @@ class Supervisor:
         except Exception:  # noqa: BLE001 — vLLM non ancora in ascolto
             return False
 
+    def can_promote(self):
+        """Vero se si può sondare vLLM per dichiararlo pronto: non durante una ricarica
+        (il vecchio processo potrebbe ancora rispondere) e solo con un processo corrente vivo."""
+        if self.reloading:
+            return False
+        proc = self.proc
+        return proc is not None and proc.poll() is None
+
     def terminate_pod(self):
         c = self.cfg
         if not c['pod_id'] or not c['runpod_key']:
@@ -319,7 +335,7 @@ class Supervisor:
             finally:
                 self.proc_lock.release()
         if self.phase in ('downloading', 'loading'):
-            if self.check_ready():
+            if self.can_promote() and self.check_ready():
                 self.phase = 'ready'
                 self.tracker = IdleTracker(now)
                 self.log('[llmpod] vLLM pronto')
@@ -432,7 +448,7 @@ def make_server(sup):
             args = valid_reload_args(payload)
             if args is None:
                 return self._send(400, {'error': 'args non validi'})
-            if not sup.try_begin_reload():
+            if not sup.try_begin_reload(args):
                 return self._send(409, {'error': 'ricarica già in corso'})
             threading.Thread(target=sup.reload, args=(args,), daemon=True).start()
             return self._send(202, {'ok': True})

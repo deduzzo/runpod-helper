@@ -262,6 +262,26 @@ class SupervisorIntegration(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_reload_imposta_loading_subito_e_non_promuove_il_vecchio_processo(self):
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: self.sup.step() is None and self.sup.phase == 'ready'))
+        old_pid = self.sup.proc.pid
+        new_args = ['--max-model-len', '2048']
+        self.assertTrue(self.sup.try_begin_reload(new_args))
+        # args e fase cambiano subito, prima che il vecchio processo venga fermato
+        st = self.sup.status()
+        self.assertEqual(st['phase'], 'loading')
+        self.assertEqual(st['args'], new_args)
+        # il vecchio vLLM risponde ancora: il controllo non deve riportare 'ready'
+        self.assertIsNone(self.sup.proc.poll())
+        self.assertTrue(self.sup.check_ready())
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'loading')
+        self.sup.reload(new_args)
+        self.assertNotEqual(self.sup.proc.pid, old_pid)
+        self.assertTrue(wait_until(lambda: self.sup.step() is None and self.sup.phase == 'ready'))
+        self.assertEqual(self.sup.args, new_args)
+
     def test_server_di_stato_autenticato(self):
         server = sv.make_server(self.sup)
         threading.Thread(target=server.serve_forever, daemon=True).start()

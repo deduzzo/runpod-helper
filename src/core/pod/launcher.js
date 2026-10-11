@@ -85,9 +85,11 @@ export function createSupervisorClient({ http, podId, apiKey, baseUrl = proxyUrl
 
 export const readyTimeoutMs = (weightsBytes) => Math.round((weightsBytes / 50e6) * 1000) + 600_000;
 
-export async function waitForReady({ sup, timeoutMs, sleep = defaultSleep, now = Date.now, onStatus = () => {}, onLog = () => {} }) {
+// `since`: cursore dei log da cui ripartire (dopo un riavvio di vLLM). Il cursore raggiunto è in `logCursor`
+// sul valore restituito e in `details.logCursor` degli errori.
+export async function waitForReady({ sup, timeoutMs, since: sinceOpt = 0, sleep = defaultSleep, now = Date.now, onStatus = () => {}, onLog = () => {} }) {
   const deadline = now() + timeoutMs;
-  let since = 0;
+  let since = sinceOpt;
   const recent = [];
   while (now() < deadline) {
     const logs = await sup.logs(since);
@@ -100,16 +102,16 @@ export async function waitForReady({ sup, timeoutMs, sleep = defaultSleep, now =
     const st = await sup.status();
     if (st) {
       onStatus(st);
-      if (st.phase === 'ready') return st;
+      if (st.phase === 'ready') return { ...st, logCursor: since };
       if (st.phase === 'error' || st.phase === 'terminating') {
         const oom = recent.some((l) => OOM_RE.test(l));
         throw new LlmpodError(oom ? Codes.OOM : Codes.VLLM_ERROR, `vLLM non è partito: ${st.lastError ?? st.terminateReason ?? st.phase}`, {
           hint: oom ? 'Memoria GPU insufficiente: riduci --context, usa --set kv-cache-dtype=fp8 o scegli una GPU più grande' : 'Controlla i log mostrati sopra',
-          details: { lastLines: recent.slice(-30) },
+          details: { lastLines: recent.slice(-30), logCursor: since, ...(st.phase === 'terminating' ? { terminating: true } : {}) },
         });
       }
     }
     await sleep(5000);
   }
-  throw new LlmpodError(Codes.POD_START_TIMEOUT, `vLLM non è pronto dopo ${Math.round(timeoutMs / 60000)} minuti`);
+  throw new LlmpodError(Codes.POD_START_TIMEOUT, `vLLM non è pronto dopo ${Math.round(timeoutMs / 60000)} minuti`, { details: { logCursor: since } });
 }

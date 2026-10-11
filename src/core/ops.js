@@ -157,7 +157,7 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
   const REPAIRABLE = [Codes.OOM, Codes.VLLM_ERROR, Codes.SMOKE_TEST_FAILED];
 
   async function repairWithAdvisor({ err, attempts, yes, endpoint, profile, currentArgs, sup, hourly }) {
-    if (!advisor || yes || attempts >= 3 || !REPAIRABLE.includes(err.code)) return null;
+    if (!advisor || yes || attempts >= 3 || err.details?.terminating || !REPAIRABLE.includes(err.code)) return null;
     let provider;
     try {
       provider = advisor.provider(endpoint);
@@ -188,8 +188,18 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       return null;
     }
     events.emit('phase', { message: 'Riavvio di vLLM con gli argomenti corretti' });
-    await sleep(10_000);
-    return advice.args;
+    // Il supervisore imposta args e fase 'loading' prima di fermare il vecchio vLLM: si attende di vederli,
+    // altrimenti waitForReady potrebbe leggere 'ready' dal processo che sta morendo.
+    const deadline = now() + 60_000;
+    for (;;) {
+      const st = await sup.status();
+      if (st && (st.phase === 'error' || (JSON.stringify(st.args) === JSON.stringify(advice.args) && st.phase !== 'ready'))) return advice.args;
+      if (now() >= deadline) {
+        events.emit('warning', { message: 'Il supervisore non ha confermato il riavvio di vLLM entro 60 secondi' });
+        return null;
+      }
+      await sleep(2000);
+    }
   }
 
   function saveProfileArgs(name, args) {
@@ -296,14 +306,17 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       let attempts = 0;
       let st;
       let smoke;
+      let cursor = 0; // cursore dei log del supervisore: dopo un riavvio non si rileggono i log del run precedente
       for (;;) {
         try {
           let timeoutMs = readyTimeoutMs(profile.model.weightsBytes);
           for (;;) {
             try {
-              st = await waitForReady({ ...readyOpts, timeoutMs });
+              st = await waitForReady({ ...readyOpts, since: cursor, timeoutMs });
+              cursor = st.logCursor ?? cursor;
               break;
             } catch (err) {
+              cursor = err.details?.logCursor ?? cursor;
               if (err.code !== Codes.POD_START_TIMEOUT || yes || !(await ask('vLLM non è ancora pronto. Aspettare altri 15 minuti?', true))) throw err;
               timeoutMs = 15 * 60_000;
             }
