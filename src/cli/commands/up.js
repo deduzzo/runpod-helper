@@ -1,8 +1,9 @@
 import { attachRenderer } from '../render.js';
 import { fmtUSD } from '../../core/confirm.js';
+import { AMBIGUOUS_CREATE_WARNING } from '../../core/ops.js';
 
 // Gestione di Ctrl+C durante "up": non deve mai lasciare un Pod acceso senza avvisare.
-export function createInterruptHandler({ ops, runpod, io, name, getPodId, exit = (c) => process.exit(c) }) {
+export function createInterruptHandler({ ops, runpod, io, name, getPodId, isCreating = () => true, exit = (c) => process.exit(c) }) {
   let running = false;
   return async () => {
     if (running) {
@@ -18,7 +19,10 @@ export function createInterruptHandler({ ops, runpod, io, name, getPodId, exit =
           id = pod?.id ?? null;
         } catch { /* ricerca best-effort */ }
       }
-      if (!id) return;
+      if (!id) {
+        if (isCreating()) io.err(`⚠ ${AMBIGUOUS_CREATE_WARNING}`);
+        return;
+      }
       let terminate = true;
       try {
         terminate = await io.ask(`\nInterrotto. Terminare il Pod ${id} per non continuare a pagare?`, true);
@@ -48,8 +52,12 @@ export function register(program, getCtx) {
       const { io } = ctx;
       const off = attachRenderer(ctx.events, io, { verbose: program.opts().verbose });
       let podId = null;
-      const offPod = ctx.events.on((e) => { if (e.type === 'pod') podId = e.podId; });
-      const onSigint = createInterruptHandler({ ops: ctx.ops, runpod: ctx.runpod, io, name, getPodId: () => podId });
+      let creating = false;
+      const offPod = ctx.events.on((e) => {
+        if (e.type === 'pod') podId = e.podId;
+        if (e.type === 'phase' && /^Creazione del Pod/.test(e.message)) creating = true;
+      });
+      const onSigint = createInterruptHandler({ ops: ctx.ops, runpod: ctx.runpod, io, name, getPodId: () => podId, isCreating: () => creating });
       process.on('SIGINT', onSigint);
       try {
         const r = await ctx.ops.up(name, { yes: opts.yes, dryRun: opts.dryRun });

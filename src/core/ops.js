@@ -17,7 +17,28 @@ const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export const generateKey = () => randomBytes(32).toString('base64url');
 
+export const AMBIGUOUS_CREATE_WARNING = 'Potrebbe essere stato creato un Pod non ancora visibile: controlla tra un minuto con "llmpod status" o su https://www.runpod.io/console/pods';
+
+// GPU e alternative del profilo. Senza GPU nel datacenter del volume si ripiega sui candidati "altrove":
+// up li offrirà (con consenso) in altri datacenter senza volume.
+function pickGpus(plan) {
+  const seen = new Set();
+  const ordered = [];
+  const push = (id, count) => {
+    const k = `${id}×${count}`;
+    if (!seen.has(k)) { seen.add(k); ordered.push({ id, count }); }
+  };
+  if (plan.gpu) push(plan.gpu.id, plan.gpu.count);
+  for (const a of plan.alternatives ?? []) push(a.id, a.count);
+  if (!plan.gpu) for (const e of plan.elsewhere ?? []) push(e.gpuId, e.count);
+  if (!ordered.length) {
+    throw new LlmpodError(Codes.NO_GPU_AVAILABLE, 'Nessuna GPU adatta disponibile per questo piano, né nel datacenter del volume né altrove', { hint: 'Riprova più tardi con: llmpod plan <modello>' });
+  }
+  return { gpu: ordered[0], alternatives: ordered.slice(1) };
+}
+
 export function profileFromPlan(plan, { name, volume, watchdog }) {
+  const { gpu, alternatives } = pickGpus(plan);
   return {
     name,
     servedName: name,
@@ -26,8 +47,8 @@ export function profileFromPlan(plan, { name, volume, watchdog }) {
     concurrency: plan.concurrency,
     vllm: plan.vllm,
     parsers: plan.parsers,
-    gpu: plan.gpu,
-    alternatives: plan.alternatives.map(({ id, count }) => ({ id, count })),
+    gpu,
+    alternatives,
     cloud: plan.cloud,
     dataCenterId: plan.dataCenterId,
     volume: volume ? { id: volume.id, mountPath: '/workspace' } : null,
@@ -119,8 +140,11 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
   }
 
   async function offerTerminate(name, podId, yes) {
+    let ok = true;
+    try { ok = yes || await ask(`Terminare il Pod ${podId} per non continuare a pagare?`, true); } catch { ok = true; } // Ctrl+C al prompt: meglio spegnere
+    if (!ok) return;
     try {
-      if (yes || await ask(`Terminare il Pod ${podId} per non continuare a pagare?`, true)) await terminate(name, podId);
+      await terminate(name, podId);
     } catch (e) {
       events.emit('warning', { message: `Terminazione del Pod ${podId} non riuscita: ${e.message}. Controlla su https://www.runpod.io/console/pods` });
     }
@@ -197,17 +221,19 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
           st.pods[name] = { podId: stray.id, startedAt: new Date(startedAt).toISOString(), hourlyUSD: first.hourly, dataCenterId: first.dataCenterId, withVolume: first.withVolume };
           store.writeState(st);
           await offerTerminate(name, stray.id, yes);
+        } else {
+          events.emit('warning', { message: AMBIGUOUS_CREATE_WARNING });
         }
       }
       throw err;
     }
     const { pod, candidate } = created;
     events.emit('pod', { podId: pod.id });
-    const state = store.readState();
-    state.pods[name] = { podId: pod.id, startedAt: new Date(startedAt).toISOString(), hourlyUSD: candidate.hourly, dataCenterId: candidate.dataCenterId, withVolume: candidate.withVolume };
-    store.writeState(state);
 
     try {
+      const state = store.readState();
+      state.pods[name] = { podId: pod.id, startedAt: new Date(startedAt).toISOString(), hourlyUSD: candidate.hourly, dataCenterId: candidate.dataCenterId, withVolume: candidate.withVolume };
+      store.writeState(state);
       events.emit('phase', { message: 'Attesa dell\'avvio del Pod' });
       const runningPod = await waitForRunning({ runpod, podId: pod.id, sleep, now });
       const sup = createSupervisorClient({ http, podId: pod.id, apiKey });

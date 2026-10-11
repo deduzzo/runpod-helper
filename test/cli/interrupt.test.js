@@ -2,13 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { createInterruptHandler } from '../../src/cli/commands/up.js';
 import { LlmpodError, Codes } from '../../src/core/errors.js';
 
-function make({ podId = 'pod1', ask = async () => true, down = async () => ({}), pods = [] } = {}) {
+function make({ podId = 'pod1', ask = async () => true, down = async () => ({}), pods = [], isCreating } = {}) {
   const err = [];
   const io = { ask: vi.fn(ask), err: (t) => err.push(t) };
   const ops = { down: vi.fn(down) };
   const runpod = { listPods: vi.fn(async () => pods) };
   const exit = vi.fn();
-  const handler = createInterruptHandler({ ops, runpod, io, name: 'qwen', getPodId: () => podId, exit });
+  const handler = createInterruptHandler({ ops, runpod, io, name: 'qwen', getPodId: () => podId, exit, ...(isCreating ? { isCreating } : {}) });
   return { handler, io, ops, runpod, exit, err: () => err.join('\n') };
 }
 
@@ -47,6 +47,22 @@ describe('interruzione di up (Ctrl+C)', () => {
     await t.handler();
     expect(t.io.ask.mock.calls[0][0]).toContain('pod9');
     expect(t.ops.down).toHaveBeenCalledWith('qwen', { yes: true });
+    expect(t.exit).toHaveBeenCalledWith(130);
+  });
+
+  it('podId nullo e nessun Pod trovato con creazione in corso: avvisa di controllare più tardi', async () => {
+    const t = make({ podId: null, pods: [], isCreating: () => true });
+    await t.handler();
+    expect(t.err()).toContain('Potrebbe essere stato creato un Pod non ancora visibile');
+    expect(t.err()).toContain('llmpod status');
+    expect(t.ops.down).not.toHaveBeenCalled();
+    expect(t.exit).toHaveBeenCalledWith(130);
+  });
+
+  it('podId nullo, nessun Pod e nessuna creazione in corso: nessun avviso', async () => {
+    const t = make({ podId: null, pods: [], isCreating: () => false });
+    await t.handler();
+    expect(t.err()).toBe('');
     expect(t.exit).toHaveBeenCalledWith(130);
   });
 

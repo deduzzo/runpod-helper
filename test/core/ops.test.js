@@ -6,6 +6,7 @@ import { createOps, profileFromPlan, generateKey } from '../../src/core/ops.js';
 import { createStore } from '../../src/core/config.js';
 import { createEvents } from '../../src/core/events.js';
 import { clearSecrets } from '../../src/core/secrets.js';
+import { LlmpodError, Codes } from '../../src/core/errors.js';
 
 const KEY = 'CHIAVE-PROFILO-FINTA-123456';
 const gpu = (id, memory, price, dcs) => ({ id, name: id, memory, price: { secure: price }, maxCount: { secure: 8 }, dataCenters: dcs.map(([d, a]) => ({ id: d, availability: a })) });
@@ -226,5 +227,77 @@ describe('ops: nessun Pod orfano', () => {
     runpod.deletePod.mockRejectedValue(new Error('boom'));
     await expect(ops.up('qwen3-coder', { yes: true })).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
     expect(seen.some((e) => e.type === 'warning' && /Terminazione del Pod pod1 non riuscita: boom/.test(e.message))).toBe(true);
+  });
+});
+
+describe('ops: correzioni della revisione finale', () => {
+  beforeEach(() => clearSecrets());
+
+  it('offerTerminate: ask che rifiuta con CANCELLED (Ctrl+C al prompt) → il Pod viene terminato comunque', async () => {
+    const { ops, runpod, ask } = setup({ smokeOk: false });
+    ops.saveProfile('qwen3-coder');
+    ask.mockImplementation(async (msg) => {
+      if (/Terminare il Pod/.test(msg)) throw new LlmpodError(Codes.CANCELLED, 'annullato');
+      return true;
+    });
+    await expect(ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
+    expect(runpod.deletePod).toHaveBeenCalledWith('pod1');
+  });
+
+  it('profileFromPlan: senza GPU nel DC del volume usa le alternative "altrove" (dedupe per id+count)', () => {
+    const noHere = { ...plan, gpu: null, alternatives: [], elsewhere: [
+      { gpuId: 'GPU80', count: 1, hourly: 1.5 }, { gpuId: 'GPU96', count: 1, hourly: 2.5 },
+      { gpuId: 'GPU80', count: 1, hourly: 1.5 }, { gpuId: 'GPU80', count: 2, hourly: 3 },
+    ] };
+    const p = profileFromPlan(noHere, { name: 'x', volume: null, watchdog: {} });
+    expect(p.gpu).toEqual({ id: 'GPU80', count: 1 });
+    expect(p.alternatives).toEqual([{ id: 'GPU96', count: 1 }, { id: 'GPU80', count: 2 }]);
+  });
+
+  it('saveProfile: né GPU né alternative altrove → NO_GPU_AVAILABLE con suggerimento', () => {
+    const { ops, store } = setup();
+    store.writeJson('last-plan.json', { ...plan, gpu: null, alternatives: [], elsewhere: [] });
+    let err;
+    try { ops.saveProfile('x'); } catch (e) { err = e; }
+    expect(err).toMatchObject({ code: 'NO_GPU_AVAILABLE' });
+    expect(err.hint).toMatch(/llmpod plan/);
+    expect(store.listProfiles()).toEqual([]);
+  });
+
+  it('saveProfile: profilo con GPU solo altrove viene avviabile da up (consenso senza volume)', async () => {
+    const catalog = { 1: [gpu('GPU80', 80, 1.5, [['EU-A', 'NONE'], ['US-B', 'HIGH']])] };
+    const { ops, store, runpod } = setup({ catalog, createResponses: [{ status: 400, data: {} }, { status: 201, data: { id: 'pod1' } }] });
+    store.writeJson('last-plan.json', { ...plan, gpu: null, alternatives: [], elsewhere: [{ gpuId: 'GPU80', count: 1, hourly: 1.5 }] });
+    ops.saveProfile('qwen3-coder');
+    await ops.up('qwen3-coder', { yes: true });
+    expect(runpod.createPod.mock.calls.map((c) => c[0].dataCenterIds[0])).toEqual(['EU-A', 'US-B']);
+  });
+
+  it('up: creazione ambigua senza Pod visibile → warning con istruzioni per controllare', async () => {
+    const { ops, runpod, seen } = setup();
+    ops.saveProfile('qwen3-coder');
+    runpod.createPod.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'NETWORK' }));
+    await expect(ops.up('qwen3-coder', { yes: true })).rejects.toMatchObject({ code: 'NETWORK' });
+    const w = seen.filter((e) => e.type === 'warning').map((e) => e.message).join('\n');
+    expect(w).toContain('Potrebbe essere stato creato un Pod non ancora visibile');
+    expect(w).toContain('llmpod status');
+    expect(w).toContain('https://www.runpod.io/console/pods');
+  });
+
+  it('up: errore non ambiguo (credito) non emette il warning del Pod non visibile', async () => {
+    const { ops, runpod, seen } = setup();
+    ops.saveProfile('qwen3-coder');
+    runpod.createPod.mockResolvedValue({ status: 402, data: { detail: 'no' } });
+    await expect(ops.up('qwen3-coder', { yes: true })).rejects.toMatchObject({ code: 'INSUFFICIENT_BALANCE' });
+    expect(seen.some((e) => e.type === 'warning' && /non ancora visibile/.test(e.message))).toBe(false);
+  });
+
+  it('up: scrittura dello stato fallita dopo la creazione → viene offerta (e fatta) la terminazione', async () => {
+    const { ops, store, runpod } = setup();
+    ops.saveProfile('qwen3-coder');
+    const orig = store.writeState.bind(store);
+    store.writeState = vi.fn().mockImplementationOnce(() => { throw new Error('disco pieno'); }).mockImplementation(orig);
+    await expect(ops.up('qwen3-coder', { yes: true })).rejects.toThrow('disco pieno');
+    expect(runpod.deletePod).toHaveBeenCalledWith('pod1');
   });
 });
