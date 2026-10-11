@@ -72,6 +72,10 @@ export function register(program, getCtx) {
         io.out(`  Costo:     ${fmtUSD(r.hourlyUSD)}/h su ${r.candidate.id} ×${r.candidate.count} (${r.candidate.dataCenterId})`);
         io.out('  Smoke test: /v1/models ✓  /v1/messages con strumento ✓  /v1/chat/completions con strumento ✓');
         if (r.contextSuggestion) io.out(`  La KV cache consente fino a ${r.contextSuggestion} token per richiesta: puoi rigenerare il profilo con --context ${r.contextSuggestion}`);
+        if (r.repairedArgs && await io.ask('Salvare nel profilo gli argomenti corretti dal consulente?', true)) {
+          ctx.ops.saveProfileArgs(name, r.repairedArgs);
+          io.out(`✓ Profilo ${name} aggiornato`);
+        }
         io.out(`Usa: llmpod run claude | opencode | pi | zcode   ·   Spegni: llmpod down ${name}`);
       } finally {
         process.off('SIGINT', onSigint);

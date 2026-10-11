@@ -33,7 +33,7 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
       return overrides.hf ?? (cache.hf ??= createHf({ http, token: store.readEnv().HF_TOKEN }));
     },
     get ops() {
-      return (cache.ops ??= createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events, ask: io.ask, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning } }));
+      return (cache.ops ??= createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events, ask: io.ask, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning }, advisor: ctx.advisor }));
     },
     get advisor() {
       return {
@@ -42,7 +42,9 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
           if (store.readConfig().advisor?.enabled === false) return null;
           const cfg = resolveAdvisorConfig(store.readEnv(), { endpoint });
           if (!cfg || (cfg.podOnly && !endpoint)) return null;
-          return createProvider(cfg, { http, spawn: ctx.spawn });
+          const p = createProvider(cfg, { http, spawn: ctx.spawn });
+          p.podOnly = Boolean(cfg.podOnly);
+          return p;
         },
       };
     },

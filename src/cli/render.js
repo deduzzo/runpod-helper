@@ -20,6 +20,7 @@ export function attachRenderer(events, io, { verbose = false } = {}) {
     else if (e.type === 'warning') io.err(`⚠ ${e.message}`);
     else if (e.type === 'info') io.err(`ℹ ${e.message}`);
     else if (e.type === 'pod') io.err(`  Pod creato: ${e.podId}`);
+    else if (e.type === 'advice') renderAdvice(io, { rationale: e.rationale, changes: e.changes, rejected: e.rejected, warnings: e.warnings });
   });
 }
 
