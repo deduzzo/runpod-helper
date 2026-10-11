@@ -8,9 +8,15 @@ import * as init from './commands/init.js';
 import * as search from './commands/search.js';
 import * as plan from './commands/plan.js';
 import * as save from './commands/save.js';
+import * as up from './commands/up.js';
+import * as down from './commands/down.js';
+import * as status from './commands/status.js';
+import * as env from './commands/env.js';
+import * as run from './commands/run.js';
+import * as rotateKey from './commands/rotate-key.js';
+import * as destroyVolume from './commands/destroy-volume.js';
 
-// Le attività successive aggiungono qui i loro comandi.
-export const COMMANDS = [init, search, plan, save];
+export const COMMANDS = [init, search, plan, save, up, down, status, env, run, rotateKey, destroyVolume];
 
 export async function runCli(argv, { io, env = process.env, overrides = {} } = {}) {
   const ownPrompt = io ? null : createPrompt();
