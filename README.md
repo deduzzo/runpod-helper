@@ -1,7 +1,6 @@
 # llmpod — runpod-helper
 
-> **Stato:** CLI v1 e consulente IA funzionanti (piani 1–2). In arrivo: interfaccia web
-> (piano 3), Docker e script di avvio per ogni piattaforma (piano 4).
+> **Stato:** v1 completa — CLI, consulente IA, interfaccia web, Docker.
 
 `llmpod` è una CLI (con interfaccia web locale) che automatizza il ciclo di vita di un **LLM
 self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di coding agent come
@@ -34,6 +33,44 @@ self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di codin
 
 Ogni operazione che costa denaro mostra il **costo orario stimato e chiede conferma**
 (`--yes` per saltarla); tutti i comandi che creano o distruggono risorse supportano `--dry-run`.
+
+## Installazione con Docker (consigliata)
+
+Requisiti: Docker Desktop (macOS, Windows) o Docker Engine con Compose v2 (Linux).
+
+```bash
+git clone https://github.com/deduzzo/runpod-helper.git
+cd runpod-helper
+scripts/start.sh              # macOS/Linux (su macOS anche doppio clic su scripts/start.command)
+scripts\start.bat             # Windows (doppio clic o da terminale; usa scripts\start.ps1)
+```
+
+Al primo avvio parte la configurazione guidata (`llmpod init`), che richiede un **terminale
+interattivo**: se manca la chiave Runpod e lo script non è eseguito da un terminale, si ferma con
+un messaggio. Poi si apre l'interfaccia web (`http://127.0.0.1:7860`, con il token nel link
+stampato) e Open WebUI è raggiungibile su `http://127.0.0.1:3000` (ometti con `--no-openwebui`,
+su Windows `-NoOpenWebUI` con `start.ps1`). Le porte sono pubblicate solo su `127.0.0.1`.
+Per fermare tutto: `scripts/stop.sh` (o `scripts\stop.bat`); configurazione e pesi restano.
+
+La CLI dall'host passa dal wrapper (`bin/llmpod` su macOS/Linux, `bin\llmpod.ps1` su Windows),
+che esegue i comandi nel container e avvia i client sul tuo computer:
+
+```bash
+bin/llmpod status
+bin/llmpod run claude          # anche: opencode, pi, zcode
+```
+
+Con Docker Open WebUI parte già con `start` (collegato al Pod attivo tramite il proxy interno,
+senza chiavi da copiare); il comando `llmpod chat` serve invece all'installazione senza Docker.
+
+Le chiavi restano in `~/.config/llmpod/.env` (permessi 600), montata nel container: l'immagine
+non contiene segreti. Cartelle e utente si possono cambiare con `LLMPOD_CONFIG_DIR`, `ZCODE_DIR`,
+`PI_DIR` e `LLMPOD_UI_PORT`. Il container gira con l'UID/GID dell'utente host, così i file creati
+restano tuoi (su Windows 1000).
+
+Per provare l'immagine senza credenziali reali: `sh scripts/docker-smoke.sh`.
+La CI di GitHub esegue test (Node 20 e 22), build dell'interfaccia, gitleaks, build e prova del
+container e controllo di sintassi degli script PowerShell.
 
 ## Installazione (CLI, senza Docker)
 
@@ -185,7 +222,7 @@ Network volume: 0,07 $/GB al mese (150 GB = 10,50 $/mese), pagato anche a Pod sp
 - **IA esterna modulare** per il consulente: protocolli Anthropic e OpenAI con preset
   (Z.ai GLM, Anthropic, OpenAI, endpoint personalizzato, il modello sul Pod, `claude -p`).
 - **Deploy con Docker Compose** (web UI, core e Open WebUI) e script di avvio per macOS,
-  Linux e Windows.
+  Linux e Windows (`scripts/start.*`, `scripts/stop.*`, wrapper `bin/llmpod`).
 - **Credenziali** in `~/.config/llmpod/.env` con permessi `600`. Chiavi e token non vengono mai
   scritti nei log.
 

@@ -1,6 +1,6 @@
 # Backlog dopo il piano 1
 
-Elementi minori emersi nelle revisioni del piano 1 e rimandati (nessuno blocca l'uso). Da valutare nei piani successivi.
+Elementi minori emersi nelle revisioni del piano 1 e rimandati (nessuno blocca l'uso). Da valutare nei piani successivi. Nei piani 2–4 si sono chiusi (con certezza) solo i punti barrati; gli altri restano aperti.
 
 ## Da fare prima o durante il piano 2
 
@@ -13,7 +13,7 @@ Elementi minori emersi nelle revisioni del piano 1 e rimandati (nessuno blocca l
 
 - **Attività 1:** errors.test non copre cause/details; `cause ? {cause}` scarta cause falsy; report con conteggi imprecisi; chat_template troncato nella fixture model-qwen3-coder-30b
 - **Attività 2:** redact può lanciare con input funzione/circolare (JSON.stringify undefined) — da indurire, è nel percorso --verbose/--dry-run; segreti con caratteri escapati in JSON non mascherati; chiave sensibile con valore non stringa non mascherata; nessun test per l'ordine longest-first
-- **Attività 3:** res.text() fuori dal try (errori di lettura corpo non mascherati/non ritentati); corpo delle risposte ritentate non consumato; Retry-After non limitato; httpError con detail oggetto → [object Object]; header case-sensitive duplicabili; copertura test parziale (DELETE, retry:false, timeout, maxRetries)
+- **Attività 3:** res.text() fuori dal try (errori di lettura corpo non mascherati/non ritentati); corpo delle risposte ritentate non consumato; Retry-After non limitato; ~~httpError con detail oggetto → [object Object]~~ (chiuso nel piano 2: il dettaglio degli errori annidati è estratto e mascherato prima del troncamento); header case-sensitive duplicabili; copertura test parziale (DELETE, retry:false, timeout, maxRetries)
 - **Attività 3:** la causa sostituita perde name (TimeoutError) e codice di rete annidato (ECONNREFUSED) — includerli in modo mascherato nel messaggio
 - **Attività 4:** .env round-trip con backslash/newline lossy; readJson lancia SyntaxError grezzo su JSON corrotto (serve errore tipizzato); SECRET_VAR case-sensitive; tmp con segreti non rimosso se rename fallisce; ensureDir fa chmod 700 su cartella esistente
 - **Attività 5:** a/b@c@d accetta @c; URL con ?query rifiutato; paginazione listFiles senza limite; getReadme su README JSON non byte-identico; test mancanti per resolveSha/getReadme/checkAccess
