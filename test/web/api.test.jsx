@@ -47,4 +47,25 @@ describe('api', () => {
     expect(fmtDuration(3900)).toBe('1 h 5 min');
     expect(fmtDuration(200)).toBe('3 min 20 s');
   });
+
+  it('timeoutMs: la richiesta appesa viene interrotta con un errore chiaro', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((path, init) => new Promise((_, reject) => {
+      init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    }));
+    const p = api('/api/status', { timeoutMs: 20_000 });
+    const out = p.catch((e) => e);
+    await vi.advanceTimersByTimeAsync(20_001);
+    const err = await out;
+    vi.useRealTimers();
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.code).toBe('TIMEOUT');
+    expect(err.message).toMatch(/troppo tempo/);
+  });
+
+  it('timeoutMs: senza scadenza la risposta passa e il timer viene annullato', async () => {
+    const fetchMock = mockApi({ 'GET /api/status': { ok: true } });
+    expect(await api('/api/status', { timeoutMs: 20_000 })).toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0][1].signal).toBeTruthy();
+  });
 });

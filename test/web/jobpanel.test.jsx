@@ -171,6 +171,23 @@ describe('JobPanel', () => {
     expect(screen.getByText('completato')).toBeTruthy();
   });
 
+  it('onStatus: running dopo il caricamento, poi done; su failed chiamato con failed', async () => {
+    mockApi({ 'GET /api/jobs/j1': { job: job(), events: [ev(0, 'phase', { message: 'Avvio' })] } });
+    const onStatus = vi.fn();
+    mount({ onStatus });
+    await screen.findByText(/Avvio/);
+    expect(onStatus).toHaveBeenLastCalledWith('running');
+    await act(async () => { FakeEventSource.last.emit('job', ev(1, 'done', { result: {} })); });
+    expect(onStatus).toHaveBeenLastCalledWith('done');
+    cleanup();
+    mockApi({ 'GET /api/jobs/j1': { job: job({ status: 'failed', error: { message: 'Boom' } }), events: [ev(0, 'failed', { error: { message: 'Boom' } })] } });
+    const onStatus2 = vi.fn();
+    mount({ onStatus: onStatus2 });
+    await screen.findByText('Boom');
+    expect(onStatus2).toHaveBeenCalledWith('failed');
+    expect(onStatus2).not.toHaveBeenCalledWith('running');
+  });
+
   it('failed mostra messaggio e suggerimento', async () => {
     mockApi({ 'GET /api/jobs/j1': { job: job({ status: 'failed', error: { code: 'X', message: 'Nessuna GPU', hint: 'Riprova' } }), events: [ev(0, 'failed', { error: { code: 'X', message: 'Nessuna GPU', hint: 'Riprova' } })] } });
     mount();

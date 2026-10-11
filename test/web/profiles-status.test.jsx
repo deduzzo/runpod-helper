@@ -22,7 +22,7 @@ describe('Profili', () => {
     await screen.findByText('qwen3-coder');
     expect(screen.getByText(/1,79 \$\/h/)).toBeTruthy();
     expect(screen.getByText('consulente')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Avvia' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Avvia qwen3-coder' }));
     await screen.findByText('Avvio a 1,79 $/h. Confermi?');
     expect(screen.getByText(/Controlli preliminari/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Sì' }));
@@ -39,7 +39,7 @@ describe('Profili', () => {
     });
     render(<Profiles />);
     await screen.findByText('qwen3-coder');
-    fireEvent.click(screen.getByRole('button', { name: 'Spegni' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Spegni qwen3-coder' }));
     await screen.findByText('in corso');
     expect(JSON.parse(fetchMock.mock.calls.find(([p, i]) => p === '/api/jobs' && i?.method === 'POST')[1].body)).toEqual({ action: 'down', profile: 'qwen3-coder' });
   });
@@ -61,9 +61,103 @@ describe('Profili', () => {
     });
     render(<Profiles />);
     await screen.findByText('qwen3-coder');
-    fireEvent.click(screen.getByRole('button', { name: 'Avvia' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Avvia qwen3-coder' }));
     await screen.findByText(/c'è già un'operazione in corso/);
-    expect(screen.getByRole('button', { name: 'Avvia' }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'Avvia qwen3-coder' }).disabled).toBe(false);
+  });
+
+  it('il dialogo di conferma è montato su document.body, fuori dalla scheda', async () => {
+    mockApi({
+      'GET /api/overview': { profiles: [profile], jobs: [], config: {}, advisor: {} },
+      'POST /api/jobs': { job: { id: 'j1', kind: 'up:qwen3-coder', status: 'running' } },
+      'GET /api/jobs/j1': { job: { id: 'j1', status: 'running', question: { id: 'q1', text: 'Confermi?', defYes: false } }, events: [] },
+    });
+    render(<Profiles />);
+    await screen.findByText('qwen3-coder');
+    fireEvent.click(screen.getByRole('button', { name: 'Avvia qwen3-coder' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.parentElement).toBe(document.body);
+    expect(dialog.closest('section')).toBeNull();
+  });
+
+  it('un job running del server prevale su una voce precedente terminata', async () => {
+    let calls = 0;
+    mockApi({
+      'GET /api/overview': () => ({ profiles: [profile], jobs: [{ id: calls++ === 0 ? 'j1' : 'j2', kind: 'up:qwen3-coder', status: 'running' }], config: {}, advisor: {} }),
+      'GET /api/jobs/j1': { job: { id: 'j1', status: 'running', question: null }, events: [{ seq: 0, type: 'phase', message: 'Primo job' }, { seq: 1, type: 'done', result: {} }] },
+      'GET /api/jobs/j2': { job: { id: 'j2', status: 'running', question: null }, events: [{ seq: 0, type: 'phase', message: 'Secondo job' }] },
+    });
+    render(<Profiles />);
+    // j1 termina -> onFinished ricarica la panoramica, che ora indica j2 in corso: prevale sulla voce j1
+    await screen.findByText(/Secondo job/);
+    expect(screen.queryByText(/Primo job/)).toBeNull();
+  });
+
+  it('Avvia/Spegni disabilitati finché il job del profilo è in corso, riabilitati a job concluso', async () => {
+    mockApi({
+      'GET /api/overview': { profiles: [profile], jobs: [{ id: 'j1', kind: 'up:qwen3-coder', status: 'running' }], config: {}, advisor: {} },
+      'GET /api/jobs/j1': { job: { id: 'j1', status: 'running', question: null }, events: [{ seq: 0, type: 'phase', message: 'In avvio' }] },
+    });
+    render(<Profiles />);
+    await screen.findByText(/In avvio/);
+    expect(screen.getByRole('button', { name: 'Avvia qwen3-coder' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Spegni qwen3-coder' }).disabled).toBe(true);
+  });
+
+  it('job fallito: pulsanti di nuovo attivi', async () => {
+    mockApi({
+      'GET /api/overview': { profiles: [profile], jobs: [{ id: 'j1', kind: 'up:qwen3-coder', status: 'running' }], config: {}, advisor: {} },
+      'GET /api/jobs/j1': { job: { id: 'j1', status: 'failed', question: null, error: { message: 'Nessuna GPU' } }, events: [{ seq: 0, type: 'failed', error: { message: 'Nessuna GPU' } }] },
+    });
+    render(<Profiles />);
+    await screen.findByText('Nessuna GPU');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Avvia qwen3-coder' }).disabled).toBe(false));
+  });
+
+  it('doppio clic su Avvia: una sola POST', async () => {
+    const m = mockApi({
+      'GET /api/overview': { profiles: [profile], jobs: [], config: {}, advisor: {} },
+      'POST /api/jobs': { job: { id: 'j1', kind: 'up:qwen3-coder', status: 'running' } },
+      'GET /api/jobs/j1': { job: { id: 'j1', status: 'running', question: null }, events: [] },
+    });
+    render(<Profiles />);
+    await screen.findByText('qwen3-coder');
+    const btn = screen.getByRole('button', { name: 'Avvia qwen3-coder' });
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    await screen.findByText('in corso');
+    expect(m.mock.calls.filter(([p, i]) => p === '/api/jobs' && i?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('riaprire un job già concluso non ricarica in loop', async () => {
+    const m = mockApi({
+      'GET /api/overview': { profiles: [profile], jobs: [{ id: 'j1', kind: 'up:qwen3-coder', status: 'running' }], config: {}, advisor: {} },
+      'GET /api/jobs/j1': { job: { id: 'j1', status: 'done', question: null }, events: [{ seq: 0, type: 'phase', message: 'Fatto' }, { seq: 1, type: 'done', result: {} }] },
+    });
+    render(<Profiles />);
+    await screen.findByText('completato');
+    await new Promise((r) => setTimeout(r, 150));
+    const count = (path) => m.mock.calls.filter(([p]) => p === path).length;
+    expect(count('/api/overview')).toBe(2); // caricamento iniziale + un solo ricaricamento da onFinished
+    expect(count('/api/jobs/j1')).toBeLessThanOrEqual(2);
+  });
+
+  it('errore di caricamento con "Riprova"', async () => {
+    let fail = true;
+    mockApi({ 'GET /api/overview': () => (fail ? { __status: 500, body: { error: { message: 'Errore interno' } } } : { profiles: [profile], jobs: [], config: {}, advisor: {} }) });
+    render(<Profiles />);
+    await screen.findByText('Errore interno');
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Riprova' }));
+    await screen.findByText('qwen3-coder');
+  });
+
+  it('Avvia e Spegni hanno etichetta accessibile con il profilo e testo visibile', async () => {
+    mockApi({ 'GET /api/overview': { profiles: [profile], jobs: [], config: {}, advisor: {} } });
+    render(<Profiles />);
+    await screen.findByText('qwen3-coder');
+    expect(screen.getByRole('button', { name: 'Avvia qwen3-coder' }).textContent).toBe('Avvia');
+    expect(screen.getByRole('button', { name: 'Spegni qwen3-coder' }).textContent).toBe('Spegni');
   });
 
   it('nessun profilo', async () => {
@@ -72,11 +166,6 @@ describe('Profili', () => {
     await screen.findByText(/Nessun profilo/);
   });
 
-  it('errore di caricamento', async () => {
-    mockApi({ 'GET /api/overview': { __status: 500, body: { error: { message: 'Errore interno' } } } });
-    render(<Profiles />);
-    await screen.findByText('Errore interno');
-  });
 });
 
 describe('Salvataggio profilo (R28)', () => {
@@ -169,5 +258,75 @@ describe('Stato e costi', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Aggiorna' }));
     await screen.findByText('Runpod non risponde');
     expect(screen.getByText('p1')).toBeTruthy();
+  });
+
+  it('th con scope=col e errore con role=alert', async () => {
+    let fail = false;
+    mockApi({ 'GET /api/status': () => (fail ? { __status: 502, body: { error: { message: 'Runpod non risponde' } } } : statusBody) });
+    render(<Status />);
+    await screen.findByText('p1');
+    for (const th of document.querySelectorAll('th')) expect(th.getAttribute('scope')).toBe('col');
+    fail = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Aggiorna' }));
+    const msg = await screen.findByText('Runpod non risponde');
+    expect(msg.closest('[role="alert"]')).toBeTruthy();
+  });
+
+  it('nessuna sovrapposizione: durante una richiesta in corso timer e clic non ne avviano altre', async () => {
+    let release;
+    const m = mockApi({ 'GET /api/status': () => new Promise((r) => { release = () => r(statusBody); }) });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<Status />);
+    await waitFor(() => expect(m).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+    expect(m).toHaveBeenCalledTimes(1);
+    await act(async () => { release(); });
+    await screen.findByText('p1');
+  });
+
+  it('clearInterval allo smontaggio: nessuna richiesta dopo unmount', async () => {
+    const m = mockApi({ 'GET /api/status': statusBody });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { unmount } = render(<Status />);
+    await screen.findByText('p1');
+    unmount();
+    const before = m.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(m.mock.calls.length).toBe(before);
+  });
+
+  it('timeout di 20 s: una richiesta appesa non blocca i refresh successivi', async () => {
+    let hang = true;
+    const m = vi.spyOn(globalThis, 'fetch').mockImplementation((path, init = {}) => {
+      if (hang) return new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))));
+      return Promise.resolve(new Response(JSON.stringify(statusBody), { status: 200 }));
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<Status />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_100); });
+    await screen.findByText(/troppo tempo/);
+    hang = false;
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_100); });
+    await screen.findByText('p1');
+    expect(m.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('polling in pausa con la scheda nascosta; riprende su visibilitychange', async () => {
+    const m = mockApi({ 'GET /api/status': statusBody });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<Status />);
+    await screen.findByText('p1');
+    let hidden = true;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    try {
+      const before = m.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(46_000); });
+      expect(m.mock.calls.length).toBe(before);
+      hidden = false;
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+      await waitFor(() => expect(m.mock.calls.length).toBe(before + 1));
+    } finally {
+      delete document.hidden;
+    }
   });
 });

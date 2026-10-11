@@ -16,6 +16,23 @@ describe('componenti', () => {
     expect(onAnswer).toHaveBeenCalledWith(true);
   });
 
+  it('QuestionModal: portale su document.body, aria, focus sul pulsante predefinito, Esc senza effetto', () => {
+    const onAnswer = vi.fn();
+    const { container, rerender } = render(<section className="glass"><QuestionModal question={{ id: 'q1', text: 'Confermi?', defYes: false }} onAnswer={onAnswer} /></section>);
+    const dialog = screen.getByRole('dialog');
+    expect(container.contains(dialog)).toBe(false);
+    expect(dialog.parentElement).toBe(document.body);
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(document.getElementById(dialog.getAttribute('aria-labelledby')).textContent).toBe('Confermi?');
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'No' }));
+    fireEvent.keyDown(document.activeElement, { key: 'Escape' });
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onAnswer).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    rerender(<section className="glass"><QuestionModal question={{ id: 'q2', text: 'Altra?', defYes: true }} onAnswer={onAnswer} /></section>);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Sì' }));
+  });
+
   it('ErrorBox mostra messaggio e suggerimento', () => {
     render(<ErrorBox error={{ message: 'Nessuna GPU', hint: 'Riprova più tardi' }} />);
     expect(screen.getByText('Nessuna GPU')).toBeTruthy();

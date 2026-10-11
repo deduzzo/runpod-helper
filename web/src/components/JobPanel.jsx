@@ -34,7 +34,7 @@ export function JobPanel(props) {
   return <JobPanelInner key={props.jobId} {...props} />;
 }
 
-function JobPanelInner({ jobId, onFinished }) {
+function JobPanelInner({ jobId, onFinished, onStatus }) {
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState('running');
   const [question, setQuestion] = useState(null);
@@ -59,6 +59,8 @@ function JobPanelInner({ jobId, onFinished }) {
   const alive = useRef(true);
   const finishedCb = useRef(onFinished);
   finishedCb.current = onFinished;
+  const statusCb = useRef(onStatus);
+  statusCb.current = onStatus;
 
   const ingest = useCallback((e) => {
     if (e.seq != null) {
@@ -92,6 +94,9 @@ function JobPanelInner({ jobId, onFinished }) {
     }
     return true;
   }, []);
+
+  // Lo stato (running/done/failed) si comunica solo dopo il primo caricamento: mai un 'running' provvisorio per un job già concluso.
+  useEffect(() => { if (loaded) statusCb.current?.(status); }, [loaded, status]);
 
   const advance = () => { while (seen.current.has(next.current)) next.current += 1; };
 

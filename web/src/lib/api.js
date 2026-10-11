@@ -8,7 +8,8 @@ export class ApiError extends Error {
 }
 
 // R26: il server accetta i metodi diversi da GET solo con Content-Type application/json, anche senza corpo ({}).
-export async function api(path, { method = 'GET', body } = {}) {
+// timeoutMs (opzionale): scaduto il tempo la richiesta viene interrotta con un ApiError di codice TIMEOUT.
+export async function api(path, { method = 'GET', body, timeoutMs } = {}) {
   const init = { method, credentials: 'same-origin', headers: {} };
   if (method !== 'GET' && method !== 'HEAD') {
     init.headers = { 'content-type': 'application/json' };
@@ -17,8 +18,24 @@ export async function api(path, { method = 'GET', body } = {}) {
     init.headers = { 'content-type': 'application/json' };
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(path, init);
-  const text = await res.text();
+  let timer = null;
+  let timedOut = false;
+  if (timeoutMs) {
+    const controller = new AbortController();
+    init.signal = controller.signal;
+    timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  }
+  let res;
+  let text;
+  try {
+    res = await fetch(path, init);
+    text = await res.text();
+  } catch (err) {
+    if (timedOut) throw new ApiError(0, { error: { code: 'TIMEOUT', message: 'La richiesta sta impiegando troppo tempo: riprova tra poco.' } });
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: { message: text } }; }
   if (!res.ok) throw new ApiError(res.status, data);

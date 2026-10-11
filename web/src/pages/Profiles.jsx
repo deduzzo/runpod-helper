@@ -8,7 +8,9 @@ export default function Profiles() {
   const [jobs, setJobs] = useState({});
   const [errors, setErrors] = useState({});
   const [loadError, setLoadError] = useState(null);
+  const [statuses, setStatuses] = useState({}); // jobId -> running | done | failed (comunicato da JobPanel)
   const [starting, setStarting] = useState(null);
+  const startLock = useRef(false);
   const alive = useRef(true);
 
   async function load() {
@@ -20,7 +22,12 @@ export default function Profiles() {
       // Job già in corso (anche avviati altrove, es. dalla CLI/altra scheda): si mostrano al caricamento.
       const running = {};
       for (const j of o.jobs ?? []) if (j.status === 'running') running[j.kind.split(':')[1]] = j.id;
-      setJobs((prev) => ({ ...running, ...prev }));
+      // Un job in corso secondo il server prevale su una voce precedente (terminata o diversa).
+      setJobs((prev) => {
+        const merged = { ...prev, ...running };
+        const same = Object.keys(merged).length === Object.keys(prev).length && Object.keys(merged).every((k) => prev[k] === merged[k]);
+        return same ? prev : merged;
+      });
     } catch (e) {
       if (alive.current) setLoadError(e);
     }
@@ -32,6 +39,8 @@ export default function Profiles() {
   }, []);
 
   async function start(action, profile) {
+    if (startLock.current) return; // doppio clic: una sola richiesta
+    startLock.current = true;
     setErrors((x) => ({ ...x, [profile]: null }));
     setStarting(`${action}:${profile}`);
     try {
@@ -41,11 +50,15 @@ export default function Profiles() {
       // 409 incluso: il server dice quale operazione è già in corso sul profilo.
       setErrors((x) => ({ ...x, [profile]: e }));
     } finally {
+      startLock.current = false;
       setStarting(null);
     }
   }
+  const setStatus = (jobId) => (st) => setStatuses((x) => (x[jobId] === st ? x : { ...x, [jobId]: st }));
+  const busy = (profile) => Boolean(jobs[profile]) && !['done', 'failed'].includes(statuses[jobs[profile]]);
 
-  if (!overview) return loadError ? <ErrorBox error={loadError} /> : <div className="flex justify-center p-6"><Spinner /></div>;
+  const retry = <Button variant="ghost" onClick={load}>Riprova</Button>;
+  if (!overview) return loadError ? <div className="space-y-3" role="alert"><ErrorBox error={loadError} />{retry}</div> : <div className="flex justify-center p-6"><Spinner /></div>;
   if (!overview.profiles.length) return <Card title="Profili"><p className="text-gray-400">Nessun profilo: calcolane uno nella scheda Modelli.</p></Card>;
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -60,14 +73,14 @@ export default function Profiles() {
             {p.advisorApplied && <Badge tone="violet">consulente</Badge>}
           </div>
           <div className="mt-4 flex gap-2">
-            <Button onClick={() => start('up', p.name)} loading={starting === `up:${p.name}`} disabled={starting !== null}>Avvia</Button>
-            <Button variant="ghost" onClick={() => start('down', p.name)} loading={starting === `down:${p.name}`} disabled={starting !== null}>Spegni</Button>
+            <Button aria-label={`Avvia ${p.name}`} onClick={() => start('up', p.name)} loading={starting === `up:${p.name}`} disabled={starting !== null || busy(p.name)}>Avvia</Button>
+            <Button aria-label={`Spegni ${p.name}`} variant="ghost" onClick={() => start('down', p.name)} loading={starting === `down:${p.name}`} disabled={starting !== null || busy(p.name)}>Spegni</Button>
           </div>
           {errors[p.name] && <div className="mt-3" role="alert"><ErrorBox error={errors[p.name]} /></div>}
-          {jobs[p.name] && <div className="mt-4 border-t border-white/10 pt-4"><JobPanel jobId={jobs[p.name]} onFinished={load} /></div>}
+          {jobs[p.name] && <div className="mt-4 border-t border-white/10 pt-4"><JobPanel jobId={jobs[p.name]} onFinished={load} onStatus={setStatus(jobs[p.name])} /></div>}
         </Card>
       ))}
-      {loadError && <div className="md:col-span-2"><ErrorBox error={loadError} /></div>}
+      {loadError && <div className="space-y-3 md:col-span-2" role="alert"><ErrorBox error={loadError} />{retry}</div>}
     </div>
   );
 }
