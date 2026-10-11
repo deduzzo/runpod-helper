@@ -48,23 +48,26 @@ export function assertProfileName(name) {
 
 export const profileKeyVar = (name) => `LLMPOD_KEY_${name.toUpperCase().replace(/-/g, '_')}`;
 
-function writeAtomic(file, content) {
+function writeAtomic(file, content, { chmod = true } = {}) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, content, { mode: 0o600 });
-  fs.chmodSync(tmp, 0o600);
+  if (chmod) fs.chmodSync(tmp, 0o600);
   fs.renameSync(tmp, file);
 }
 
-export function createStore({ dir = configDir(), platform = process.platform } = {}) {
+// Su Windows (anche dentro il container Docker, dove LLMPOD_HOST_OS=windows) i file montati appaiono 0777 e chmod non ha effetto:
+// la protezione di .env è affidata ai permessi NTFS del profilo utente.
+export function createStore({ dir = configDir(), platform = process.platform, env = process.env } = {}) {
   const p = (...parts) => path.join(dir, ...parts);
+  const posixPerms = platform !== 'win32' && env.LLMPOD_HOST_OS !== 'windows';
 
   function ensureDir() {
     fs.mkdirSync(p('profiles'), { recursive: true, mode: 0o700 });
-    fs.chmodSync(dir, 0o700);
+    if (posixPerms) fs.chmodSync(dir, 0o700);
   }
 
   function checkPermissions() {
-    if (platform === 'win32' || !fs.existsSync(p('.env'))) return;
+    if (!posixPerms || !fs.existsSync(p('.env'))) return;
     const m = fs.statSync(p('.env')).mode & 0o777;
     if (m & 0o077) {
       throw new LlmpodError(Codes.CONFIG_PERMISSIONS, `Il file ${p('.env')} è leggibile da altri utenti (permessi ${m.toString(8)})`, {
@@ -84,7 +87,7 @@ export function createStore({ dir = configDir(), platform = process.platform } =
     ensureDir();
     const next = { ...readEnv(), ...patch };
     for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
-    writeAtomic(p('.env'), serializeEnv(next));
+    writeAtomic(p('.env'), serializeEnv(next), { chmod: posixPerms });
     readEnv();
   }
 
@@ -95,7 +98,7 @@ export function createStore({ dir = configDir(), platform = process.platform } =
 
   function writeJson(name, data) {
     ensureDir();
-    writeAtomic(p(name), JSON.stringify(data, null, 2) + '\n');
+    writeAtomic(p(name), JSON.stringify(data, null, 2) + '\n', { chmod: posixPerms });
   }
 
   const readConfig = () => {

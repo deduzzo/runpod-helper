@@ -1,7 +1,6 @@
 import { LlmpodError, Codes } from '../../core/errors.js';
-import { prepareClaude } from '../../core/clients/claude-code.js';
-import { prepareOpencode } from '../../core/clients/opencode.js';
-import { preparePi, piDir } from '../../core/clients/pi.js';
+import { prepareClient } from '../../core/clients/prepare.js';
+import { piDir } from '../../core/clients/pi.js';
 import { updateZcode, zcodeDir } from '../../core/clients/zcode.js';
 
 const INSTALL = {
@@ -24,11 +23,7 @@ async function runClient(client, opts, getCtx, result) {
     return;
   }
 
-  const prep = {
-    claude: () => prepareClaude(ep),
-    opencode: () => prepareOpencode(ep, { dir: ctx.store.dir }),
-    pi: () => preparePi(ep, { dir: piDir(ctx.env) }),
-  }[client]();
+  const prep = prepareClient(client, ep, { configDir: ctx.store.dir, piDir: piDir(ctx.env) });
   const child = ctx.spawn(prep.command, prep.args, { stdio: 'inherit', env: { ...process.env, ...prep.env } });
   result.code = await new Promise((resolve, reject) => {
     child.on('error', (err) => reject(err.code === 'ENOENT'

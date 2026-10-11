@@ -1,7 +1,6 @@
 # llmpod — runpod-helper
 
-> **Stato:** CLI v1 e consulente IA funzionanti (piani 1–2). In arrivo: interfaccia web
-> (piano 3), Docker e script di avvio per ogni piattaforma (piano 4).
+> **Stato:** v1 completa — CLI, consulente IA, interfaccia web, Docker.
 
 `llmpod` è una CLI (con interfaccia web locale) che automatizza il ciclo di vita di un **LLM
 self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di coding agent come
@@ -34,6 +33,86 @@ self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di codin
 
 Ogni operazione che costa denaro mostra il **costo orario stimato e chiede conferma**
 (`--yes` per saltarla); tutti i comandi che creano o distruggono risorse supportano `--dry-run`.
+
+## Installazione con Docker (consigliata)
+
+Requisiti: Docker Desktop (macOS, Windows) o Docker Engine con Compose v2 (Linux).
+
+```bash
+git clone https://github.com/deduzzo/runpod-helper.git
+cd runpod-helper
+scripts/start.sh              # macOS/Linux (su macOS anche doppio clic su scripts/start.command)
+scripts\start.bat             # Windows (doppio clic o da terminale; usa scripts\start.ps1)
+```
+
+Al primo avvio parte la configurazione guidata (`llmpod init`), che richiede un **terminale
+interattivo**: se manca la chiave Runpod (o la configurazione, per un `init` interrotto) e lo
+script non è eseguito da un terminale, si ferma con un messaggio. Poi si apre l'interfaccia web
+(`http://127.0.0.1:7860`, con il token nel link stampato) e Open WebUI è raggiungibile su
+`http://127.0.0.1:3000` (ometti con `--no-openwebui`, su Windows `-NoOpenWebUI` con `start.ps1`).
+Le porte sono pubblicate solo su `127.0.0.1`. Al primo avvio Open WebUI può impiegare alcuni
+minuti a diventare pronto: lo script attende fino a 2 minuti e poi prosegue (se `docker compose`
+supporta `--wait`).
+
+Per rientrare nell'interfaccia basta rilanciare lo script di avvio: il link con il token cambia a
+ogni avvio e compare anche nei log del container (`bin/llmpod logs`).
+
+**Open WebUI con account.** Il primo account che crei su Open WebUI diventa amministratore; la
+registrazione di altri account è disattivata (`ENABLE_SIGNUP=false`; il primo account non ne
+dipende, verificato sul codice di Open WebUI v0.11.4). Senza autenticazione una pagina web
+malevola (o un attacco di DNS rebinding) potrebbe usare Open WebUI su `localhost` come se fosse
+l'utente, quindi l'accesso senza account non è previsto. **Crea l'account subito dopo il primo
+avvio**: finché non esiste, chiunque raggiunga `127.0.0.1:3000` dal tuo computer potrebbe crearlo per primo. Le credenziali dell'account restano nel
+volume Docker di Open WebUI. La porta si cambia con `LLMPOD_OPENWEBUI_PORT` (predefinita 3000).
+
+Per fermare tutto: `scripts/stop.sh` (o `scripts\stop.bat`); configurazione e dati di Open WebUI
+restano. **`stop` ferma i container locali, non i Pod su Runpod**: i Pod si fermano con
+`bin/llmpod down <profilo>` o da soli dopo l'inattività. Se alla chiusura risultano Pod attivi
+(e c'è la chiave Runpod), lo script stampa un avviso con l'ID del Pod e il comando per fermarlo,
+senza spegnerlo da solo.
+
+La CLI dall'host passa dal wrapper `bin/llmpod` (macOS/Linux) o `bin\llmpod` (Windows: è
+`bin\llmpod.cmd`, che lancia `llmpod.ps1` con `-ExecutionPolicy Bypass`, così non serve cambiare
+la policy di PowerShell). Il wrapper esegue i comandi nel container e avvia i client sul tuo
+computer, nella cartella da cui lo lanci (non cambia la cartella corrente):
+
+```bash
+bin/llmpod status
+bin/llmpod run claude          # anche: opencode, pi, zcode
+bin/llmpod logs                # ultimi log del container llmpod (anche: bin/llmpod logs open-webui)
+bin/llmpod chat                # apre Open WebUI sull'host (http://localhost:3000)
+```
+
+`bin/llmpod ui` non serve nel setup Docker: l'interfaccia la avvia `scripts/start`. Con Docker
+Open WebUI parte già con `start` (collegato al Pod attivo tramite il proxy interno, senza chiavi
+da copiare); `bin/llmpod chat` apre solo la pagina sull'host (con `localhost`, diverso dal
+`127.0.0.1` dell'interfaccia, così il cookie di sessione non viene inviato a Open WebUI).
+Dentro Docker i suggerimenti degli errori mostrano `bin/llmpod …`.
+
+Le chiavi restano in `~/.config/llmpod/.env` (permessi 600), montata nel container: l'immagine
+non contiene segreti. Cartelle e utente si possono cambiare con `LLMPOD_CONFIG_DIR`, `ZCODE_DIR`,
+`PI_DIR` (o `PI_CODING_AGENT_DIR`, rispettata se impostata sull'host), `LLMPOD_UI_PORT` e
+`LLMPOD_OPENWEBUI_PORT`. Il container gira con l'UID/GID dell'utente host, così i file creati
+restano tuoi.
+
+Note per piattaforma:
+
+- **Windows:** UID/GID sono 1000 e i file montati nel container appaiono con permessi 0777 senza
+  che `chmod` abbia effetto: gli script impostano `LLMPOD_HOST_OS=windows` e llmpod salta il
+  controllo dei permessi di `.env`. Su Windows la protezione di `.env` è affidata ai permessi NTFS
+  del profilo utente.
+- **Linux con Docker rootless o Docker Desktop for Linux:** gli script rilevano la modalità
+  (`docker info` con `rootless`, oppure contesto `desktop-linux`) e usano l'utente `0:0` nel
+  container, che in questi casi corrisponde al tuo utente sull'host.
+- **Podman o host con SELinux:** i volumi di `compose.yaml` possono richiedere il suffisso `:z`
+  (ad esempio `"${LLMPOD_CONFIG_DIR}:/config:z"`) per essere leggibili dal container.
+- **Preset `claude-cli` del consulente:** non è disponibile nel container (non contiene `claude`);
+  se già configurato, il consulente segnala l'errore. Usa un altro preset o la CLI senza Docker.
+
+Per provare l'immagine senza credenziali reali: `sh scripts/docker-smoke.sh`.
+La CI di GitHub esegue test (Node 20 e 22), build dell'interfaccia, gitleaks, build e prova del
+container, validazione di `compose.yaml` e controllo degli script PowerShell (sintassi e prova con
+un `docker` finto).
 
 ## Installazione (CLI, senza Docker)
 
@@ -82,7 +161,7 @@ llmpod plan <modello>     # il consulente interviene in automatico (--no-advisor
 | `anthropic` | API Anthropic |
 | `openai` | API OpenAI (indica il modello) |
 | `custom` | qualsiasi endpoint compatibile Anthropic o OpenAI |
-| `claude-cli` | Claude Code installato in locale, senza strumenti |
+| `claude-cli` | Claude Code installato in locale, senza strumenti (non disponibile con Docker) |
 | `pod` | il modello appena avviato sul Pod, solo per le correzioni dopo `up` |
 
 La chiave del consulente sta in `~/.config/llmpod/.env` (permessi 600) e non viene mai mostrata.
@@ -185,9 +264,11 @@ Network volume: 0,07 $/GB al mese (150 GB = 10,50 $/mese), pagato anche a Pod sp
 - **IA esterna modulare** per il consulente: protocolli Anthropic e OpenAI con preset
   (Z.ai GLM, Anthropic, OpenAI, endpoint personalizzato, il modello sul Pod, `claude -p`).
 - **Deploy con Docker Compose** (web UI, core e Open WebUI) e script di avvio per macOS,
-  Linux e Windows.
-- **Credenziali** in `~/.config/llmpod/.env` con permessi `600`. Chiavi e token non vengono mai
-  scritti nei log.
+  Linux e Windows (`scripts/start.*`, `scripts/stop.*`, wrapper `bin/llmpod`).
+- **Credenziali** in `~/.config/llmpod/.env` con permessi `600`. Le chiavi (Runpod, Hugging Face,
+  consulente, Pod) non vengono mai scritte nei log; fa eccezione il link dell'interfaccia con il
+  token di sessione, stampato all'avvio e quindi presente nei log del container: è il modo per
+  recuperarlo con `bin/llmpod logs`.
 
 ## Verifiche già fatte
 

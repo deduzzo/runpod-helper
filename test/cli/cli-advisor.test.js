@@ -100,4 +100,31 @@ describe('llmpod advisor', () => {
     expect(await s.run(['advisor', '--disable'])).toBe(0);
     expect(s.store.readConfig().advisor).toEqual({ enabled: false, zaiNoticeAcknowledged: true });
   });
+
+  describe('in Docker (LLMPOD_IN_DOCKER=1)', () => {
+    it('il preset claude-cli non è proposto', async () => {
+      const s = sandbox({ answers: { text: ['custom', 'openai', 'https://llm.example.com/v1', 'm', 'bearer'], secret: [KEY] } });
+      s.env.LLMPOD_IN_DOCKER = '1';
+      expect(await s.run(['advisor'])).toBe(0);
+      expect(s.out()).not.toContain('claude-cli');
+      expect(s.out()).toContain('zai-coding-plan');
+    });
+
+    it('--preset claude-cli è rifiutato e non viene salvato', async () => {
+      const s = sandbox();
+      s.env.LLMPOD_IN_DOCKER = '1';
+      expect(await s.run(['advisor', '--preset', 'claude-cli'])).toBe(1);
+      expect(s.err()).toMatch(/Il preset claude-cli non funziona nel container: usa un altro preset o la CLI senza Docker/);
+      expect(s.store.readEnv().LLMPOD_ADVISOR_PRESET).toBeUndefined();
+    });
+
+    it('un preset claude-cli già configurato fa fallire il consulente con INVALID_INPUT', async () => {
+      const s = sandbox();
+      s.env.LLMPOD_IN_DOCKER = '1';
+      s.store.writeEnv({ LLMPOD_ADVISOR_PRESET: 'claude-cli' });
+      s.store.writeConfig({ advisor: { enabled: true } });
+      expect(await s.run(['advisor', '--test'])).toBe(1);
+      expect(s.err()).toMatch(/Il preset claude-cli non funziona nel container/);
+    });
+  });
 });

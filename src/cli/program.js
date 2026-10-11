@@ -2,7 +2,7 @@ import { Command, CommanderError } from 'commander';
 import { LlmpodError, Codes } from '../core/errors.js';
 import { redact } from '../core/secrets.js';
 import { createContext, VERSION } from './context.js';
-import { createIo } from './render.js';
+import { createIo, dockerCommands } from './render.js';
 import { createPrompt } from './prompt.js';
 import * as init from './commands/init.js';
 import * as search from './commands/search.js';
@@ -18,8 +18,9 @@ import * as destroyVolume from './commands/destroy-volume.js';
 import * as advisor from './commands/advisor.js';
 import * as ui from './commands/ui.js';
 import * as chat from './commands/chat.js';
+import * as prepare from './commands/prepare.js';
 
-export const COMMANDS = [init, search, plan, save, up, down, status, env, run, rotateKey, destroyVolume, advisor, ui, chat];
+export const COMMANDS = [init, search, plan, save, up, down, status, env, run, rotateKey, destroyVolume, advisor, ui, chat, prepare];
 
 export async function runCli(argv, { io, env = process.env, overrides = {} } = {}) {
   const ownPrompt = io ? null : createPrompt();
@@ -43,8 +44,8 @@ export async function runCli(argv, { io, env = process.env, overrides = {} } = {
       return ['commander.helpDisplayed', 'commander.version', 'commander.help'].includes(err.code) ? 0 : (err.exitCode || 1);
     }
     if (err instanceof LlmpodError) {
-      io.err(`Errore [${err.code}]: ${err.message}`);
-      if (err.hint) io.err(`  Suggerimento: ${err.hint}`);
+      io.err(`Errore [${err.code}]: ${dockerCommands(err.message, env)}`);
+      if (err.hint) io.err(`  Suggerimento: ${dockerCommands(err.hint, env)}`);
       for (const line of err.details?.lastLines ?? []) io.err(`  │ ${line}`);
       return err.code === Codes.CANCELLED ? 130 : 1;
     }

@@ -2,6 +2,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { LlmpodError, Codes } from '../errors.js';
 import { httpError } from '../http.js';
 import { redact } from '../secrets.js';
+import { CLAUDE_CLI_IN_DOCKER } from './presets.js';
 
 const authHeaders = (cfg) => (cfg.auth === 'x-api-key' ? { 'x-api-key': cfg.apiKey } : { authorization: `Bearer ${cfg.apiKey}` });
 
@@ -85,8 +86,11 @@ function claudeCliProvider(cfg, spawn) {
   };
 }
 
-export function createProvider(cfg, { http, spawn = nodeSpawn } = {}) {
-  if (cfg.protocol === 'claude-cli') return claudeCliProvider(cfg, spawn);
+export function createProvider(cfg, { http, spawn = nodeSpawn, env = process.env } = {}) {
+  if (cfg.protocol === 'claude-cli') {
+    if (env.LLMPOD_IN_DOCKER === '1') throw new LlmpodError(Codes.INVALID_INPUT, CLAUDE_CLI_IN_DOCKER);
+    return claudeCliProvider(cfg, spawn);
+  }
   if (cfg.protocol === 'anthropic') return anthropicProvider(cfg, http);
   if (cfg.protocol === 'openai') return openaiProvider(cfg, http);
   throw new LlmpodError(Codes.ADVISOR_NOT_CONFIGURED, `Protocollo del consulente non supportato: ${cfg.protocol}`);

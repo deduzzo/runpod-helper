@@ -1,0 +1,88 @@
+name: CI
+
+# Push su main e pull request; i branch di lavoro si verificano aprendo una PR (o con workflow_dispatch).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:web
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: false
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validazione di compose.yaml (variabili finte)
+        env:
+          LLMPOD_CONFIG_DIR: /tmp/llmpod-ci/config
+          ZCODE_DIR: /tmp/llmpod-ci/zcode
+          PI_DIR: /tmp/llmpod-ci/pi
+        run: docker compose --profile openwebui config -q
+      # La prova costruisce l'immagine una sola volta (llmpod:local) e la usa per tutti i controlli.
+      - run: sh scripts/docker-smoke.sh
+
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Sintassi degli script e file del wrapper
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem scripts/*.ps1) + @(Get-Item bin/llmpod.ps1) + @(Get-Item test/windows/*.ps1)
+          $bad = 0
+          foreach ($f in $files) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $($_.Message)" }; $bad++ }
+          }
+          if (-not (Test-Path bin/llmpod.cmd)) { Write-Error 'bin/llmpod.cmd mancante'; $bad++ }
+          exit $bad
+      - name: Prova dei wrapper con docker finto (pwsh)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File test/windows/wrappers.test.ps1
+          exit $LASTEXITCODE
+      - name: Prova dei wrapper con docker finto (Windows PowerShell 5.1)
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File test\windows\wrappers.test.ps1
+          exit $LASTEXITCODE

@@ -1,5 +1,5 @@
 import { LlmpodError, Codes } from '../../core/errors.js';
-import { PRESETS, ZAI_NOTICE } from '../../core/advisor/presets.js';
+import { PRESETS, ZAI_NOTICE, CLAUDE_CLI_IN_DOCKER, availablePresets } from '../../core/advisor/presets.js';
 import { testAdvisor } from '../../core/advisor/advisor.js';
 import { table } from '../render.js';
 
@@ -8,10 +8,12 @@ const FIELDS = ['LLMPOD_ADVISOR_PRESET', 'LLMPOD_ADVISOR_API_KEY', 'LLMPOD_ADVIS
 export async function configureAdvisor(ctx, { preset: chosen } = {}) {
   const { io, store } = ctx;
   const env = store.readEnv();
-  io.out(table(Object.entries(PRESETS).map(([id, p]) => ({ id, label: p.label })), [{ key: 'id', label: 'Preset' }, { key: 'label', label: 'Descrizione' }]));
-  const preset = chosen ?? await io.askText('Preset del consulente:', env.LLMPOD_ADVISOR_PRESET ?? 'zai-coding-plan');
+  const offered = availablePresets(ctx.env);
+  io.out(table(Object.entries(offered).map(([id, p]) => ({ id, label: p.label })), [{ key: 'id', label: 'Preset' }, { key: 'label', label: 'Descrizione' }]));
+  const preset = chosen ?? await io.askText('Preset del consulente:', offered[env.LLMPOD_ADVISOR_PRESET] ? env.LLMPOD_ADVISOR_PRESET : 'zai-coding-plan');
   const p = PRESETS[preset];
-  if (!p) throw new LlmpodError(Codes.INVALID_INPUT, `Preset sconosciuto: "${preset}"`, { hint: `Preset: ${Object.keys(PRESETS).join(', ')}` });
+  if (!p) throw new LlmpodError(Codes.INVALID_INPUT, `Preset sconosciuto: "${preset}"`, { hint: `Preset: ${Object.keys(offered).join(', ')}` });
+  if (!offered[preset]) throw new LlmpodError(Codes.INVALID_INPUT, CLAUDE_CLI_IN_DOCKER);
 
   const cfg = store.readConfig();
   let zaiNoticeAcknowledged = Boolean(cfg.advisor?.zaiNoticeAcknowledged);

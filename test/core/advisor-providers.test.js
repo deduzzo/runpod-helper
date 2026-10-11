@@ -110,4 +110,11 @@ describe('provider claude -p', () => {
     await expect(createProvider(cfg, { spawn: fakeSpawn({ error: Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }) }) }).complete({ system: 's', user: 'u' }))
       .rejects.toMatchObject({ code: 'ADVISOR_NOT_CONFIGURED' });
   });
+
+  it('in Docker (LLMPOD_IN_DOCKER=1) il preset claude-cli non funziona: INVALID_INPUT', () => {
+    const cfg = { preset: 'claude-cli', protocol: 'claude-cli', timeoutMs: 180000 };
+    expect(() => createProvider(cfg, { spawn: fakeSpawn({}), env: { LLMPOD_IN_DOCKER: '1' } }))
+      .toThrow(expect.objectContaining({ code: 'INVALID_INPUT', message: 'Il preset claude-cli non funziona nel container: usa un altro preset o la CLI senza Docker' }));
+    expect(() => createProvider(cfg, { spawn: fakeSpawn({}), env: {} })).not.toThrow();
+  });
 });

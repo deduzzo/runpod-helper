@@ -12,6 +12,13 @@ export const PRESETS = Object.freeze({
   pod: { label: 'Modello del Pod (solo correzioni dopo up)', protocol: 'openai' },
 });
 
+export const CLAUDE_CLI_IN_DOCKER = 'Il preset claude-cli non funziona nel container: usa un altro preset o la CLI senza Docker';
+
+// Preset proponibili: dentro Docker "claude" non esiste nel container, quindi claude-cli non è offerto.
+export function availablePresets(env = {}) {
+  return Object.fromEntries(Object.entries(PRESETS).filter(([id]) => !(id === 'claude-cli' && env.LLMPOD_IN_DOCKER === '1')));
+}
+
 const SAFE_URL = /^https:\/\/|^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/;
 
 export function resolveAdvisorConfig(env, { endpoint } = {}) {

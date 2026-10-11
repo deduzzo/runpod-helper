@@ -62,4 +62,16 @@ describe('config', () => {
     s.writeConfig({ dataCenterId: 'EU-RO-1' });
     expect(s.readConfig().dataCenterId).toBe('EU-RO-1');
   });
+
+  it('con LLMPOD_HOST_OS=windows (file montati 0777) niente controllo dei permessi né chmod', () => {
+    const s = createStore({ dir, platform: 'linux', env: { LLMPOD_HOST_OS: 'windows' } });
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o755);
+    s.writeEnv({ A: '1' });
+    fs.chmodSync(path.join(dir, '.env'), 0o777);
+    expect(() => s.checkPermissions()).not.toThrow();
+    expect(mode(dir)).toBe(0o755); // chmod 700 della cartella saltato
+    const normal = createStore({ dir, platform: 'linux', env: {} });
+    expect(() => normal.checkPermissions()).toThrow(expect.objectContaining({ code: 'CONFIG_PERMISSIONS' }));
+  });
 });

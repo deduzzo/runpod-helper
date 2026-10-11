@@ -14,7 +14,7 @@ import { zcodeDir, isZcodeRunning } from '../core/clients/zcode.js';
 export const VERSION = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
 export function createContext({ env = process.env, io, overrides = {}, platform = process.platform }) {
-  const store = createStore({ dir: configDir(env), platform });
+  const store = createStore({ dir: configDir(env), platform, env });
   store.checkPermissions();
   const http = overrides.http ?? createHttp({ userAgent: `llmpod/${VERSION}` });
   const events = createEvents();
@@ -49,7 +49,7 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
           if (!force && store.readConfig().advisor?.enabled === false) return null;
           const cfg = resolveAdvisorConfig(store.readEnv(), { endpoint });
           if (!cfg || (cfg.podOnly && !endpoint)) return null;
-          const p = createProvider(cfg, { http, spawn: ctx.spawn });
+          const p = createProvider(cfg, { http, spawn: ctx.spawn, env });
           p.podOnly = Boolean(cfg.podOnly);
           return p;
         },
