@@ -1,5 +1,4 @@
-import { formatEnv } from '../../core/clients/env-format.js';
-import { claudeEnv } from '../../core/clients/claude-code.js';
+import { formatEnv, clientExports } from '../../core/clients/env-format.js';
 
 export function register(program, getCtx) {
   program.command('env')
@@ -9,13 +8,7 @@ export function register(program, getCtx) {
     .action(async (opts) => {
       const ctx = getCtx();
       const ep = await ctx.ops.endpoint(await ctx.ops.resolveProfile(opts.profile));
-      const env = {
-        ...claudeEnv(ep),
-        OPENAI_BASE_URL: `${ep.baseUrl}/v1`,
-        OPENAI_API_KEY: ep.apiKey,
-        LLMPOD_MODEL: ep.servedName,
-        LLMPOD_API_KEY: ep.apiKey,
-      };
+      const env = clientExports(ep);
       // Uscita volutamente non mascherata: l'utente chiede esplicitamente gli export con la chiave.
       ctx.io.raw(formatEnv(env, opts.format));
     });

@@ -89,3 +89,13 @@ export async function adviseRepair({ provider, profile, args, error, lastLines, 
   const review = reviewAdvice({ advice, baseArgs: args, flags });
   return { ...review, rationale: advice.rationale, warnings: advice.warnings };
 }
+
+// Verifica che il consulente risponda con una proposta valida (usata da "llmpod advisor --test" e dall'API).
+export async function testAdvisor(provider) {
+  const { text } = await provider.complete({
+    system: 'Reply ONLY with this JSON: {"set":{},"rationale":"ok","warnings":[]}',
+    user: 'Test di connessione di llmpod.', maxTokens: 100,
+  });
+  parseAdvice(text);
+  return { ok: true, label: provider.label };
+}

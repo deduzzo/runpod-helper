@@ -8,6 +8,7 @@ import { createApp } from '../../src/server/app.js';
 import { HttpError, readJson, sendJson, parseCookies, safeEqual } from '../../src/server/http-utils.js';
 import { LlmpodError, Codes } from '../../src/core/errors.js';
 import { registerSecret, clearSecrets } from '../../src/core/secrets.js';
+import { request } from './helpers.js';
 
 const TOKEN = 'token-di-prova-1234567890';
 let server;
@@ -16,18 +17,7 @@ let baseDir;
 let staticDir;
 let effects = 0;
 
-function req(pathname, { method = 'GET', headers = {}, body, host } = {}) {
-  return new Promise((resolve, reject) => {
-    const r = http.request({ host: '127.0.0.1', port, path: pathname, method, headers: { host: host ?? `127.0.0.1:${port}`, ...headers } }, (res) => {
-      let data = '';
-      res.on('data', (c) => { data += c; });
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
-    });
-    r.on('error', reject);
-    if (body) r.write(body);
-    r.end();
-  });
-}
+const req = (pathname, opts) => request(port, pathname, opts);
 
 const AUTH = { cookie: `llmpod_session=${TOKEN}` };
 const POST_HEADERS = () => ({ ...AUTH, origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json' });
