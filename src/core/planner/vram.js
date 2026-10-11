@@ -32,6 +32,35 @@ export function downloadBytes(tree) {
 // Byte da scaricare per un profilo; i profili vecchi (senza estimate.downloadBytes) ripiegano su weightsBytes.
 export const profileDownloadBytes = (profile) => profile.estimate?.downloadBytes ?? profile.model.weightsBytes;
 
+// Strati senza KV cache per token: attenzione lineare (Gated DeltaNet) o ricorrenti; hanno uno stato di dimensione costante per sequenza.
+const CONSTANT_STATE_LAYERS = ['linear_attention', 'mamba'];
+
+// Numero di strati con KV cache per token e di strati a stato costante. layer_types (se presente) è la fonte più precisa; altrimenti
+// full_attention_interval (un strato ogni `interval` è ad attenzione completa); altrimenti tutti gli strati hanno KV cache.
+function layerSplit(c) {
+  const layers = c.num_hidden_layers;
+  if (Array.isArray(c.layer_types) && c.layer_types.length > 0) {
+    const constant = c.layer_types.filter((t) => CONSTANT_STATE_LAYERS.includes(t)).length;
+    return { kv: c.layer_types.length - constant, constant };
+  }
+  if (c.full_attention_interval > 1 && layers > 0) {
+    const kv = Math.floor(layers / c.full_attention_interval);
+    return { kv, constant: layers - kv };
+  }
+  return { kv: layers, constant: 0 };
+}
+
+// Stato lineare per sequenza (Gated DeltaNet): per strato lineare linear_num_value_heads × linear_key_head_dim × linear_value_head_dim
+// × 4 byte (FP32). Le convoluzioni (linear_conv_kernel_dim) sono trascurate: vale come stima, in eccesso rispetto alla KV quantizzata.
+// 0 se la config non dichiara le dimensioni.
+function linearStateBytes(c, nLinear) {
+  const { linear_num_value_heads: vh, linear_key_head_dim: kd, linear_value_head_dim: vd } = c;
+  return vh > 0 && kd > 0 && vd > 0 ? nLinear * vh * kd * vd * 4 : 0;
+}
+
+// KV cache per token (kvDtypeBytes per elemento). Per le architetture ibride (layer_types con strati lineari, o
+// full_attention_interval) contano solo gli strati ad attenzione completa; `stateBytes` è lo stato costante per sequenza degli
+// strati lineari. Gli strati a finestra scorrevole sono trattati prudentemente come attenzione completa.
 export function kvBytesPerToken(config, kvDtypeBytes = 2) {
   const c = textConfig(config);
   const layers = c.num_hidden_layers;
@@ -41,8 +70,27 @@ export function kvBytesPerToken(config, kvDtypeBytes = 2) {
   const heads = c.num_attention_heads;
   const kvHeads = c.num_key_value_heads ?? heads;
   const headDim = c.head_dim ?? c.hidden_size / heads;
-  // Stima prudente: anche le architetture a finestra scorrevole/ibride sono trattate ad attenzione completa.
-  return { bytes: 2 * layers * kvHeads * headDim * kvDtypeBytes, kind: 'full' };
+  const { kv, constant } = layerSplit(c);
+  const bytes = 2 * kv * kvHeads * headDim * kvDtypeBytes;
+  if (constant > 0) return { bytes, kind: 'hybrid', stateBytes: linearStateBytes(c, constant) };
+  return { bytes, kind: 'full' };
+}
+
+// Il modello ha un draft head MTP (decodifica speculativa)? Con l'indice dei pesi decide la presenza di tensori mtp.* (o, in stile
+// DeepSeek/GLM, di uno strato oltre num_hidden_layers quando la config dichiara strati nextn): se l'indice dice che mancano, mancano
+// anche se la config li dichiara (checkpoint ripuliti). Senza indice (null/undefined) decide la config.
+export function hasMtp(config, weightMap) {
+  const c = { ...(config.text_config ?? {}), ...config };
+  const declared = (c.mtp_num_hidden_layers ?? 0) > 0 || (c.num_nextn_predict_layers ?? 0) > 0;
+  if (weightMap && typeof weightMap === 'object') {
+    const keys = Object.keys(weightMap);
+    if (keys.some((k) => /(^|\.)mtp\./.test(k))) return true;
+    if ((c.num_nextn_predict_layers ?? 0) > 0 && c.num_hidden_layers > 0) {
+      return keys.some((k) => k.startsWith(`model.layers.${c.num_hidden_layers}.`));
+    }
+    return false;
+  }
+  return declared;
 }
 
 // In quante GPU si ripartisce davvero la KV cache: con MLA la cache latente non è sharded;
@@ -54,13 +102,15 @@ export function kvShardsFor(config, tp) {
   return Math.max(1, Math.min(tp, kvHeads));
 }
 
-export function estimate({ weightsBytes: w, kvPerToken, context, concurrency, tp, kvShards, overheadGiB = 2 }) {
+// extraGiB: memoria costante per GPU oltre pesi e KV (stato lineare × concorrenza, riserva del draft MTP): non divisa per tp (stima per eccesso).
+export function estimate({ weightsBytes: w, kvPerToken, context, concurrency, tp, kvShards, overheadGiB = 2, extraGiB = 0 }) {
   if (!(kvShards >= 1)) throw new Error('estimate: kvShards è obbligatorio (usa kvShardsFor(config, tp))');
   const kvBytes = kvPerToken * context * concurrency;
   return {
     weightsGiB: w / GiB,
     kvGiB: kvBytes / GiB,
-    perGpuGiB: (w / tp + kvBytes / kvShards) / GiB + overheadGiB,
+    perGpuGiB: (w / tp + kvBytes / kvShards) / GiB + overheadGiB + extraGiB,
+    extraGiB,
   };
 }
 

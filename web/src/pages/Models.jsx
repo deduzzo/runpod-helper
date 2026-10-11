@@ -34,7 +34,7 @@ export default function Models() {
         {rows && rows.length > 0 && (
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-gray-400"><tr><th className="py-1">Modello</th><th>Parametri</th><th>Pesi</th><th>Licenza</th><th>Gated</th><th>Parser</th></tr></thead>
+              <thead className="text-gray-400"><tr><th className="py-1">Modello</th><th>Parametri</th><th>Pesi</th><th>Licenza</th><th>Gated</th><th>Parser</th><th>MTP</th></tr></thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} aria-selected={model.trim() === r.id} className={`cursor-pointer border-t border-white/5 transition hover:bg-white/5 ${model.trim() === r.id ? 'bg-cyan-400/10' : ''}`} onClick={() => setModel(r.id)}>
@@ -44,6 +44,7 @@ export default function Models() {
                     <td>{r.license ?? '?'}</td>
                     <td>{r.gated ? <Badge tone="amber">sì</Badge> : 'no'}</td>
                     <td>{r.parser ?? <Badge tone="amber">nessuno</Badge>}</td>
+                    <td>{r.mtp ? <Badge tone="green">sì</Badge> : '?'}</td>
                   </tr>
                 ))}
               </tbody>

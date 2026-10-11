@@ -129,7 +129,7 @@ npm link             # rende disponibile il comando "llmpod"
 
 ```bash
 llmpod init                                   # chiave Runpod, token HF, datacenter, network volume
-llmpod search qwen3 coder                     # modelli con chat template e tool parser noto (esclusi i modelli MLX, non supportati da vLLM; --all li include)
+llmpod search qwen3 coder                     # modelli con chat template e tool parser noto (esclusi i modelli MLX e i repository solo GGUF, non supportati da vLLM; --all li include)
 llmpod plan Qwen/Qwen3-Coder-30B-A3B-Instruct --context 65536
 llmpod save qwen3-coder
 llmpod up qwen3-coder                         # mostra il costo orario e chiede conferma
@@ -137,6 +137,13 @@ llmpod run claude                             # oppure: opencode, pi, zcode
 llmpod status
 llmpod down                                   # il volume con i pesi resta
 ```
+
+Modelli e piano: vLLM carica solo pesi safetensors (anche quantizzati AWQ/GPTQ/FP8); un repository GGUF viene
+rifiutato subito con l'indicazione del modello base. Per le architetture ibride (Qwen3.5: attenzione lineare + completa)
+la KV cache conta solo gli strati ad attenzione completa, più uno stato costante per sequenza. Se i pesi contengono il
+draft head MTP (tensori `mtp.*`; `llmpod search` lo segnala con la colonna MTP quando tag o nome lo dichiarano e mette
+prima le varianti MTP a parità di modello base) il piano aggiunge `--speculative-config` con metodo `mtp` e 1 token
+speculativo, riserva circa 1 GiB di VRAM e mostra la riga `MTP:`. Per disattivarlo: `llmpod plan … --set speculative-config=false`.
 
 Il Pod si spegne da solo dopo 30 minuti senza richieste o dopo 8 ore in ogni caso
 (valori nel profilo, sezione `watchdog`), anche a portatile spento.

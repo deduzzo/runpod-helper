@@ -1,0 +1,98 @@
+[
+  {
+    "type": "directory",
+    "oid": "0c4939ecef51a914dc13fa55e88af2ab4e2cf0fa",
+    "size": 0,
+    "path": "GSQ-3bit"
+  },
+  {
+    "type": "file",
+    "oid": "c115d3614ff39a1a45770178fd5dea264f906b68",
+    "size": 3404,
+    "path": "GSQ-3bit/config.json"
+  },
+  {
+    "type": "file",
+    "oid": "892b314a2dc1fe378845340fbd2a889c109003f1",
+    "size": 5085614360,
+    "lfs": {
+      "oid": "2fe557b1f1a5c625b09070c2c175ff3be0fb6dd9ce752401141a4040e5e3d9a1",
+      "size": 5085614360,
+      "pointerSize": 135
+    },
+    "xetHash": "aefbca84ab67bd9ecde1fedea4c28340e73359db0af244323048fce78c48ab15",
+    "path": "GSQ-3bit/model-00001-of-00065.safetensors"
+  },
+  {
+    "type": "file",
+    "oid": "73ac5096be24ea33db113621aab3540192931984",
+    "size": 369749056,
+    "lfs": {
+      "oid": "598758abbdb5c95dd9bc1096eeac274767612474c6b95a839e0a8ac781715980",
+      "size": 369749056,
+      "pointerSize": 134
+    },
+    "xetHash": "1a8bde9b781cb66454620ac547b7c81e8ad63c8478e65bc0e38ffae69f4717e8",
+    "path": "GSQ-3bit/model-00002-of-00065.safetensors"
+  },
+  {
+    "type": "file",
+    "oid": "c42d0ce14ece18bf1e756acfce4a31b0f8da64f9",
+    "size": 16547400032,
+    "lfs": {
+      "oid": "5ae89d6720ba0a27f643e6fbb0d1b557870d17aeff23156e5981e863ec16985c",
+      "size": 16547400032,
+      "pointerSize": 136
+    },
+    "xetHash": "8a0d64b4d83d636f2770ecd3b9831dfeb502f59b1a5217532b4c952bdd01d71e",
+    "path": "Qwen3.8-27B-Heretic-Q4_K_M.gguf"
+  },
+  {
+    "type": "file",
+    "oid": "618fdfe63164d41c91c14e32c55ca1dfacbea569",
+    "size": 35167,
+    "path": "README.md"
+  },
+  {
+    "type": "file",
+    "oid": "d9271a5646425605172dca5f2f0685426c855f33",
+    "size": 16547399968,
+    "lfs": {
+      "oid": "6c6789d3eac010a66dd14fc2e77b83b344d82d541937777cff4ea7b8e91d0a95",
+      "size": 16547399968,
+      "pointerSize": 136
+    },
+    "xetHash": "c9c0887d07f63df63a1d0b57ba9d721c7efce52037494679b7dfe5be4e3a1e12",
+    "path": "RVN-Q4_K_M.gguf"
+  },
+  {
+    "type": "file",
+    "oid": "e6d4e0034749a495c19db3d6b5268a262e897e7c",
+    "size": 28595763488,
+    "lfs": {
+      "oid": "ee66079819c13d6359ac0d70345ce39160386936a7f792cb668dfb705fab63c7",
+      "size": 28595763488,
+      "pointerSize": 136
+    },
+    "xetHash": "5c5c440bb053a619d94f85643105869d39b45a8e712116554d11958514b0f06e",
+    "path": "RVN-Q8_0.gguf"
+  },
+  {
+    "type": "file",
+    "oid": "c0c686f9c38d70d179fb7b5f5aa7530bc913dda3",
+    "size": 8952,
+    "path": "chat_template.jinja"
+  },
+  {
+    "type": "file",
+    "oid": "1f53dcb74687a88208cdea802a0ebdb9efbdef5e",
+    "size": 629247008,
+    "lfs": {
+      "oid": "2e968a6af97ce35d8971890b257b9b7edabf20ad91450501fa53162a19ee33eb",
+      "size": 629247008,
+      "pointerSize": 134
+    },
+    "xetHash": "093a698ea34b00992c445250b3c28b46d2569c456b157804d4814a8b8de032ea",
+    "path": "mmproj-Qwen3.8-27B-Q8_0.gguf"
+  }
+]

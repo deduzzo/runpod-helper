@@ -21,6 +21,7 @@ export function register(program, getCtx) {
         { label: 'Aggiornato', value: (r) => (r.lastModified ? r.lastModified.slice(0, 10) : '?') },
         { key: 'weights', label: 'Pesi', align: 'right' },
         { key: 'parser', label: 'Tool parser' },
+        { label: 'MTP', value: (r) => (r.mtp === true ? 'sì' : '?') },
       ]));
       ctx.io.out('\nLa VRAM necessaria comprende anche la KV cache: calcolala con "llmpod plan <modello>".');
     });

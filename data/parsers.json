@@ -1,6 +1,8 @@
 {
   "vllmVersion": "v0.30.0",
   "rules": [
+    { "modelType": ["qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"], "tool": "qwen3_coder", "reasoning": "qwen3" },
+    { "architectures": ["Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration"], "tool": "qwen3_coder", "reasoning": "qwen3" },
     { "modelType": "kimi_k2", "idPattern": "thinking", "tool": "kimi_k2", "reasoning": "kimi_k2" },
     { "modelType": "kimi_k2", "tool": "kimi_k2" },
     { "architectures": ["DeepseekV32ForCausalLM"], "tool": "deepseek_v32", "reasoning": "deepseek_v3" },
