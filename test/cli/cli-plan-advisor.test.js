@@ -75,4 +75,40 @@ describe('plan con consulente', () => {
     expect(plan.vllm.args).toContain('--reasoning-parser');
     expect(plan.parsers.reasoning).toBe('qwen3');
   });
+
+  it('dopo "advisor --disable": plan --advisor usa il consulente, plan senza flag no', async () => {
+    const s = setup();
+    expect(await s.run(['advisor', '--disable'])).toBe(0);
+    const http = advisorHttp(PROPOSAL);
+    expect(await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'], { hf: hf(), runpod: runpod(), http })).toBe(0);
+    expect(http.request.mock.calls.some(([, url]) => url.includes('/chat/completions'))).toBe(false);
+    expect(s.store.readJson('last-plan.json').advisor).toBeNull();
+    expect(await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct', '--advisor', '--yes'], { hf: hf(), runpod: runpod(), http })).toBe(0);
+    expect(http.request.mock.calls.some(([, url]) => url.includes('/chat/completions'))).toBe(true);
+    expect(s.store.readJson('last-plan.json').advisor).toMatchObject({ preset: 'zai', applied: true });
+  });
+
+  it('--advisor senza un preset configurato: avviso e piano di base', async () => {
+    const s = sandbox();
+    s.store.writeConfig({ dataCenterId: 'EU-RO-1', advisor: { enabled: false } });
+    const http = advisorHttp(PROPOSAL);
+    expect(await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct', '--advisor'], { hf: hf(), runpod: runpod(), http })).toBe(0);
+    expect(s.all()).toMatch(/Consulente non configurato/);
+    expect(http.request.mock.calls.some(([, url]) => url.includes('/chat/completions'))).toBe(false);
+  });
+
+  it('stessa regola di up: enabled non impostato ma preset configurato → il consulente è attivo', async () => {
+    const s = sandbox();
+    s.store.writeConfig({ dataCenterId: 'EU-RO-1' });
+    s.store.writeEnv({ LLMPOD_ADVISOR_PRESET: 'zai', LLMPOD_ADVISOR_API_KEY: 'CHIAVE-CONSULENTE-FINTA-1' });
+    const http = advisorHttp(PROPOSAL);
+    await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct', '--yes'], { hf: hf(), runpod: runpod(), http });
+    expect(s.store.readJson('last-plan.json').advisor).toMatchObject({ applied: true });
+    // enabled: true senza preset → non attivo
+    const s2 = sandbox();
+    s2.store.writeConfig({ dataCenterId: 'EU-RO-1', advisor: { enabled: true } });
+    const http2 = advisorHttp(PROPOSAL);
+    await s2.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'], { hf: hf(), runpod: runpod(), http: http2 });
+    expect(s2.store.readJson('last-plan.json').advisor).toBeNull();
+  });
 });

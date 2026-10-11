@@ -38,8 +38,11 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
     get advisor() {
       return {
         config: (endpoint) => resolveAdvisorConfig(store.readEnv(), { endpoint }),
-        provider(endpoint) {
-          if (store.readConfig().advisor?.enabled === false) return null;
+        // Regola unica di attivazione (plan e up): non disattivato con "advisor --disable" E preset configurato nel .env.
+        active: () => store.readConfig().advisor?.enabled !== false && Boolean(store.readEnv().LLMPOD_ADVISOR_PRESET),
+        // force: ignora "advisor --disable" (es. plan --advisor); richiede comunque una configurazione valida.
+        provider(endpoint, { force = false } = {}) {
+          if (!force && store.readConfig().advisor?.enabled === false) return null;
           const cfg = resolveAdvisorConfig(store.readEnv(), { endpoint });
           if (!cfg || (cfg.podOnly && !endpoint)) return null;
           const p = createProvider(cfg, { http, spawn: ctx.spawn });

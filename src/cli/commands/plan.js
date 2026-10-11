@@ -41,10 +41,10 @@ export function register(program, getCtx) {
         off();
       }
       plan.advisor = null;
-      const advisorWanted = opts.advisor === true || (opts.advisor !== false && cfg.advisor?.enabled);
+      const advisorWanted = opts.advisor === true || (opts.advisor !== false && ctx.advisor.active());
       if (advisorWanted) {
         try {
-          const provider = ctx.advisor.provider();
+          const provider = ctx.advisor.provider(undefined, { force: opts.advisor === true });
           if (!provider) {
             ctx.io.err('ℹ Consulente non configurato o disponibile solo per le correzioni dopo up: uso gli argomenti di base');
           } else {
