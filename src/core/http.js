@@ -44,8 +44,18 @@ export function createHttp({ fetch = globalThis.fetch, userAgent, timeoutMs = 30
   return { request };
 }
 
+// Estrae un dettaglio leggibile dal corpo d'errore. Gli errori annidati ({ error: { message } })
+// usano il campo message; un oggetto senza message diventa JSON. Si maschera PRIMA di troncare,
+// così un segreto tagliato a 300 caratteri non lascia un prefisso in chiaro.
+function errorDetail(d) {
+  const picked = typeof d === 'string' ? d : (d?.detail ?? d?.title ?? d?.error ?? d?.message ?? '');
+  const text = typeof picked === 'object' && picked !== null
+    ? String(picked.message ?? JSON.stringify(picked) ?? '')
+    : String(picked);
+  return redact(text).slice(0, 300);
+}
+
 export function httpError(res, what) {
-  const d = res.data;
-  const detail = typeof d === 'string' ? d.slice(0, 300) : d?.detail ?? d?.title ?? d?.error ?? d?.message ?? '';
+  const detail = errorDetail(res.data);
   return new LlmpodError(Codes.HTTP, redact(`${what}: HTTP ${res.status} ${detail}`.trim()), { details: { status: res.status } });
 }

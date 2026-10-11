@@ -42,6 +42,7 @@ describe('provider HTTP', () => {
     const err = await p.complete({ system: 's', user: 'u' }).catch((e) => e);
     expect(err.code).toBe('ADVISOR_FAILED');
     expect(err.hint).toMatch(/llmpod advisor/);
+    expect(err.message).toContain('invalid key <REDATTO>');
     expect(JSON.stringify({ m: err.message, h: err.hint })).not.toContain(KEY);
   });
 

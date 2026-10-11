@@ -59,4 +59,16 @@ describe('http', () => {
     expect(err.code).toBe('HTTP');
     expect(err.message).toBe('Creazione Pod: HTTP 400 header <REDATTO> errato');
   });
+
+  it('httpError legge il message degli errori annidati', () => {
+    const err = httpError({ status: 404, data: { error: { type: 'not_found_error', message: 'model: glm-9 not found' } } }, 'Consulente');
+    expect(err.message).toBe('Consulente: HTTP 404 model: glm-9 not found');
+  });
+
+  it('httpError senza message serializza il valore e tronca a 300 caratteri', () => {
+    const err = httpError({ status: 500, data: { error: { code: 'x'.repeat(400) } } }, 'Consulente');
+    const prefix = 'Consulente: HTTP 500 ';
+    expect(err.message.startsWith(prefix + '{"code":"xxx')).toBe(true);
+    expect(err.message.length).toBe(prefix.length + 300);
+  });
 });
