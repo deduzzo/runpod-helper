@@ -6,7 +6,11 @@ import { registerSecret, redactObject } from './secrets.js';
 import { profileKeyVar } from './config.js';
 import { proxyUrl } from './runpod.js';
 import { confirmCost, confirmAction, fmtUSD } from './confirm.js';
-import { buildPodBody } from './pod/body.js';
+import { buildPodBody, argsForCount } from './pod/body.js';
+import { adviseRepair } from './advisor/advisor.js';
+import { diffArgs } from './advisor/advice.js';
+import { loadFlags } from './planner/vllm-args.js';
+import { syncDerivedFields } from './planner/plan.js';
 import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
@@ -56,6 +60,7 @@ export function profileFromPlan(plan, { name, volume, watchdog }) {
     watchdog,
     estimate: { ...plan.estimate, hourlyUSD: plan.hourlyUSD },
     warnings: plan.warnings,
+    advisor: plan.advisor ?? null,
     createdAt: new Date().toISOString(),
   };
 }
@@ -75,7 +80,7 @@ function suggestContext(kvTokens, profile) {
   return suggestion > profile.context * 1.25 ? suggestion : null;
 }
 
-export function createOps({ store, runpod, hf, http, events, ask, now = Date.now, sleep = defaultSleep, zcode = { dir: zcodeDir() } }) {
+export function createOps({ store, runpod, hf, http, events, ask, now = Date.now, sleep = defaultSleep, zcode = { dir: zcodeDir() }, advisor = null }) {
   const keyOf = (name) => store.readEnv()[profileKeyVar(name)];
 
   function ensureKey(name) {
@@ -148,6 +153,65 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
     } catch (e) {
       events.emit('warning', { message: `Terminazione del Pod ${podId} non riuscita: ${e.message}. Controlla su https://www.runpod.io/console/pods` });
     }
+  }
+
+  const REPAIRABLE = [Codes.OOM, Codes.VLLM_ERROR, Codes.SMOKE_TEST_FAILED];
+
+  async function repairWithAdvisor({ err, attempts, yes, endpoint, profile, currentArgs, sup, hourly }) {
+    if (!advisor || yes || attempts >= 3 || err.details?.terminating || !REPAIRABLE.includes(err.code)) return null;
+    let provider;
+    try {
+      provider = advisor.provider(endpoint);
+    } catch (e) {
+      events.emit('warning', { message: `Consulente non disponibile: ${e.message}` });
+      return null;
+    }
+    if (!provider) return null;
+    if (provider.podOnly && err.code !== Codes.SMOKE_TEST_FAILED) return null;
+    if (!(await ask(`Avvio non riuscito (${err.code}). Chiedere una correzione al consulente? Il Pod continua a costare ${fmtUSD(hourly)}/h`, true))) return null;
+    let advice;
+    try {
+      events.emit('phase', { message: `Consulto ${provider.label} (tentativo ${attempts + 1}/3)` });
+      advice = await adviseRepair({ provider, profile, args: currentArgs, error: { code: err.code, message: err.message }, lastLines: err.details?.lastLines ?? [], smoke: err.code === Codes.SMOKE_TEST_FAILED ? err.details : null, flags: loadFlags() });
+    } catch (e) {
+      events.emit('warning', { message: `Consulente non disponibile: ${e.message}` });
+      return null;
+    }
+    // Gli argomenti proposti vanno riallineati (tool-call-parser <=> --enable-auto-tool-choice) PRIMA di mostrarli e applicarli.
+    const fixed = syncDerivedFields({ vllm: { args: [...advice.args] } });
+    const changes = diffArgs(currentArgs, fixed.vllm.args);
+    events.emit('advice', { rationale: advice.rationale, changes, rejected: advice.rejected, warnings: advice.warnings });
+    if (!advice.accepted.length) {
+      events.emit('warning', { message: 'Il consulente non ha proposto modifiche applicabili' });
+      return null;
+    }
+    if (!(await ask('Applicare le modifiche e riavviare vLLM sul Pod?', true))) return null;
+    const r = await sup.reload(fixed.vllm.args).catch((e) => ({ ok: false, status: 0, data: e.message }));
+    if (!r.ok) {
+      events.emit('warning', { message: `Riavvio di vLLM non riuscito (HTTP ${r.status})` });
+      return null;
+    }
+    events.emit('phase', { message: 'Riavvio di vLLM con gli argomenti corretti' });
+    // Il supervisore imposta args e fase 'loading' prima di fermare il vecchio vLLM: si attende di vederli,
+    // altrimenti waitForReady potrebbe leggere 'ready' dal processo che sta morendo.
+    const deadline = now() + 60_000;
+    for (;;) {
+      const st = await sup.status();
+      if (st && (st.phase === 'error' || (JSON.stringify(st.args) === JSON.stringify(fixed.vllm.args) && st.phase !== 'ready'))) return fixed.vllm.args;
+      if (now() >= deadline) {
+        events.emit('warning', { message: 'Il supervisore non ha confermato il riavvio di vLLM entro 60 secondi' });
+        return null;
+      }
+      await sleep(2000);
+    }
+  }
+
+  function saveProfileArgs(name, args) {
+    const profile = store.readProfile(name);
+    profile.vllm.args = argsForCount(args, profile.gpu.count);
+    syncDerivedFields(profile);
+    store.writeProfile(profile);
+    return profile;
   }
 
   async function up(name, { yes = false, dryRun = false } = {}) {
@@ -239,29 +303,50 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       const sup = createSupervisorClient({ http, podId: pod.id, apiKey });
       events.emit('phase', { message: 'Avvio di vLLM (download e caricamento dei pesi)' });
       const readyOpts = { sup, sleep, now, onStatus: (s) => events.emit('progress', progressOf(s)), onLog: (line) => events.emit('log', { line }) };
+      const baseUrl = proxyUrl(pod.id, 8000);
+      const endpoint = { baseUrl, apiKey, servedName: profile.servedName, context: profile.context, reasoning: Boolean(profile.parsers?.reasoning) };
+      let currentArgs = argsForCount(profile.vllm.args, candidate.count);
+      let repairedArgs = null;
+      let attempts = 0;
       let st;
-      let timeoutMs = readyTimeoutMs(profile.model.weightsBytes);
+      let smoke;
+      let cursor = 0; // cursore dei log del supervisore: dopo un riavvio non si rileggono i log del run precedente
       for (;;) {
         try {
-          st = await waitForReady({ ...readyOpts, timeoutMs });
+          let timeoutMs = readyTimeoutMs(profile.model.weightsBytes);
+          for (;;) {
+            try {
+              st = await waitForReady({ ...readyOpts, since: cursor, timeoutMs });
+              cursor = st.logCursor ?? cursor;
+              break;
+            } catch (err) {
+              cursor = err.details?.logCursor ?? cursor;
+              if (err.code !== Codes.POD_START_TIMEOUT || yes || !(await ask('vLLM non è ancora pronto. Aspettare altri 15 minuti?', true))) throw err;
+              timeoutMs = 15 * 60_000;
+            }
+          }
+          events.emit('phase', { message: 'Smoke test con chiamata a strumento' });
+          smoke = await smokeTest({ http, baseUrl, apiKey, model: profile.servedName });
+          if (!smoke.ok) {
+            const failed = [smoke.models, smoke.messages, smoke.chat].filter((r) => !r.ok).map((r) => r.detail).join(' | ');
+            throw new LlmpodError(Codes.SMOKE_TEST_FAILED, `Smoke test fallito: ${failed}`, { hint: 'Verifica tool-call parser e chat template (llmpod plan … --set tool-call-parser=<nome>)', details: smoke });
+          }
           break;
         } catch (err) {
-          if (err.code !== Codes.POD_START_TIMEOUT || yes || !(await ask('vLLM non è ancora pronto. Aspettare altri 15 minuti?', true))) throw err;
-          timeoutMs = 15 * 60_000;
+          const next = await repairWithAdvisor({ err, attempts, yes, endpoint, profile, currentArgs, sup, hourly: candidate.hourly });
+          if (!next) throw err;
+          attempts += 1;
+          currentArgs = next;
+          repairedArgs = next;
+          // il parser di reasoning può essere cambiato dalla riparazione: i client (ZCode, pi) devono vederlo
+          endpoint.reasoning = Boolean(syncDerivedFields({ vllm: { args: [...next] } }).parsers.reasoning);
         }
       }
-      const baseUrl = proxyUrl(pod.id, 8000);
-      events.emit('phase', { message: 'Smoke test con chiamata a strumento' });
-      const smoke = await smokeTest({ http, baseUrl, apiKey, model: profile.servedName });
-      if (!smoke.ok) {
-        const failed = [smoke.models, smoke.messages, smoke.chat].filter((r) => !r.ok).map((r) => r.detail).join(' | ');
-        throw new LlmpodError(Codes.SMOKE_TEST_FAILED, `Smoke test fallito: ${failed}`, { hint: 'Verifica tool-call parser e chat template (llmpod plan … --set tool-call-parser=<nome>)', details: smoke });
-      }
-      await refreshZcode({ baseUrl, apiKey, servedName: profile.servedName, context: profile.context, reasoning: Boolean(profile.parsers?.reasoning) });
+      await refreshZcode(endpoint);
       return {
         podId: pod.id, baseUrl, hourlyUSD: runningPod.cost ?? candidate.hourly, candidate,
         startupSeconds: Math.round((now() - startedAt) / 1000), kvCacheTokens: st.kvCacheTokens ?? null,
-        contextSuggestion: suggestContext(st.kvCacheTokens, profile), smoke,
+        contextSuggestion: suggestContext(st.kvCacheTokens, profile), smoke, repairedArgs,
       };
     } catch (err) {
       events.emit('warning', { message: `Avvio non riuscito: ${err.message}` });
@@ -332,5 +417,5 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
     throw new LlmpodError(Codes.INVALID_INPUT, 'Specifica il profilo con --profile', { hint: all.length ? `Profili: ${all.join(', ')}` : 'Crea un profilo con: llmpod plan <modello> e llmpod save <nome>' });
   }
 
-  return { saveProfile, up, down, status, endpoint, rotateKey, resolveProfile };
+  return { saveProfile, saveProfileArgs, up, down, status, endpoint, rotateKey, resolveProfile };
 }

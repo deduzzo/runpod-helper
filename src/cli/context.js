@@ -7,6 +7,8 @@ import { createRunpod } from '../core/runpod.js';
 import { createHf } from '../core/hf.js';
 import { createEvents } from '../core/events.js';
 import { createOps } from '../core/ops.js';
+import { resolveAdvisorConfig } from '../core/advisor/presets.js';
+import { createProvider } from '../core/advisor/providers.js';
 import { zcodeDir, isZcodeRunning } from '../core/clients/zcode.js';
 
 export const VERSION = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
@@ -31,7 +33,23 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
       return overrides.hf ?? (cache.hf ??= createHf({ http, token: store.readEnv().HF_TOKEN }));
     },
     get ops() {
-      return (cache.ops ??= createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events, ask: io.ask, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning } }));
+      return (cache.ops ??= createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events, ask: io.ask, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning }, advisor: ctx.advisor }));
+    },
+    get advisor() {
+      return {
+        config: (endpoint) => resolveAdvisorConfig(store.readEnv(), { endpoint }),
+        // Regola unica di attivazione (plan e up): non disattivato con "advisor --disable" E preset configurato nel .env.
+        active: () => store.readConfig().advisor?.enabled !== false && Boolean(store.readEnv().LLMPOD_ADVISOR_PRESET),
+        // force: ignora "advisor --disable" (es. plan --advisor); richiede comunque una configurazione valida.
+        provider(endpoint, { force = false } = {}) {
+          if (!force && store.readConfig().advisor?.enabled === false) return null;
+          const cfg = resolveAdvisorConfig(store.readEnv(), { endpoint });
+          if (!cfg || (cfg.podOnly && !endpoint)) return null;
+          const p = createProvider(cfg, { http, spawn: ctx.spawn });
+          p.podOnly = Boolean(cfg.podOnly);
+          return p;
+        },
+      };
     },
   };
   return ctx;

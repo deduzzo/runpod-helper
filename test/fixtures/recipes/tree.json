@@ -1,0 +1,22 @@
+{ "tree": [
+  { "path": "README.md", "type": "blob" },
+  { "path": "AGENTS.md", "type": "blob" },
+  { "path": ".agents/skills/add-recipe/SKILL.md", "type": "blob" },
+  { "path": "DeepSeek", "type": "tree" },
+  { "path": "DeepSeek/DeepSeek-OCR.md", "type": "blob" },
+  { "path": "DeepSeek/DeepSeek-V3.md", "type": "blob" },
+  { "path": "DeepSeek/DeepSeek-V3_1.md", "type": "blob" },
+  { "path": "DeepSeek/DeepSeek-V3_2.md", "type": "blob" },
+  { "path": "GLM/GLM-ASR.md", "type": "blob" },
+  { "path": "GLM/GLM-V.md", "type": "blob" },
+  { "path": "GLM/GLM.md", "type": "blob" },
+  { "path": "GLM/GLM5.md", "type": "blob" },
+  { "path": "MiniMax/MiniMax-M2.md", "type": "blob" },
+  { "path": "OpenAI/GPT-OSS.md", "type": "blob" },
+  { "path": "Qwen/Qwen2.5-VL.md", "type": "blob" },
+  { "path": "Qwen/Qwen3-Coder-480B-A35B.md", "type": "blob" },
+  { "path": "Qwen/Qwen3-Next.md", "type": "blob" },
+  { "path": "Qwen/Qwen3.md", "type": "blob" },
+  { "path": "moonshotai/Kimi-K2.md", "type": "blob" },
+  { "path": "moonshotai/Kimi-K2-Think.md", "type": "blob" }
+] }

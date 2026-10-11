@@ -1,7 +1,7 @@
 # llmpod — runpod-helper
 
-> **Stato:** CLI v1 funzionante (piano 1). In arrivo: consulente con IA esterna (piano 2),
-> interfaccia web (piano 3), Docker e script di avvio per ogni piattaforma (piano 4).
+> **Stato:** CLI v1 e consulente IA funzionanti (piani 1–2). In arrivo: interfaccia web
+> (piano 3), Docker e script di avvio per ogni piattaforma (piano 4).
 
 `llmpod` è una CLI (con interfaccia web locale) che automatizza il ciclo di vita di un **LLM
 self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di coding agent come
@@ -61,6 +61,31 @@ llmpod down                                   # il volume con i pesi resta
 
 Il Pod si spegne da solo dopo 30 minuti senza richieste o dopo 8 ore in ogni caso
 (valori nel profilo, sezione `watchdog`), anche a portatile spento.
+
+## Consulente IA (facoltativo)
+
+Un LLM esterno può rivedere gli argomenti di vLLM proposti da `llmpod plan` (leggendo la scheda
+del modello e la recipe ufficiale di vLLM) e proporre correzioni se l'avvio fallisce.
+Ogni proposta passa una validazione rigida (solo flag esistenti in vLLM v0.30.0, nessun flag che
+tocchi chiave, host, porta o revisione) e si applica solo con la tua conferma.
+
+```bash
+llmpod advisor            # scegli il preset e inserisci la chiave
+llmpod advisor --test     # verifica la connessione
+llmpod plan <modello>     # il consulente interviene in automatico (--no-advisor per saltarlo)
+```
+
+| Preset | Note |
+|---|---|
+| `zai-coding-plan` | endpoint Anthropic di Z.ai con GLM-5.3. Le condizioni del Coding Plan limitano l'uso agli strumenti supportati: la responsabilità dell'uso da llmpod è tua |
+| `zai` | API Z.ai a consumo |
+| `anthropic` | API Anthropic |
+| `openai` | API OpenAI (indica il modello) |
+| `custom` | qualsiasi endpoint compatibile Anthropic o OpenAI |
+| `claude-cli` | Claude Code installato in locale, senza strumenti |
+| `pod` | il modello appena avviato sul Pod, solo per le correzioni dopo `up` |
+
+La chiave del consulente sta in `~/.config/llmpod/.env` (permessi 600) e non viene mai mostrata.
 
 ## Costi tipici
 
