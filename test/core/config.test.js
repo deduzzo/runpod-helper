@@ -58,7 +58,7 @@ describe('config', () => {
 
   it('readConfig fornisce i default', () => {
     const s = createStore({ dir, platform: 'linux' });
-    expect(s.readConfig()).toMatchObject({ cloud: 'SECURE', vllmImage: 'vllm/vllm-openai:v0.30.0-cu129', volumePricePerGbMonth: 0.07, watchdog: { idleMinutes: 30, maxHours: 8 } });
+    expect(s.readConfig()).toMatchObject({ cloud: 'SECURE', vllmImage: 'vllm/vllm-openai:v0.30.0', volumePricePerGbMonth: 0.07, watchdog: { idleMinutes: 30, maxHours: 8 } });
     s.writeConfig({ dataCenterId: 'EU-RO-1' });
     expect(s.readConfig().dataCenterId).toBe('EU-RO-1');
   });

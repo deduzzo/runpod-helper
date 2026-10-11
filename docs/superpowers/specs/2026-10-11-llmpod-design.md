@@ -347,8 +347,8 @@ template aggiungerebbe solo uno stato da sincronizzare.
 
 Verificati con documentazione ufficiale e chiamate in sola lettura:
 
-1. vLLM: `vllm/vllm-openai:v0.30.0-cu129` (rilascio del 22/09/2026, CUDA 12.9, `minCudaVersion
-   "12.9"`); parser e 382 flag ammessi della v0.30.0 salvati in `data/`. `VLLM_API_KEY` letta
+1. vLLM: `vllm/vllm-openai:v0.30.0` (rilascio del 22/09/2026, CUDA 13.0, `minCudaVersion
+   "13.0"`; la variante `-cu129` è difettosa, vllm-project/vllm#59057); parser e 382 flag ammessi della v0.30.0 salvati in `data/`. `VLLM_API_KEY` letta
    dall'ambiente; solo `Authorization: Bearer`; `/v1/messages` attivo senza flag; `/metrics` e
    `/health` non protetti (rischio accettato: solo contatori).
 2. Runpod: network volume su `/v2/network-volumes` (corpo `{ name, size, dataCenter }`); nessun

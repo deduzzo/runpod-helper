@@ -8,8 +8,9 @@ export const PROFILE_NAME = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const SECRET_VAR = /KEY|TOKEN|SECRET/;
 const DEFAULT_CONFIG = {
   cloud: 'SECURE',
-  vllmImage: 'vllm/vllm-openai:v0.30.0-cu129',
-  minCudaVersion: '12.9',
+  // L'immagine -cu129 di v0.30.0 è rotta (torch cu130 con torchvision cu129: vllm-project/vllm#59057).
+  vllmImage: 'vllm/vllm-openai:v0.30.0',
+  minCudaVersion: '13.0',
   volumePricePerGbMonth: 0.07,
   watchdog: { idleMinutes: 30, maxHours: 8 },
 };
