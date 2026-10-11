@@ -63,7 +63,14 @@ export function createHf({ http, token } = {}) {
     if (r.status === 404) return null;
     if (r.status === 401 || r.status === 403) {
       const gatedHint = `Richiedi l'accesso su https://huggingface.co/${id} e imposta HF_TOKEN con "llmpod init"`;
-      if (r.status === 403 || token) throw new LlmpodError(Codes.GATED_MODEL, `Accesso negato a ${id}`, { hint: gatedHint });
+      if (r.status === 403 || (!token && r.headers?.get?.('x-error-code') === 'GatedRepo')) {
+        throw new LlmpodError(Codes.GATED_MODEL, `Accesso negato a ${id}`, { hint: gatedHint });
+      }
+      if (token) {
+        throw new LlmpodError(Codes.HF_AUTH, `${what}: token Hugging Face non valido o scaduto`, {
+          hint: 'Crea un token "Read" su https://huggingface.co/settings/tokens e aggiornalo con "llmpod init"',
+        });
+      }
       throw new LlmpodError(Codes.HF_AUTH, `${what}: serve un token Hugging Face per ${id}`, { hint: gatedHint });
     }
     throw httpError(r, what);

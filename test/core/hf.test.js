@@ -79,4 +79,28 @@ describe('createHf', () => {
     await createHf({ http: http2 }).getConfig('o/m', 'abc');
     expect(http2.request.mock.calls[0][2].headers.authorization).toBeUndefined();
   });
+
+  it('401 con token invalido diventa HF_AUTH con messaggio "non valido"', async () => {
+    const http = fakeHttp([[/resolve/, { ok: false, status: 401, data: 'Invalid credentials', headers: new Headers() }]]);
+    await expect(createHf({ http, token: 'hf_x' }).getConfig('o/m', 'main'))
+      .rejects.toMatchObject({ code: 'HF_AUTH', message: expect.stringContaining('non valido') });
+  });
+
+  it('401 senza token con x-error-code GatedRepo diventa GATED_MODEL', async () => {
+    const http = fakeHttp([[/resolve/, { ok: false, status: 401, data: 'Unauthorized', headers: new Headers({ 'x-error-code': 'GatedRepo' }) }]]);
+    await expect(createHf({ http }).getConfig('meta-llama/Llama-4', 'main'))
+      .rejects.toMatchObject({ code: 'GATED_MODEL', hint: expect.stringContaining('https://huggingface.co/meta-llama/Llama-4') });
+  });
+
+  it('401 senza token e senza header diventa HF_AUTH', async () => {
+    const http = fakeHttp([[/resolve/, { ok: false, status: 401, data: 'Unauthorized', headers: new Headers() }]]);
+    await expect(createHf({ http }).getConfig('o/m', 'main'))
+      .rejects.toMatchObject({ code: 'HF_AUTH', message: expect.stringContaining('serve un token') });
+  });
+
+  it('getConfig su 404 diventa NOT_FOUND', async () => {
+    const http = fakeHttp([[/resolve/, { ok: false, status: 404, data: 'Not Found', headers: new Headers() }]]);
+    await expect(createHf({ http }).getConfig('o/m', 'main'))
+      .rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
 });
