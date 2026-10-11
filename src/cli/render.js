@@ -1,4 +1,5 @@
 import { redact } from '../core/secrets.js';
+import { stripControl } from '../core/advisor/advice.js';
 
 export function createIo({ stdout = process.stdout, stderr = process.stderr, prompt }) {
   return {
@@ -41,12 +42,13 @@ export function fmtDuration(seconds) {
 }
 
 export function renderAdvice(io, advice) {
-  if (advice.rationale) io.out(`Consulente: ${advice.rationale}`);
+  const t = stripControl; // il testo del consulente non deve poter muovere il cursore o riscrivere il terminale
+  if (advice.rationale) io.out(`Consulente: ${t(advice.rationale)}`);
   const { added, removed, changed } = advice.changes;
-  for (const a of added) io.out(`  + ${a}`);
-  for (const r of removed) io.out(`  - ${r}`);
-  for (const c of changed) io.out(`  ~ ${c.flag}: ${c.from ?? '(senza valore)'} → ${c.to ?? '(senza valore)'}`);
+  for (const a of added) io.out(`  + ${t(a)}`);
+  for (const r of removed) io.out(`  - ${t(r)}`);
+  for (const c of changed) io.out(`  ~ ${t(c.flag)}: ${t(c.from) || '(senza valore)'} → ${t(c.to) || '(senza valore)'}`);
   if (!added.length && !removed.length && !changed.length) io.out('  (nessuna modifica proposta)');
-  for (const r of advice.rejected) io.out(`  ✗ scartato ${r.key}: ${r.reason}`);
-  for (const w of advice.warnings) io.out(`⚠ ${w}`);
+  for (const r of advice.rejected) io.out(`  ✗ scartato ${t(r.key)}: ${t(r.reason)}`);
+  for (const w of advice.warnings) io.out(`⚠ ${t(w)}`);
 }

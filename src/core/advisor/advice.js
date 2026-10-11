@@ -10,7 +10,20 @@ export const ADVISOR_ALLOWED = [
   'kv-cache-dtype', 'gpu-memory-utilization', 'enforce-eager', 'enable-expert-parallel',
   'async-scheduling', 'default-chat-template-kwargs',
 ];
+// Tipo del valore per ciascun flag dell'allowlist: bool (true/false), posint (intero > 0), util (0 < x <= 0.98),
+// json (oggetto JSON in una stringa), str (testo semplice). `false` vale per tutti: rimuove il flag.
+export const FLAG_TYPES = Object.freeze({
+  'tool-call-parser': 'str', 'reasoning-parser': 'str', 'enable-auto-tool-choice': 'bool', 'tokenizer-mode': 'str',
+  'chat-template-content-format': 'str', 'enable-prefix-caching': 'bool', 'no-enable-prefix-caching': 'bool',
+  'enable-chunked-prefill': 'bool', 'no-enable-chunked-prefill': 'bool', 'max-num-seqs': 'posint', 'max-num-batched-tokens': 'posint',
+  'kv-cache-dtype': 'str', 'gpu-memory-utilization': 'util', 'enforce-eager': 'bool', 'enable-expert-parallel': 'bool',
+  'async-scheduling': 'bool', 'default-chat-template-kwargs': 'json',
+});
 const MEMORY_KEYS = ['kv-cache-dtype', 'gpu-memory-utilization'];
+
+const CONTROL_RE = /[\x00-\x1f\x7f]/;
+// Toglie i caratteri di controllo (ANSI, NUL, ...) da un testo di terzi; a capo e tabulazioni diventano spazi.
+export const stripControl = (text) => String(text ?? '').replace(/[\t\r\n]+/g, ' ').replace(/[\x00-\x1f\x7f]/g, '');
 
 function tryObject(candidate) {
   try {
@@ -36,8 +49,8 @@ export function parseAdvice(text) {
   if (!set || typeof set !== 'object' || Array.isArray(set)) throw new LlmpodError(Codes.ADVISOR_INVALID, 'Il campo "set" della proposta non è un oggetto');
   return {
     set,
-    rationale: typeof obj.rationale === 'string' ? obj.rationale.slice(0, 4000) : '',
-    warnings: Array.isArray(obj.warnings) ? obj.warnings.filter((w) => typeof w === 'string').slice(0, 20).map((w) => w.slice(0, 500)) : [],
+    rationale: typeof obj.rationale === 'string' ? stripControl(obj.rationale.slice(0, 4000)) : '',
+    warnings: Array.isArray(obj.warnings) ? obj.warnings.filter((w) => typeof w === 'string').slice(0, 20).map((w) => stripControl(w.slice(0, 500))) : [],
   };
 }
 
@@ -64,13 +77,35 @@ export function diffArgs(before, after) {
   };
 }
 
-function checkValue(value) {
-  if (value === true || value === false) return String(value);
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  // Una stringa che inizia con '-' verrebbe letta come flag (contrabbando): ammessi solo i numeri negativi.
-  if (typeof value === 'string' && value.length > 0 && value.length <= 300 && !/[\r\n]/.test(value)
-    && (!value.startsWith('-') || /^-\d+(\.\d+)?$/.test(value))) return value;
-  return null;
+const STR_RE = /^[A-Za-z0-9_.:/][A-Za-z0-9_.:/-]*$/; // niente '-' iniziale: verrebbe letto come flag
+const bad = (why) => ({ error: `valore non valido: ${why}` });
+
+// Controlla il valore proposto in base al tipo del flag. Restituisce { value } (stringa per applyOverrides) oppure { error }.
+function checkValue(key, value) {
+  if (typeof value === 'string' && CONTROL_RE.test(value)) return bad('contiene caratteri di controllo');
+  if (value === false) return { value: 'false' }; // rimozione del flag
+  const type = FLAG_TYPES[key];
+  if (type === 'bool') return value === true ? { value: 'true' } : bad('atteso true o false');
+  if (type === 'posint') {
+    const n = typeof value === 'number' ? value : (typeof value === 'string' && /^[1-9]\d{0,14}$/.test(value) ? Number(value) : NaN);
+    return Number.isSafeInteger(n) && n > 0 ? { value: String(n) } : bad('atteso un intero positivo');
+  }
+  if (type === 'util') {
+    const n = typeof value === 'number' ? value : (typeof value === 'string' && /^(\d+\.?\d*|\.\d+)$/.test(value) ? Number(value) : NaN);
+    return Number.isFinite(n) && n > 0 && n <= 0.98 ? { value: String(n) } : bad('atteso un numero maggiore di 0 e al massimo 0,98');
+  }
+  if (type === 'json') {
+    if (typeof value !== 'string' || value.length > 300) return bad('atteso un oggetto JSON (testo di al massimo 300 caratteri)');
+    try {
+      const o = JSON.parse(value);
+      if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('non oggetto');
+    } catch { return bad('atteso un oggetto JSON'); }
+    return { value };
+  }
+  if (type === 'str') {
+    return typeof value === 'string' && value.length <= 300 && STR_RE.test(value) ? { value } : bad('atteso un testo semplice (lettere, cifre, _ . : / -, al massimo 300 caratteri)');
+  }
+  return bad('tipo del flag sconosciuto');
 }
 
 // Controllo finale di integrità: nessun flag vietato/sconosciuto nuovo e i flag protetti invariati.
@@ -92,17 +127,19 @@ export function reviewAdvice({ advice, baseArgs, flags, allowTrustRemoteCode = f
   const rejected = [];
   const baseMap = argMap(baseArgs);
   for (const [rawKey, rawValue] of Object.entries(advice.set)) {
+    const shownKey = stripControl(rawKey).slice(0, 100);
     const key = rawKey.replace(/^-+/, '').trim().toLowerCase().replace(/_/g, '-');
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(key)) { rejected.push({ key: rawKey, reason: 'nome di flag non valido' }); continue; }
-    if (LOCKED.includes(key)) { rejected.push({ key: rawKey, reason: 'deciso da llmpod (bloccato)' }); continue; }
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(key)) { rejected.push({ key: shownKey, reason: 'nome di flag non valido' }); continue; }
+    if (LOCKED.includes(key)) { rejected.push({ key: shownKey, reason: 'deciso da llmpod (bloccato)' }); continue; }
     const { unknown, forbidden } = validateArgs([`--${key}`], flags, { allowTrustRemoteCode });
-    if (forbidden.length) { rejected.push({ key: rawKey, reason: 'flag vietato' }); continue; }
-    if (unknown.length) { rejected.push({ key: rawKey, reason: 'flag sconosciuto a questa versione di vLLM' }); continue; }
-    if (!ADVISOR_ALLOWED.includes(key)) { rejected.push({ key: rawKey, reason: 'non consentito al consulente' }); continue; }
-    const value = checkValue(rawValue);
-    if (value === null) { rejected.push({ key: rawKey, reason: 'valore non valido' }); continue; }
+    if (forbidden.length) { rejected.push({ key: shownKey, reason: 'flag vietato' }); continue; }
+    if (unknown.length) { rejected.push({ key: shownKey, reason: 'flag sconosciuto a questa versione di vLLM' }); continue; }
+    if (!ADVISOR_ALLOWED.includes(key)) { rejected.push({ key: shownKey, reason: 'non consentito al consulente' }); continue; }
+    const checked = checkValue(key, rawValue);
+    if (checked.error) { rejected.push({ key: shownKey, reason: checked.error }); continue; }
+    const { value } = checked;
     // "true" su un flag che nella base ha già un valore lo cancellerebbe: rifiutato.
-    if (value === 'true' && typeof baseMap.get(`--${key}`) === 'string') { rejected.push({ key: rawKey, reason: 'valore non valido' }); continue; }
+    if (value === 'true' && typeof baseMap.get(`--${key}`) === 'string') { rejected.push({ key: shownKey, reason: 'valore non valido: cancellerebbe il valore già impostato' }); continue; }
     accepted.push(`${key}=${value}`);
   }
   let args = applyOverrides(baseArgs, { set: accepted });
