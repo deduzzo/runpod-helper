@@ -21,6 +21,7 @@ const { runPlan } = await import('../../src/core/plan-flow.js');
 const TOKEN = 'token-api-di-prova-0987654321';
 const KEY = 'CHIAVE-PROFILO-API-FINTA-1234';
 const OWUI_KEY = 'CHIAVE-OPENWEBUI-FINTA-5678';
+const RUNPOD_KEY = 'rpa_FINTA_RUNPOD_KEY_123456';
 let server; let port; let store; let fakeOps; let sse; let jobs; let ctx; let state; let call; let makeOpsImpl; let questionTimeoutMs;
 
 const waitFor = async (fn, tries = 50) => {
@@ -32,9 +33,10 @@ beforeEach(async () => {
   clearSecrets();
   registerSecret(KEY);
   registerSecret(OWUI_KEY);
+  registerSecret(RUNPOD_KEY);
   questionTimeoutMs = 600_000;
   store = createStore({ dir: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-api-')), 'cfg'), platform: 'linux' });
-  store.writeEnv({ RUNPOD_API_KEY: 'rpa_FINTA_RUNPOD_KEY_123456', LLMPOD_KEY_QWEN3_CODER: KEY, LLMPOD_OPENWEBUI_KEY: OWUI_KEY });
+  store.writeEnv({ RUNPOD_API_KEY: RUNPOD_KEY, LLMPOD_KEY_QWEN3_CODER: KEY, LLMPOD_OPENWEBUI_KEY: OWUI_KEY });
   store.writeConfig({ dataCenterId: 'EU-RO-1', advisor: { enabled: false } });
   store.writeProfile({ name: 'qwen3-coder', servedName: 'qwen3-coder', model: { id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct' }, gpu: { id: 'G80', count: 1 }, context: 65536, estimate: { hourlyUSD: 1.79 }, advisor: null, vllm: { args: [] } });
   fakeOps = {
@@ -47,7 +49,7 @@ beforeEach(async () => {
   };
   makeOpsImpl = ({ ask, events }) => ({
     ...fakeOps,
-    up: async (name) => { events.emit('phase', { message: `avvio ${name} con ${KEY}` }); const ok = await ask('Avvio di qwen3-coder — costo 1,79 $/h. Confermi?', false); return ok ? { podId: 'p1' } : null; },
+    up: async (name) => { events.emit('phase', { message: `avvio ${name} con ${KEY} ${OWUI_KEY} ${RUNPOD_KEY}` }); const ok = await ask('Avvio di qwen3-coder — costo 1,79 $/h. Confermi?', false); return ok ? { podId: 'p1' } : null; },
   });
   ctx = {
     env: { ZCODE_DIR: path.join(store.dir, 'zcode') }, store,
@@ -107,7 +109,7 @@ describe('API', () => {
     const stream = es.text();
     expect(stream).toContain('event: job');
     expect(stream).toContain('"type":"question"');
-    expect(stream).not.toContain(KEY);
+    for (const secret of [KEY, OWUI_KEY, RUNPOD_KEY]) expect(stream).not.toContain(secret);
     expect(stream).toContain('<REDATTO>');
   });
 
@@ -140,6 +142,25 @@ describe('API', () => {
     const base = { cookie: `llmpod_session=${TOKEN}` };
     expect((await request(port, '/api/advisor/test', { method: 'POST', headers: { ...base, origin: `http://127.0.0.1:${port}` } })).status).toBe(415);
     expect((await request(port, '/api/advisor/test', { method: 'POST', headers: { ...base, 'content-type': 'application/json' }, body: '{}' })).status).toBe(403);
+  });
+});
+
+describe('validazione dei parametri', () => {
+  it('search: limit intero 1..100, altrimenti 400', async () => {
+    for (const bad of ['0', '101', '-1', '2.5', 'abc', '']) expect((await call(`/api/search?q=x&limit=${bad}`)).status).toBe(400);
+    expect((await call('/api/search?q=x&limit=100')).status).toBe(200);
+    expect((await call('/api/search?q=x')).status).toBe(200);
+    expect(ctx.hf.searchModels).toHaveBeenLastCalledWith('x', { limit: 20 });
+  });
+
+  it('plan: context 1024..1048576 e concurrency 1..256 interi, altrimenti 400 senza avviare il piano', async () => {
+    const bad = [{ context: 1023 }, { context: 1_048_577 }, { context: 'abc' }, { context: 2.5 }, { context: -5 }, { concurrency: 0 }, { concurrency: 257 }, { concurrency: 1.5 }, { concurrency: 'x' }];
+    for (const extra of bad) expect((await call('/api/plan', { method: 'POST', body: { model: 'org/modello', ...extra } })).status).toBe(400);
+    expect(runPlan).not.toHaveBeenCalled();
+    runPlan.mockResolvedValue({ plan: fakePlan(), advice: null, advisorError: null, advisorSkipped: null });
+    expect((await call('/api/plan', { method: 'POST', body: { model: 'org/modello', context: 1024, concurrency: 256 } })).status).toBe(200);
+    expect((await call('/api/plan', { method: 'POST', body: { model: 'org/modello' } })).status).toBe(200);
+    expect(runPlan).toHaveBeenLastCalledWith(expect.objectContaining({ context: 65536, concurrency: 2 }));
   });
 });
 
@@ -214,7 +235,7 @@ describe('consulente', () => {
 
 describe('job', () => {
   const startUp = async () => (await call('/api/jobs', { method: 'POST', body: { action: 'up', profile: 'qwen3-coder' } })).json.job;
-  const pendingQuestion = async (id) => (await waitFor(async () => (await call(`/api/jobs/${id}`)).json.job.question))
+  const pendingQuestion = async (id) => (await waitFor(async () => (await call(`/api/jobs/${id}`)).json.job.question));
 
   it('risposta non booleana → 400 e la domanda resta attiva (R4)', async () => {
     const { id } = await startUp();
@@ -235,6 +256,20 @@ describe('job', () => {
     await call(`/api/jobs/${id}/answer`, { method: 'POST', body: { questionId: q.id, answer: false } });
     await waitFor(async () => (await call(`/api/jobs/${id}`)).json.job.status !== 'running');
     expect((await call('/api/jobs', { method: 'POST', body: { action: 'down', profile: 'qwen3-coder' } })).status).toBe(200);
+  });
+
+  it('con un job in corso il profilo non si può salvare né scegliere per Open WebUI (409)', async () => {
+    const { id } = await startUp();
+    const q = await pendingQuestion(id);
+    expect((await call('/api/profiles', { method: 'POST', body: { name: 'qwen3-coder' } })).status).toBe(409);
+    expect((await call('/api/openwebui/profile', { method: 'POST', body: { profile: 'qwen3-coder' } })).status).toBe(409);
+    expect(fakeOps.saveProfile).not.toHaveBeenCalled();
+    expect(store.readConfig().openwebuiProfile).toBeUndefined();
+    // altri profili non sono bloccati
+    expect((await call('/api/profiles', { method: 'POST', body: { name: 'altro' } })).status).toBe(200);
+    await call(`/api/jobs/${id}/answer`, { method: 'POST', body: { questionId: q.id, answer: false } });
+    await waitFor(async () => (await call(`/api/jobs/${id}`)).json.job.status !== 'running');
+    expect((await call('/api/openwebui/profile', { method: 'POST', body: { profile: 'qwen3-coder' } })).status).toBe(200);
   });
 
   it('domanda senza risposta: scade col valore predefinito (spesa → no) e il job termina (Focus 2)', async () => {
@@ -314,6 +349,28 @@ describe('SSE', () => {
     req.emit('close');
     expect(hb.size()).toBe(0);
     hb.close();
+  });
+
+  it('con socket reale: alla chiusura del client il flusso viene rimosso', async () => {
+    const es = await openEvents({ port, token: TOKEN });
+    expect(await waitFor(() => sse.size() === 1)).toBe(true);
+    es.close();
+    expect(await waitFor(() => sse.size() === 0)).toBe(true);
+  });
+
+  it('backpressure: un client con più di 1 MB in coda viene chiuso e rimosso', () => {
+    const s = createSse();
+    const slow = { writeHead() {}, write: vi.fn(), end() {}, destroy: vi.fn(), writableLength: 0 };
+    const fast = { writeHead() {}, write: vi.fn(), end() {}, destroy: vi.fn(), writableLength: 0 };
+    s.handler(new EventEmitter(), slow);
+    s.handler(new EventEmitter(), fast);
+    slow.writableLength = 2_000_000;
+    s.broadcast('job', { type: 'log', line: 'x' });
+    expect(slow.destroy).toHaveBeenCalled();
+    expect(slow.write).toHaveBeenCalledTimes(1); // solo il commento iniziale
+    expect(fast.write).toHaveBeenCalledTimes(2);
+    expect(s.size()).toBe(1);
+    s.close();
   });
 
   it('broadcast: formato dell\'evento e segreti mascherati', () => {

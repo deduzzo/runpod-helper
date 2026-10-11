@@ -12,13 +12,17 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
     for (const j of jobs.values()) {
       if (j.kind === kind && j.status === 'running') throw new LlmpodError(Codes.INVALID_INPUT, `Un'operazione "${kind}" è già in corso`);
     }
-    const job = { id: randomUUID(), kind, status: 'running', startedAt: new Date().toISOString(), log: [], seq: 0, question: null, result: null, error: null };
+    const job = { id: randomUUID(), kind, status: 'running', startedAt: new Date().toISOString(), log: [], logCount: 0, seq: 0, question: null, result: null, error: null };
     jobs.set(job.id, job);
     // seq: contatore monotono per job (parte da 0); jobId e seq non sono sovrascrivibili dall'evento.
     const emit = (event) => {
       const safe = { ...redactObject(event), seq: job.seq++ };
       job.log.push(safe);
-      if (job.log.length > MAX_EVENTS) job.log.shift();
+      // La rotazione scarta solo gli eventi `log`: domande, risposte, fasi ed esito non vanno mai persi.
+      if (safe.type === 'log' && ++job.logCount > MAX_EVENTS) {
+        job.log.splice(job.log.findIndex((e) => e.type === 'log'), 1);
+        job.logCount -= 1;
+      }
       try {
         onEvent({ ...safe, jobId: job.id });
       } catch (err) {
@@ -31,13 +35,16 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
       clearTimeout(q.timer);
       job.question = null;
     };
-    const ask = (text, defYes = false) => new Promise((resolve) => {
-      if (job.status !== 'running') { resolve(Boolean(defYes)); return; }
-      // Una sola domanda pendente: la precedente viene chiusa col suo valore predefinito.
-      if (job.question) job.question.settle(job.question.defYes);
+    // `defYes` è solo il pulsante predefinito mostrato all'utente. Senza risposta vale SEMPRE `opts.timeoutValue` (predefinito: no),
+    // così un job non confermato non continua a spendere.
+    const ask = (text, defYes = false, opts) => new Promise((resolve) => {
+      const timeoutValue = Boolean(opts?.timeoutValue ?? false);
+      if (job.status !== 'running') { resolve(timeoutValue); return; }
+      // Una sola domanda pendente: la precedente viene chiusa come se fosse scaduta.
+      if (job.question) job.question.settle(job.question.timeoutValue);
       const id = randomUUID();
       const shown = redact(String(text));
-      const timer = setTimeout(() => settle(defYes), questionTimeoutMs);
+      const timer = setTimeout(() => settle(timeoutValue), questionTimeoutMs);
       timer.unref?.();
       function settle(value) {
         if (job.question?.id !== id) return;
@@ -45,7 +52,7 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
         emit({ type: 'answer', questionId: id, answer: Boolean(value) });
         resolve(Boolean(value));
       }
-      job.question = { id, text: shown, defYes, settle, timer };
+      job.question = { id, text: shown, defYes, timeoutValue, settle, timer };
       emit({ type: 'question', questionId: id, text: shown, defYes });
     });
     const fail = (err) => {

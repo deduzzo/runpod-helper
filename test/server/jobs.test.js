@@ -25,13 +25,18 @@ describe('jobs', () => {
     expect(jobs.events(job.id, 2).map((e) => e.type)).toEqual(['answer', 'done']);
   });
 
-  it('senza risposta entro il timeout vale il default', async () => {
+  it('senza risposta entro il timeout vale NO, anche se il pulsante predefinito è sì; timeoutValue lo cambia', async () => {
     vi.useFakeTimers();
     try {
       const jobs = createJobs({ questionTimeoutMs: 1000 });
-      const job = jobs.start('down:p', async ({ ask }) => ask('Terminare il Pod?', true));
+      const a = jobs.start('up:a', async ({ ask }) => ask('Aspettare ancora?', true));
+      const b = jobs.start('down:b', async ({ ask }) => ask('Terminare il Pod?', true, { timeoutValue: true }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(jobs.get(a.id).question.defYes).toBe(true);
       await vi.advanceTimersByTimeAsync(1001);
-      expect(jobs.get(job.id)).toMatchObject({ status: 'done', result: true });
+      expect(jobs.get(a.id)).toMatchObject({ status: 'done', result: false });
+      expect(jobs.get(b.id)).toMatchObject({ status: 'done', result: true });
+      expect(jobs.events(a.id).find((e) => e.type === 'answer')).toMatchObject({ answer: false });
     } finally {
       vi.useRealTimers();
     }
@@ -110,14 +115,14 @@ describe('jobs', () => {
       expect(seen.find((e) => e.type === 'question').text).toBe('Usare <REDATTO>?');
     });
 
-    it('seq monotono per job; la rotazione oltre MAX_EVENTS non fa saltare eventi', async () => {
+    it('seq monotono per job; la rotazione scarta solo i log e non fa saltare eventi', async () => {
       const jobs = createJobs();
       const job = jobs.start('x', async ({ emit }) => { for (let i = 0; i < 1500; i++) emit({ type: 'log', i }); return null; });
       await tick(); await tick();
       const all = jobs.events(job.id);
-      expect(all.length).toBe(1000);
+      expect(all.length).toBe(1001); // 1000 log + done
       const seqs = all.map((e) => e.seq);
-      expect(seqs[0]).toBe(501); // 1500 log + done = 1501 eventi (seq 0..1500), restano gli ultimi 1000
+      expect(seqs[0]).toBe(500); // 1500 log (seq 0..1499) + done (1500): restano gli ultimi 1000 log
       expect(seqs.at(-1)).toBe(1500);
       expect(seqs.every((v, i) => i === 0 || v === seqs[i - 1] + 1)).toBe(true);
       expect(jobs.events(job.id, 1498).map((e) => e.seq)).toEqual([1498, 1499, 1500]);
@@ -132,7 +137,25 @@ describe('jobs', () => {
       expect(seen[0]).toMatchObject({ jobId: job.id, seq: 0 });
     });
 
-    it('una seconda ask chiude la precedente col suo default', async () => {
+    it('gli eventi non log non vengono mai scartati dalla rotazione', async () => {
+      const jobs = createJobs();
+      const job = jobs.start('x', async ({ emit, ask }) => {
+        emit({ type: 'phase', message: 'inizio' });
+        const q = ask('Domanda?', false);
+        for (let i = 0; i < 2000; i++) emit({ type: 'log', i });
+        await q;
+        return null;
+      });
+      await tick();
+      jobs.answer(job.id, jobs.get(job.id).question.id, true);
+      await tick(); await tick();
+      const types = jobs.events(job.id).map((e) => e.type);
+      expect(types.filter((t) => t === 'log').length).toBe(1000);
+      for (const t of ['phase', 'question', 'answer', 'done']) expect(types).toContain(t);
+      expect(jobs.events(job.id)[0]).toMatchObject({ type: 'phase', seq: 0 });
+    });
+
+    it('una seconda ask chiude la precedente come scaduta (no, salvo timeoutValue)', async () => {
       const jobs = createJobs();
       let first;
       const job = jobs.start('x', async ({ ask }) => {
@@ -145,7 +168,7 @@ describe('jobs', () => {
       expect(q.text).toBe('Seconda?');
       jobs.answer(job.id, q.id, true);
       await tick(); await tick();
-      expect(jobs.get(job.id)).toMatchObject({ status: 'done', result: { first: true, second: true } });
+      expect(jobs.get(job.id)).toMatchObject({ status: 'done', result: { first: false, second: true } });
     });
 
     it('a job concluso: question azzerata, timer cancellato, answer() non emette', async () => {

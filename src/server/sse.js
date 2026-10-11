@@ -1,8 +1,19 @@
 import { redactObject } from '../core/secrets.js';
 
+const MAX_BUFFERED = 1_048_576;
+
 export function createSse({ heartbeatMs = 15_000 } = {}) {
   const clients = new Set();
-  const timer = setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, heartbeatMs);
+  // Backpressure: un client che non legge (buffer oltre 1 MB) viene chiuso e rimosso, senza crescita illimitata della memoria.
+  const send = (res, chunk) => {
+    if (res.writableLength > MAX_BUFFERED) {
+      clients.delete(res);
+      res.destroy();
+      return;
+    }
+    res.write(chunk);
+  };
+  const timer = setInterval(() => { for (const res of [...clients]) send(res, ': ping\n\n'); }, heartbeatMs);
   timer.unref?.();
   return {
     handler(req, res) {
@@ -13,7 +24,7 @@ export function createSse({ heartbeatMs = 15_000 } = {}) {
     },
     broadcast(type, data) {
       const payload = `event: ${type}\ndata: ${JSON.stringify(redactObject(data))}\n\n`;
-      for (const res of clients) res.write(payload);
+      for (const res of [...clients]) send(res, payload);
     },
     close() {
       clearInterval(timer);

@@ -146,7 +146,7 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
 
   async function offerTerminate(name, podId, yes) {
     let ok = true;
-    try { ok = yes || await ask(`Terminare il Pod ${podId} per non continuare a pagare?`, true); } catch { ok = true; } // Ctrl+C al prompt: meglio spegnere
+    try { ok = yes || await ask(`Terminare il Pod ${podId} per non continuare a pagare?`, true, { timeoutValue: true }); } catch { ok = true; } // Ctrl+C al prompt: meglio spegnere
     if (!ok) return;
     try {
       await terminate(name, podId);

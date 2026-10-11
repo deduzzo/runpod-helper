@@ -11,11 +11,24 @@ import { HttpError, sendJson, readJson } from './http-utils.js';
 
 const adviceView = (a) => a && { accepted: a.accepted, rejected: a.rejected, changes: a.changes, rationale: a.rationale, warnings: a.warnings, recipePath: a.recipePath };
 // Identificativo del piano: lega la proposta del consulente al piano per cui è stata generata.
+// Parametro intero con valore predefinito e limiti: fuori intervallo → 400.
+function intParam(value, def, min, max, label) {
+  if (value === undefined || value === null) return def;
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (!Number.isInteger(n) || n < min || n > max) throw new HttpError(400, `${label} deve essere un intero tra ${min} e ${max}`);
+  return n;
+}
 const planId = (plan) => createHash('sha256').update(JSON.stringify(plan)).digest('hex');
 
 export function createRoutes({ ctx, jobs, sse, state }) {
   const table = [];
   const add = (method, pattern, fn) => table.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`), fn });
+  // R17 esteso: finché un job up/down è in corso, il profilo non si può modificare.
+  const runningJob = (profile) => jobs.list().find((j) => j.status === 'running' && [`up:${profile}`, `down:${profile}`].includes(j.kind));
+  const assertNotBusy = (profile) => {
+    const busy = runningJob(profile);
+    if (busy) throw new HttpError(409, `Per il profilo "${profile}" c'è già un'operazione in corso (${busy.kind.split(':')[0]})`);
+  };
   const json = (fn) => async (c) => sendJson(c.res, 200, await fn(c));
 
   add('GET', '/api/overview', json(() => {
@@ -35,12 +48,12 @@ export function createRoutes({ ctx, jobs, sse, state }) {
   add('GET', '/api/status', json(() => ctx.ops.status()));
 
   add('GET', '/api/search', json(async ({ url }) => ({
-    rows: await searchRows(ctx.hf, url.searchParams.get('q') ?? '', { limit: Math.min(50, Number(url.searchParams.get('limit')) || 20), all: url.searchParams.get('all') === '1' }),
+    rows: await searchRows(ctx.hf, url.searchParams.get('q') ?? '', { limit: intParam(url.searchParams.get('limit'), 20, 1, 100, 'limit'), all: url.searchParams.get('all') === '1' }),
   })));
 
   add('POST', '/api/plan', json(async ({ req }) => {
     const b = await readJson(req);
-    const r = await runPlan({ ctx, modelRef: String(b.model ?? ''), context: Number(b.context) || 65536, concurrency: Number(b.concurrency) || 2, set: Array.isArray(b.set) ? b.set.map(String) : [], extra: Array.isArray(b.extra) ? b.extra.map(String) : [], advisor: typeof b.advisor === 'boolean' ? b.advisor : undefined });
+    const r = await runPlan({ ctx, modelRef: String(b.model ?? ''), context: intParam(b.context, 65536, 1024, 1_048_576, 'context'), concurrency: intParam(b.concurrency, 2, 1, 256, 'concurrency'), set: Array.isArray(b.set) ? b.set.map(String) : [], extra: Array.isArray(b.extra) ? b.extra.map(String) : [], advisor: typeof b.advisor === 'boolean' ? b.advisor : undefined });
     ctx.store.writeJson('last-plan.json', r.plan);
     state.lastAdvice = r.advice && r.advice.accepted.length ? r.advice : null;
     state.lastAdvicePlanId = state.lastAdvice ? planId(r.plan) : null;
@@ -60,7 +73,11 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     return { plan };
   }));
 
-  add('POST', '/api/profiles', json(async ({ req }) => ({ profile: ctx.ops.saveProfile(String((await readJson(req)).name ?? '')) })));
+  add('POST', '/api/profiles', json(async ({ req }) => {
+    const name = String((await readJson(req)).name ?? '');
+    assertNotBusy(name);
+    return { profile: ctx.ops.saveProfile(name) };
+  }));
   add('GET', '/api/profiles/:name', json(({ params }) => ({ profile: ctx.store.readProfile(params.name) })));
 
   add('POST', '/api/jobs', json(async ({ req }) => {
@@ -68,8 +85,7 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     if (!['up', 'down'].includes(action)) throw new HttpError(400, 'Azione non valida');
     assertProfileName(profile);
     // R17: un solo job attivo per profilo, qualunque sia l'azione.
-    const busy = jobs.list().find((j) => j.status === 'running' && [`up:${profile}`, `down:${profile}`].includes(j.kind));
-    if (busy) throw new HttpError(409, `Per il profilo "${profile}" c'è già un'operazione in corso (${busy.kind.split(':')[0]})`);
+    assertNotBusy(profile);
     const job = jobs.start(`${action}:${profile}`, async ({ ask, emit }) => {
       const events = createEvents();
       events.on((e) => emit(e));
@@ -130,6 +146,7 @@ export function createRoutes({ ctx, jobs, sse, state }) {
   add('POST', '/api/openwebui/profile', json(async ({ req }) => {
     const { profile } = await readJson(req);
     assertProfileName(profile);
+    assertNotBusy(profile);
     ctx.store.writeConfig({ openwebuiProfile: profile });
     return { ok: true };
   }));
