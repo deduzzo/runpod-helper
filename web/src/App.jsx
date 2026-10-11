@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from './lib/api.js';
-import { EventsProvider } from './lib/events.jsx';
+import { EventsProvider, useAnyJobEvent } from './lib/events.jsx';
 import { Spinner } from './components/ui.jsx';
 import Models from './pages/Models.jsx';
 import Profiles from './pages/Profiles.jsx';
@@ -19,6 +19,43 @@ const TABS = [
 // R19b: localStorage può mancare o lanciare (finestra privata, dati bloccati): l'app funziona comunque.
 function readTab() {
   try { return localStorage.getItem('llmpod.tab') ?? 'models'; } catch { return 'models'; }
+}
+
+// Domande dei job in attesa di risposta, per job: una domanda resta pendente finché non arriva answer (stessa domanda), done o failed.
+function usePendingQuestions() {
+  const [pending, setPending] = useState({});
+  const onEvent = useCallback((e) => {
+    if (!e?.jobId) return;
+    if (e.type === 'question') setPending((p) => ({ ...p, [e.jobId]: e.questionId }));
+    else if ((e.type === 'answer' || e.type === 'done' || e.type === 'failed')) {
+      setPending((p) => {
+        if (!(e.jobId in p) || (e.type === 'answer' && p[e.jobId] !== e.questionId)) return p;
+        const { [e.jobId]: _gone, ...rest } = p;
+        return rest;
+      });
+    }
+  }, []);
+  // Allineamento con lo stato del server: all'avvio e a ogni riconnessione SSE (la domanda può essere arrivata prima).
+  const sync = useCallback(async () => {
+    try {
+      const { jobs = [] } = await api('/api/jobs');
+      setPending(Object.fromEntries(jobs.filter((j) => j.status === 'running' && j.question).map((j) => [j.id, j.question.id])));
+    } catch { /* elenco non disponibile: restano gli eventi SSE */ }
+  }, []);
+  useAnyJobEvent(onEvent, sync);
+  useEffect(() => { sync(); }, [sync]);
+  return Object.keys(pending).length > 0;
+}
+
+function QuestionBanner({ tab, onGo }) {
+  const pending = usePendingQuestions();
+  if (!pending || tab === 'profiles') return null;
+  return (
+    <div role="status" className="fade-up mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+      <span>Una domanda attende risposta</span>
+      <button type="button" onClick={onGo} className="rounded-lg bg-amber-400/20 px-3 py-1 text-amber-100 transition hover:bg-amber-400/30">Vai a Profili</button>
+    </div>
+  );
 }
 
 export default function App() {
@@ -65,6 +102,7 @@ export default function App() {
             ))}
           </nav>
         </header>
+        <QuestionBanner tab={tab} onGo={() => setTab('profiles')} />
         <main key={tab} className="fade-up"><Page /></main>
       </div>
     </EventsProvider>

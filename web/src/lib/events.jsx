@@ -55,3 +55,21 @@ export function useJobEvents(jobId, onEvent, onReconnect) {
     return () => { ctx.listeners.delete(fn); ctx.reconnects.delete(re); };
   }, [ctx, jobId]);
 }
+
+// Tutti gli eventi `job` (di qualunque job): per indicatori globali come il banner delle domande in sospeso.
+// onReconnect (opzionale): a ogni apertura/riapertura del flusso SSE.
+export function useAnyJobEvent(onEvent, onReconnect) {
+  const ctx = useContext(Ctx);
+  const cb = useRef(onEvent);
+  const rc = useRef(onReconnect);
+  cb.current = onEvent;
+  rc.current = onReconnect;
+  useEffect(() => {
+    if (!ctx) return undefined;
+    const fn = (e) => cb.current(e);
+    const re = () => rc.current?.();
+    ctx.listeners.add(fn);
+    ctx.reconnects.add(re);
+    return () => { ctx.listeners.delete(fn); ctx.reconnects.delete(re); };
+  }, [ctx]);
+}

@@ -207,3 +207,21 @@ describe('JobPanel', () => {
     expect(pre.textContent.split('\n')).toHaveLength(200);
   });
 });
+
+describe('JobPanel: job annullato (Minor 9)', () => {
+  it('CANCELLED: badge neutro "annullato", non "non riuscito"', async () => {
+    mockApi({ 'GET /api/jobs/j1': { job: job({ status: 'failed', error: { code: 'CANCELLED', message: 'Operazione annullata' } }), events: [ev(0, 'failed', { error: { code: 'CANCELLED', message: 'Operazione annullata' } })] } });
+    mount();
+    const badge = await screen.findByText('annullato');
+    expect(badge.className).toMatch(/gray/);
+    expect(screen.queryByText('non riuscito')).toBeNull();
+  });
+
+  it('altri errori restano "non riuscito" in rosso', async () => {
+    mockApi({ 'GET /api/jobs/j1': { job: job({ status: 'failed', error: { code: 'RUNPOD_AUTH', message: 'Chiave non valida' } }), events: [ev(0, 'failed', { error: { code: 'RUNPOD_AUTH', message: 'Chiave non valida' } })] } });
+    mount();
+    const badge = await screen.findByText('non riuscito');
+    expect(badge.className).toMatch(/rose/);
+    expect(screen.queryByText('annullato')).toBeNull();
+  });
+});

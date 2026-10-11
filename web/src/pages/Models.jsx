@@ -40,7 +40,7 @@ export default function Models() {
                   <tr key={r.id} aria-selected={model.trim() === r.id} className={`cursor-pointer border-t border-white/5 transition hover:bg-white/5 ${model.trim() === r.id ? 'bg-cyan-400/10' : ''}`} onClick={() => setModel(r.id)}>
                     <td className="py-1"><button type="button" className="break-all text-left text-cyan-200 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60">{r.id}</button></td>
                     <td>{r.params ? `${(r.params / 1e9).toFixed(1)} B` : '?'}</td>
-                    <td>{fmtGiB(r.weightsGiB)}</td>
+                    <td>{r.weightsGiB == null ? '?' : fmtGiB(r.weightsGiB)}</td>
                     <td>{r.license ?? '?'}</td>
                     <td>{r.gated ? <Badge tone="amber">sì</Badge> : 'no'}</td>
                     <td>{r.parser ?? <Badge tone="amber">nessuno</Badge>}</td>
@@ -75,7 +75,7 @@ export default function Models() {
       </Card>
 
       <ErrorBox error={error} />
-      {result && <PlanView key={result.plan.model.revision} data={result} onPlanChange={(p) => setResult((r) => ({ ...r, plan: p }))} />}
+      {result && <PlanView key={result.plan.model.revision} data={result} onPlanChange={(p, id) => setResult((r) => ({ ...r, plan: p, planId: id ?? r.planId }))} />}
     </div>
   );
 }

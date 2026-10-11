@@ -20,8 +20,8 @@ describe('pagina Modelli', () => {
   it('ricerca, scelta del modello, piano con proposta, applica e salva', async () => {
     const fetchMock = mockApi({
       'GET /api/search': { rows: [{ id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct', params: 30.5e9, weightsGiB: 56.9, license: 'apache-2.0', gated: false, parser: 'qwen3_coder' }, { id: 'x/Strano', params: 7e9, weightsGiB: null, license: null, gated: 'manual', parser: null }] },
-      'POST /api/plan': { plan, advice, advisorError: null, advisorSkipped: null },
-      'POST /api/plan/apply-advice': { plan: { ...plan, vllm: { ...plan.vllm, args: ['--max-model-len', '65536', '--enable-prefix-caching'] } } },
+      'POST /api/plan': { plan, planId: 'piano-1', advice, advisorError: null, advisorSkipped: null },
+      'POST /api/plan/apply-advice': { plan: { ...plan, vllm: { ...plan.vllm, args: ['--max-model-len', '65536', '--enable-prefix-caching'] } }, planId: 'piano-2' },
       'POST /api/profiles': { profile: { name: 'qwen3-coder' } },
     });
     render(<Models />);
@@ -44,6 +44,30 @@ describe('pagina Modelli', () => {
     fireEvent.change(screen.getByLabelText(/Nome del profilo/), { target: { value: 'qwen3-coder' } });
     fireEvent.click(screen.getByRole('button', { name: 'Salva come profilo' }));
     await screen.findByText(/Profilo salvato/);
+    // R11: il salvataggio invia l'id del piano visualizzato (quello dopo l'applicazione della proposta)
+    const saveCall = fetchMock.mock.calls.find(([p, i]) => p === '/api/profiles' && i?.method === 'POST');
+    expect(JSON.parse(saveCall[1].body)).toEqual({ name: 'qwen3-coder', planId: 'piano-2' });
+  });
+
+  it('R11: 409 "Il piano è cambiato" al salvataggio è mostrato e il profilo non risulta salvato', async () => {
+    mockApi({
+      'GET /api/overview': { profiles: [] },
+      'POST /api/profiles': { __status: 409, body: { error: { code: 'HTTP', message: 'Il piano è cambiato: ricalcolalo prima di salvare' } } },
+    });
+    render(<PlanView data={{ plan, planId: 'piano-1', advice: null, advisorError: null, advisorSkipped: null }} onPlanChange={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/Nome del profilo/), { target: { value: 'qwen3-coder' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salva come profilo' }));
+    await screen.findByText(/Il piano è cambiato/);
+    expect(screen.queryByText(/Profilo salvato/)).toBeNull();
+  });
+
+  it('pesi non stimabili (null) mostrati come "?"', async () => {
+    mockApi({ 'GET /api/search': { rows: [{ id: 'x/Awq', params: 7e9, weightsGiB: null, license: null, gated: false, parser: null }] } });
+    render(<Models />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cerca' }));
+    await screen.findByText('x/Awq');
+    const cells = [...document.querySelectorAll('tbody tr td')].map((td) => td.textContent);
+    expect(cells[2]).toBe('?');
   });
 
   it('errore del piano mostrato con il suggerimento', async () => {

@@ -180,7 +180,7 @@ function JobPanelInner({ jobId, onFinished, onStatus }) {
       <div className="flex flex-wrap items-center gap-2 text-sm">
         {status === 'running' && <><Spinner /><Badge tone="cyan">in corso</Badge></>}
         {status === 'done' && <Badge tone="green">completato</Badge>}
-        {status === 'failed' && <Badge tone="red">non riuscito</Badge>}
+        {status === 'failed' && (jobError?.code === 'CANCELLED' ? <Badge tone="gray">annullato</Badge> : <Badge tone="red">non riuscito</Badge>)}
         {progress && status === 'running' && <span className="text-gray-400">{progress.message}</span>}
       </div>
       {progress?.ratio != null && status === 'running' && (

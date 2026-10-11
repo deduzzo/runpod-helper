@@ -206,6 +206,46 @@ describe('ricerca e piano', () => {
     expect(store.readJson('last-plan.json', null)).toEqual(other);
   });
 
+  it('plan: advisorError passa da redact (R5)', async () => {
+    runPlan.mockResolvedValue({ plan: fakePlan(), advice: null, advisorError: `Consulente non raggiungibile con ${KEY} e ${RUNPOD_KEY}`, advisorSkipped: null });
+    const r = await call('/api/plan', { method: 'POST', body: { model: 'org/modello' } });
+    expect(r.status).toBe(200);
+    expect(r.text).not.toContain(KEY);
+    expect(r.text).not.toContain(RUNPOD_KEY);
+    expect(r.json.advisorError).toContain('Consulente non raggiungibile');
+  });
+
+  it('plan restituisce planId; apply-advice restituisce quello del piano aggiornato', async () => {
+    runPlan.mockResolvedValue({ plan: fakePlan(), advice: fakeAdvice(), advisorError: null, advisorSkipped: null });
+    const p = await call('/api/plan', { method: 'POST', body: { model: 'org/modello' } });
+    expect(p.json.planId).toMatch(/^[0-9a-f]{64}$/);
+    const a = await call('/api/plan/apply-advice', { method: 'POST', body: {} });
+    expect(a.json.planId).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.json.planId).not.toBe(p.json.planId);
+    // il nuovo id vale per il salvataggio del profilo
+    expect((await call('/api/profiles', { method: 'POST', body: { name: 'nuovo', planId: a.json.planId } })).status).toBe(200);
+  });
+
+  it('POST /api/profiles con planId: coincide → 200; è cambiato → 409 e il profilo non viene salvato (R11)', async () => {
+    runPlan.mockResolvedValue({ plan: fakePlan(), advice: null, advisorError: null, advisorSkipped: null });
+    const p = await call('/api/plan', { method: 'POST', body: { model: 'org/modello' } });
+    const ok = await call('/api/profiles', { method: 'POST', body: { name: 'nuovo', planId: p.json.planId } });
+    expect(ok.status).toBe(200);
+    expect(fakeOps.saveProfile).toHaveBeenCalledTimes(1);
+    store.writeJson('last-plan.json', { ...fakePlan(), model: 'altro/modello' });
+    const stale = await call('/api/profiles', { method: 'POST', body: { name: 'nuovo', planId: p.json.planId } });
+    expect(stale.status).toBe(409);
+    expect(stale.json.error.message).toBe('Il piano è cambiato: ricalcolalo prima di salvare');
+    expect(fakeOps.saveProfile).toHaveBeenCalledTimes(1);
+    // senza last-plan.json il planId inviato non può coincidere
+    fs.rmSync(path.join(store.dir, 'last-plan.json'));
+    expect((await call('/api/profiles', { method: 'POST', body: { name: 'nuovo', planId: p.json.planId } })).status).toBe(409);
+    // planId assente: comportamento invariato (salva come la CLI)
+    expect((await call('/api/profiles', { method: 'POST', body: { name: 'nuovo' } })).status).toBe(200);
+    // planId non stringa → 400
+    expect((await call('/api/profiles', { method: 'POST', body: { name: 'nuovo', planId: 5 } })).status).toBe(400);
+  });
+
   it('un nuovo piano senza proposta annulla quella precedente', async () => {
     runPlan.mockResolvedValueOnce({ plan: fakePlan(), advice: fakeAdvice(), advisorError: null, advisorSkipped: null });
     await call('/api/plan', { method: 'POST', body: { model: 'org/modello' } });

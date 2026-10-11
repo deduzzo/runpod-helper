@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { LlmpodError, Codes } from '../core/errors.js';
 import { assertProfileName } from '../core/config.js';
 import { createEvents } from '../core/events.js';
+import { redact } from '../core/secrets.js';
 import { searchRows } from '../core/search.js';
 import { runPlan, applyAdvice } from '../core/plan-flow.js';
 import { testAdvisor } from '../core/advisor/advisor.js';
@@ -58,7 +59,7 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     ctx.store.writeJson('last-plan.json', r.plan);
     state.lastAdvice = r.advice && r.advice.accepted.length ? r.advice : null;
     state.lastAdvicePlanId = state.lastAdvice ? planId(r.plan) : null;
-    return { plan: r.plan, advice: adviceView(r.advice), advisorError: r.advisorError, advisorSkipped: r.advisorSkipped };
+    return { plan: r.plan, planId: planId(r.plan), advice: adviceView(r.advice), advisorError: r.advisorError ? redact(String(r.advisorError)) : r.advisorError, advisorSkipped: r.advisorSkipped };
   }));
 
   add('POST', '/api/plan/apply-advice', json(async ({ req }) => {
@@ -71,12 +72,19 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     ctx.store.writeJson('last-plan.json', plan);
     state.lastAdvice = null;
     state.lastAdvicePlanId = null;
-    return { plan };
+    return { plan, planId: planId(plan) };
   }));
 
   add('POST', '/api/profiles', json(async ({ req }) => {
-    const name = String((await readJson(req)).name ?? '');
+    const b = await readJson(req);
+    const name = String(b.name ?? '');
     assertNotBusy(name);
+    // R11: se il client indica il piano che sta guardando, deve essere ancora quello salvato in last-plan.json.
+    if (b.planId !== undefined) {
+      if (typeof b.planId !== 'string') throw new HttpError(400, 'planId non valido');
+      const current = ctx.store.readJson('last-plan.json', null);
+      if (!current || planId(current) !== b.planId) throw new HttpError(409, 'Il piano è cambiato: ricalcolalo prima di salvare');
+    }
     return { profile: ctx.ops.saveProfile(name) };
   }));
   add('GET', '/api/profiles/:name', json(({ params }) => ({ profile: ctx.store.readProfile(params.name) })));

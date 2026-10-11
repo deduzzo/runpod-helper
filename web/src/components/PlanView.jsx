@@ -7,7 +7,7 @@ const AVAIL = { HIGH: 'green', MEDIUM: 'cyan', LOW: 'amber', NONE: 'red' };
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
 export function PlanView({ data, onPlanChange }) {
-  const { plan, advice, advisorError, advisorSkipped } = data;
+  const { plan, advice, advisorError, advisorSkipped, planId } = data;
   const [applied, setApplied] = useState(false);
   const [name, setName] = useState('');
   const [saved, setSaved] = useState(null);
@@ -18,7 +18,7 @@ export function PlanView({ data, onPlanChange }) {
 
   async function applyAdvice() {
     setBusy('apply'); setApplyError(null);
-    try { const r = await api('/api/plan/apply-advice', { method: 'POST', body: {} }); setApplied(true); onPlanChange(r.plan); } catch (e) { setApplyError(e); } finally { setBusy(null); }
+    try { const r = await api('/api/plan/apply-advice', { method: 'POST', body: {} }); setApplied(true); onPlanChange(r.plan, r.planId); } catch (e) { setApplyError(e); } finally { setBusy(null); }
   }
   // R28: se il nome esiste già si chiede conferma prima di sovrascrivere il profilo.
   async function save(overwrite = false) {
@@ -30,7 +30,7 @@ export function PlanView({ data, onPlanChange }) {
         if (existing.includes(name)) { setConfirmName(name); return; }
       }
       setConfirmName(null);
-      const r = await api('/api/profiles', { method: 'POST', body: { name } });
+      const r = await api('/api/profiles', { method: 'POST', body: { name, planId } });
       setSaved(r.profile.name);
     } catch (e) { setSaveError(e); } finally { setBusy(null); }
   }
