@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
-import { GiB, weightsBytes, kvBytesPerToken, kvShardsFor, estimate, fits, tpSizes, bytesFromSafetensorsParams } from '../../src/core/planner/vram.js';
+import { GiB, weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, fits, tpSizes, bytesFromSafetensorsParams } from '../../src/core/planner/vram.js';
 
 const fx = (p) => JSON.parse(fs.readFileSync(new URL(`../fixtures/hf/${p}`, import.meta.url), 'utf8'));
 
@@ -13,6 +13,14 @@ describe('vram', () => {
     const tree = fx('tree-devstral-small-2507.json');
     expect(weightsBytes(tree)).toBe(47144848872);
     expect(weightsBytes(tree) / GiB).toBeCloseTo(43.9, 1);
+  });
+
+  it('downloadBytes: tutti i .safetensors di primo livello (consolidated incluso), niente sottocartelle', () => {
+    const tree = fx('tree-devstral-small-2507.json');
+    expect(downloadBytes(tree)).toBe(47144848872 + 47144846024);
+    expect(downloadBytes(tree) / GiB).toBeCloseTo(87.8, 1);
+    const f = (path, size) => ({ type: 'file', path, size });
+    expect(downloadBytes([f('model.safetensors', 7), f('original/model.safetensors', 99), { type: 'directory', path: 'x.safetensors' }])).toBe(7);
   });
 
   it('R4b: con l\'indice (weight_map) contano solo i file elencati; senza corrispondenze si ripiega sulla regola', () => {

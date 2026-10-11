@@ -1,6 +1,6 @@
 import { LlmpodError, Codes } from '../errors.js';
 import { parseModelRef, summarizeModel } from '../hf.js';
-import { weightsBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes } from './vram.js';
+import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes } from './vram.js';
 import { detectParsers, buildArgs, applyOverrides, validateArgs } from './vllm-args.js';
 import { selectGpus } from './gpu-select.js';
 
@@ -43,18 +43,21 @@ export async function makePlan({
 
   onProgress(`Lettura di ${id} da Hugging Face`);
   const info = await hf.getModel(id);
+  const summary = summarizeModel(info);
   // R3: prima di qualunque chiamata a pagamento (e prima di leggere l'albero dei file).
-  if (summarizeModel(info).isMlx) {
+  if (summary.isMlx) {
     throw new LlmpodError(Codes.INVALID_INPUT, `Formato MLX non supportato da vLLM: ${id}`, { hint: 'Cerca la versione safetensors/AWQ dello stesso modello (ad esempio quella dell\'organizzazione originale, non mlx-community)' });
   }
   const sha = SHA_RE.test(revision) ? revision : await hf.resolveSha(id, revision);
   const [tree, config] = await Promise.all([hf.listFiles(id, sha), hf.getConfig(id, sha)]);
-  const summary = summarizeModel(info);
 
   // Con l'indice dei pesi (file piccolo) contano solo gli shard elencati; se non è leggibile vale la regola sull'albero.
   const weightMap = await hf.getWeightIndex?.(id, sha);
   const wBytes = weightsBytes(tree, { weightMap });
   if (!wBytes) {
+    if (tree.some((f) => f.type === 'file' && f.path.endsWith('.safetensors'))) {
+      throw new LlmpodError(Codes.INVALID_INPUT, `${id}: i pesi sono solo in sottocartelle: non supportato`, { hint: 'vLLM su llmpod carica i file .safetensors dalla radice del repository: scegli un altro repository del modello' });
+    }
     throw new LlmpodError(Codes.INVALID_INPUT, `${id} non contiene file .safetensors`, { hint: 'vLLM su llmpod supporta modelli safetensors (i repository solo GGUF non sono supportati)' });
   }
   const maxCtx = (config.text_config ?? config).max_position_embeddings;
@@ -112,7 +115,7 @@ export async function makePlan({
     vllm: { image: vllmImage, args },
     parsers: { tool: parsers.tool, reasoning: parsers.reasoning },
     // kvDtype: base della stima (fp8 solo se il ripiego ha dimezzato la KV), indipendente dagli override successivi
-    estimate: { weightsGiB: est.weightsGiB, kvGiB: est.kvGiB, perGpuGiB: est.perGpuGiB, kvDtype: kvCacheDtype === 'fp8' ? 'fp8' : 'auto' },
+    estimate: { weightsGiB: est.weightsGiB, downloadBytes: downloadBytes(tree), kvGiB: est.kvGiB, perGpuGiB: est.perGpuGiB, kvDtype: kvCacheDtype === 'fp8' ? 'fp8' : 'auto' },
     gpu: sel.choice ? { id: sel.choice.gpuId, count: sel.choice.count } : null,
     hourlyUSD: sel.choice?.hourly ?? null,
     alternatives: sel.alternatives.map((c) => ({ id: c.gpuId, count: c.count, hourly: c.hourly })),

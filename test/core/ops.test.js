@@ -7,6 +7,12 @@ import { createStore } from '../../src/core/config.js';
 import { createEvents } from '../../src/core/events.js';
 import { clearSecrets } from '../../src/core/secrets.js';
 import { LlmpodError, Codes } from '../../src/core/errors.js';
+import { waitForReady, readyTimeoutMs } from '../../src/core/pod/launcher.js';
+
+vi.mock('../../src/core/pod/launcher.js', async (orig) => {
+  const m = await orig();
+  return { ...m, waitForReady: vi.fn(m.waitForReady) };
+});
 
 const KEY = 'CHIAVE-PROFILO-FINTA-123456';
 const gpu = (id, memory, price, dcs) => ({ id, name: id, memory, price: { secure: price }, maxCount: { secure: 8 }, dataCenters: dcs.map(([d, a]) => ({ id: d, availability: a })) });
@@ -83,6 +89,21 @@ describe('ops', () => {
     expect(body.mounts.network[0].volumeId).toBe('vol1');
     expect(store.readState().pods['qwen3-coder'].podId).toBe('pod1');
     expect(seen.some((e) => e.type === 'pod' && e.podId === 'pod1')).toBe(true);
+  });
+
+  it('up: il timeout di avvio usa downloadBytes (tutti i safetensors da scaricare); profili vecchi → weightsBytes', async () => {
+    const DL = 47144848872 * 2;
+    const run = async (estimate) => {
+      const { ops, store } = setup();
+      ops.saveProfile('qwen3-coder');
+      const prof = store.readProfile('qwen3-coder');
+      store.writeProfile({ ...prof, estimate });
+      waitForReady.mockClear();
+      await ops.up('qwen3-coder', { yes: true });
+      return waitForReady.mock.calls[0][0].timeoutMs;
+    };
+    expect(await run({ weightsGiB: 43.9, downloadBytes: DL })).toBe(readyTimeoutMs(DL));
+    expect(await run({ weightsGiB: 56.9 })).toBe(readyTimeoutMs(61066575656));
   });
 
   it('up: smoke test fallito → propone di terminare e termina', async () => {

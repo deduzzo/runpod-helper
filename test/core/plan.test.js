@@ -87,6 +87,15 @@ describe('makePlan: MLX e pesi (R3, R4b)', () => {
     expect(runpod.listGpus).not.toHaveBeenCalled();
   });
 
+  it('pesi solo in sottocartelle: errore esplicito, non "nessun .safetensors"', async () => {
+    const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
+    hf.listFiles.mockResolvedValue([{ type: 'file', path: 'original/model-00001.safetensors', size: 1000 }, { type: 'file', path: 'config.json', size: 5 }]);
+    const err = await makePlan({ hf, runpod, ...base }).catch((e) => e);
+    expect(err).toMatchObject({ code: 'INVALID_INPUT', message: expect.stringContaining('i pesi sono solo in sottocartelle: non supportato') });
+    hf.listFiles.mockResolvedValue([{ type: 'file', path: 'model.gguf', size: 1000 }]);
+    await expect(makePlan({ hf, runpod, ...base })).rejects.toMatchObject({ message: expect.stringContaining('non contiene file .safetensors') });
+  });
+
   it('R4b: Devstral-Small-2507 pesa 43,9 GiB (non il doppio) con e senza indice dei pesi', async () => {
     const devstral = { ...fx('model-qwen3-coder-30b.json'), id: 'mistralai/Devstral-Small-2507' };
     const run = async (index) => {
@@ -99,6 +108,9 @@ describe('makePlan: MLX e pesi (R3, R4b)', () => {
     for (const index of [undefined, null, fx('index-devstral-small-2507.json').weight_map]) {
       const plan = await run(index);
       expect(plan.model.weightsBytes / 1024 ** 3).toBeCloseTo(43.9, 1);
+      expect(plan.estimate.weightsGiB).toBeCloseTo(43.9, 1);
+      // disco e timeout si calcolano sul totale da scaricare (shard + consolidated)
+      expect(plan.estimate.downloadBytes / 1024 ** 3).toBeCloseTo(87.8, 1);
     }
   });
 });

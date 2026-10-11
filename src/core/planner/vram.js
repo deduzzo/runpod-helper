@@ -21,6 +21,17 @@ export function weightsBytes(tree, { weightMap } = {}) {
     .reduce((sum, f) => sum + sizeOf(f), 0);
 }
 
+// Totale da scaricare: TUTTI i .safetensors di primo livello (anche consolidated*: con load-format auto vLLM può scaricare
+// tutto il repository). Serve a disco e timeout del Pod; weightsBytes resta per la VRAM.
+export function downloadBytes(tree) {
+  return tree
+    .filter((f) => f.type === 'file' && f.path.endsWith('.safetensors') && !f.path.includes('/'))
+    .reduce((sum, f) => sum + sizeOf(f), 0);
+}
+
+// Byte da scaricare per un profilo; i profili vecchi (senza estimate.downloadBytes) ripiegano su weightsBytes.
+export const profileDownloadBytes = (profile) => profile.estimate?.downloadBytes ?? profile.model.weightsBytes;
+
 export function kvBytesPerToken(config, kvDtypeBytes = 2) {
   const c = textConfig(config);
   const layers = c.num_hidden_layers;

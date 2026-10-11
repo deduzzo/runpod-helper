@@ -31,6 +31,17 @@ describe('buildPodBody', () => {
     expect(JSON.parse(b.env.LLMPOD_VLLM_ARGS)).toEqual(['--max-model-len', '65536', '--tensor-parallel-size', '2']);
   });
 
+  it('senza volume: disco e LLMPOD_MODEL_BYTES sul totale da scaricare (estimate.downloadBytes), non sui soli pesi in VRAM', () => {
+    // Devstral-Small-2507: pesi 43,9 GiB (shard) ma il repository ha anche consolidated.safetensors: da scaricare ~87,8 GiB
+    const p = { ...profile, model: { ...profile.model, weightsBytes: 47144848872 }, estimate: { downloadBytes: 94289695744 } };
+    const b = buildPodBody({ profile: p, candidate: { id: 'GPU80', count: 1, dataCenterId: 'X', withVolume: false }, apiKey: 'k', minCudaVersion: '12.9' });
+    expect(b.disk).toBe(Math.ceil(94.289695744 * 1.2) + 20);
+    expect(b.env.LLMPOD_MODEL_BYTES).toBe('94289695744');
+    // profili vecchi senza il campo: ripiego su weightsBytes
+    const old = buildPodBody({ profile: { ...profile, estimate: {} }, candidate: { id: 'GPU80', count: 1, dataCenterId: 'X', withVolume: false }, apiKey: 'k', minCudaVersion: '12.9' });
+    expect(old.disk).toBe(Math.ceil(61.066575656 * 1.2) + 20);
+  });
+
   it('HF_TOKEN solo per modelli gated', () => {
     const gated = { ...profile, model: { ...profile.model, gated: 'manual' } };
     const b = buildPodBody({ profile: gated, candidate: { id: 'G', count: 1, dataCenterId: 'X', withVolume: true }, apiKey: 'k', hfToken: 'hf_x', minCudaVersion: '12.9' });
