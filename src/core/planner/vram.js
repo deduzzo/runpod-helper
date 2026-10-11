@@ -21,12 +21,22 @@ export function kvBytesPerToken(config, kvDtypeBytes = 2) {
   return { bytes: 2 * layers * kvHeads * headDim * kvDtypeBytes, kind: 'full' };
 }
 
-export function estimate({ weightsBytes: w, kvPerToken, context, concurrency, tp, overheadGiB = 2 }) {
+// In quante GPU si ripartisce davvero la KV cache: con MLA la cache latente non è sharded;
+// con GQA vLLM replica le teste KV quando tp > num_key_value_heads.
+export function kvShardsFor(config, tp) {
+  const c = textConfig(config);
+  if (c.kv_lora_rank && c.qk_rope_head_dim) return 1;
+  const kvHeads = c.num_key_value_heads ?? c.num_attention_heads;
+  return Math.max(1, Math.min(tp, kvHeads));
+}
+
+export function estimate({ weightsBytes: w, kvPerToken, context, concurrency, tp, kvShards, overheadGiB = 2 }) {
+  if (!(kvShards >= 1)) throw new Error('estimate: kvShards è obbligatorio (usa kvShardsFor(config, tp))');
   const kvBytes = kvPerToken * context * concurrency;
   return {
     weightsGiB: w / GiB,
     kvGiB: kvBytes / GiB,
-    perGpuGiB: (w / tp + kvBytes / tp) / GiB + overheadGiB,
+    perGpuGiB: (w / tp + kvBytes / kvShards) / GiB + overheadGiB,
   };
 }
 

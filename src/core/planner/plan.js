@@ -1,6 +1,6 @@
 import { LlmpodError, Codes } from '../errors.js';
 import { parseModelRef, summarizeModel } from '../hf.js';
-import { weightsBytes, kvBytesPerToken, estimate, tpSizes } from './vram.js';
+import { weightsBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes } from './vram.js';
 import { detectParsers, buildArgs, applyOverrides, validateArgs } from './vllm-args.js';
 import { selectGpus } from './gpu-select.js';
 
@@ -42,7 +42,7 @@ export async function makePlan({
 
   const kv = kvBytesPerToken(config);
   const pick = (kvPerToken) => {
-    const needs = (tp) => estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp }).perGpuGiB;
+    const needs = (tp) => estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp) }).perGpuGiB;
     return { needs, sel: selectGpus({ catalogs, dataCenterId, needs, tpSizes: sizes, cloud }) };
   };
   let kvCacheDtype = null;
@@ -70,7 +70,7 @@ export async function makePlan({
   }
   if (unknown.length) warnings.push(`Flag non riconosciuti da vLLM ${'v0.30.0'}: ${unknown.join(', ')}`);
 
-  const est = estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp });
+  const est = estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp) });
   return {
     model: { id, revision: sha, requestedRevision: revision, gated: summary.gated, license: summary.license, params: summary.params, weightsBytes: wBytes, maxContext: maxCtx ?? null },
     context: ctx,
