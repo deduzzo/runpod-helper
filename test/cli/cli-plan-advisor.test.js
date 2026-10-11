@@ -121,4 +121,12 @@ describe('plan con consulente', () => {
     expect(plan.vllm.args).not.toContain('--enable-auto-tool-choice');
     expect(plan.parsers.tool).toBeNull();
   });
+
+  it('il comando vllm serve stampato è quotato per la shell', async () => {
+    const s = setup();
+    s.store.writeEnv({ RUNPOD_API_KEY: 'rpa_FINTA_CHIAVE_RUNPOD_123' });
+    const proposal = JSON.stringify({ set: { 'default-chat-template-kwargs': { a: '$(cmd)' } }, rationale: 'r', warnings: [] });
+    await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct', '--yes'], { hf: hf(), runpod: runpod(), http: advisorHttp(proposal) });
+    expect(s.out()).toContain(`--default-chat-template-kwargs '{"a":"$(cmd)"}'`);
+  });
 });

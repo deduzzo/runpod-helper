@@ -1,6 +1,6 @@
 import { LlmpodError, Codes } from '../../core/errors.js';
 import { PRESETS, ZAI_NOTICE } from '../../core/advisor/presets.js';
-import { parseAdvice } from '../../core/advisor/advice.js';
+import { testAdvisor } from '../../core/advisor/advisor.js';
 import { table } from '../render.js';
 
 const FIELDS = ['LLMPOD_ADVISOR_PRESET', 'LLMPOD_ADVISOR_API_KEY', 'LLMPOD_ADVISOR_MODEL', 'LLMPOD_ADVISOR_BASE_URL', 'LLMPOD_ADVISOR_PROTOCOL', 'LLMPOD_ADVISOR_AUTH'];
@@ -72,12 +72,8 @@ export function register(program, getCtx) {
       if (opts.test) {
         const provider = ctx.advisor.provider();
         if (!provider) throw new LlmpodError(Codes.ADVISOR_NOT_CONFIGURED, 'Nessun consulente attivo per i piani', { hint: 'Esegui: llmpod advisor' });
-        const { text } = await provider.complete({
-          system: 'Reply ONLY with this JSON: {"set":{},"rationale":"ok","warnings":[]}',
-          user: 'Test di connessione di llmpod.', maxTokens: 100,
-        });
-        parseAdvice(text);
-        return ctx.io.out(`✓ Consulente raggiungibile (${provider.label})`);
+        const { label } = await testAdvisor(provider);
+        return ctx.io.out(`✓ Consulente raggiungibile (${label})`);
       }
       await configureAdvisor(ctx, { preset: opts.preset });
     });

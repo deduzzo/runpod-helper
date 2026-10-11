@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { LlmpodError, Codes } from '../errors.js';
 import { applyOverrides } from '../planner/vllm-args.js';
+import { profileDownloadBytes } from '../planner/vram.js';
 
 const SUPERVISOR = fs.readFileSync(new URL('./supervisor.py', import.meta.url));
 export const START_CMD = 'echo "$LLMPOD_SUPERVISOR_B64" | base64 -d > /tmp/supervisor.py && exec python3 -u /tmp/supervisor.py';
@@ -17,7 +18,7 @@ export function buildPodBody({ profile, candidate, apiKey, hfToken, minCudaVersi
     LLMPOD_VLLM_ARGS: JSON.stringify(argsForCount(profile.vllm.args, candidate.count)),
     LLMPOD_IDLE_MINUTES: String(profile.watchdog.idleMinutes),
     LLMPOD_MAX_HOURS: String(profile.watchdog.maxHours),
-    LLMPOD_MODEL_BYTES: String(profile.model.weightsBytes),
+    LLMPOD_MODEL_BYTES: String(profileDownloadBytes(profile)),
     HF_HOME: withVolume ? '/workspace/hf' : '/root/.cache/huggingface',
     VLLM_API_KEY: apiKey,
   };
@@ -33,7 +34,7 @@ export function buildPodBody({ profile, candidate, apiKey, hfToken, minCudaVersi
     entrypoint: ['/bin/sh', '-c'],
     cmd: [START_CMD],
     env,
-    disk: withVolume ? 20 : Math.ceil((profile.model.weightsBytes / 1e9) * 1.2) + 20,
+    disk: withVolume ? 20 : Math.ceil((profileDownloadBytes(profile) / 1e9) * 1.2) + 20,
   };
   if (withVolume) body.mounts = { network: [{ volumeId: profile.volume.id, path: '/workspace' }] };
   if (Buffer.byteLength(JSON.stringify(body)) > MAX_BODY_BYTES) {

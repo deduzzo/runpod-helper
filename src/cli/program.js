@@ -16,8 +16,10 @@ import * as run from './commands/run.js';
 import * as rotateKey from './commands/rotate-key.js';
 import * as destroyVolume from './commands/destroy-volume.js';
 import * as advisor from './commands/advisor.js';
+import * as ui from './commands/ui.js';
+import * as chat from './commands/chat.js';
 
-export const COMMANDS = [init, search, plan, save, up, down, status, env, run, rotateKey, destroyVolume, advisor];
+export const COMMANDS = [init, search, plan, save, up, down, status, env, run, rotateKey, destroyVolume, advisor, ui, chat];
 
 export async function runCli(argv, { io, env = process.env, overrides = {} } = {}) {
   const ownPrompt = io ? null : createPrompt();

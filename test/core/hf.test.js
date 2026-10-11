@@ -38,6 +38,16 @@ describe('summarizeModel', () => {
     expect(typeof s.license).toBe('string');
   });
 
+  it('R3: riconosce i modelli MLX (library_name o tag) e legge i bit della quantizzazione', () => {
+    const mlx = summarizeModel(fx('model-mlx-qwen3-coder-30b-4bit.json'));
+    expect(mlx).toMatchObject({ isMlx: true, libraryName: 'mlx', quantBits: 4 });
+    expect(summarizeModel({ id: 'a/b', library_name: 'mlx' }).isMlx).toBe(true);
+    expect(summarizeModel({ id: 'a/b', library_name: 'transformers', tags: ['safetensors', 'mlx'] }).isMlx).toBe(true);
+    const awq = summarizeModel(fx('model-awq-qwen3-coder-30b.json'));
+    expect(awq).toMatchObject({ isMlx: false, quantBits: 4, dtypes: ['I32', 'BF16'] });
+    expect(summarizeModel(fx('model-qwen3-coder-30b.json'))).toMatchObject({ isMlx: false, quantBits: null });
+  });
+
   it('tollera campi mancanti (risultati di ricerca senza expand)', () => {
     const s = summarizeModel(fx('search-qwen3-coder.json')[0]);
     expect(s.params).toBeNull();
@@ -54,6 +64,17 @@ describe('createHf', () => {
     expect(opts.query).toMatchObject({ search: 'qwen3 coder', filter: 'text-generation', sort: 'downloads', direction: -1, limit: 5 });
     expect(opts.query['expand[]']).toEqual(expect.arrayContaining(['safetensors', 'config', 'gated', 'cardData']));
     expect(list.length).toBeGreaterThan(0);
+  });
+
+  it('getWeightIndex legge weight_map di model.safetensors.index.json, null se manca o non leggibile', async () => {
+    const http = fakeHttp([[/GET https:\/\/huggingface\.co\/o\/m\/resolve\/abc\/model\.safetensors\.index\.json$/, { ok: true, status: 200, data: { weight_map: { a: 'model-1.safetensors' } } }]]);
+    expect(await createHf({ http }).getWeightIndex('o/m', 'abc')).toEqual({ a: 'model-1.safetensors' });
+    const missing = fakeHttp([[/GET .*index\.json$/, { ok: false, status: 404, data: null }]]);
+    expect(await createHf({ http: missing }).getWeightIndex('o/m', 'abc')).toBeNull();
+    const broken = fakeHttp([[/GET .*index\.json$/, { ok: true, status: 200, data: 'non json' }]]);
+    expect(await createHf({ http: broken }).getWeightIndex('o/m', 'abc')).toBeNull();
+    const boom = { request: vi.fn(async () => { throw new Error('rete'); }) };
+    expect(await createHf({ http: boom }).getWeightIndex('o/m', 'abc')).toBeNull();
   });
 
   it('listFiles segue la paginazione Link', async () => {

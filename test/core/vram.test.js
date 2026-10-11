@@ -1,12 +1,43 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
-import { GiB, weightsBytes, kvBytesPerToken, kvShardsFor, estimate, fits, tpSizes, bytesFromSafetensorsParams } from '../../src/core/planner/vram.js';
+import { GiB, weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, fits, tpSizes, bytesFromSafetensorsParams } from '../../src/core/planner/vram.js';
 
 const fx = (p) => JSON.parse(fs.readFileSync(new URL(`../fixtures/hf/${p}`, import.meta.url), 'utf8'));
 
 describe('vram', () => {
   it('somma i pesi safetensors reali di Qwen3-Coder-30B', () => {
     expect(weightsBytes(fx('tree-qwen3-coder-30b.json'))).toBe(61066575656);
+  });
+
+  it('R4b: Devstral-Small-2507 (consolidated + shard): conta una sola copia dei pesi, 43,9 GiB', () => {
+    const tree = fx('tree-devstral-small-2507.json');
+    expect(weightsBytes(tree)).toBe(47144848872);
+    expect(weightsBytes(tree) / GiB).toBeCloseTo(43.9, 1);
+  });
+
+  it('downloadBytes: tutti i .safetensors di primo livello (consolidated incluso), niente sottocartelle', () => {
+    const tree = fx('tree-devstral-small-2507.json');
+    expect(downloadBytes(tree)).toBe(47144848872 + 47144846024);
+    expect(downloadBytes(tree) / GiB).toBeCloseTo(87.8, 1);
+    const f = (path, size) => ({ type: 'file', path, size });
+    expect(downloadBytes([f('model.safetensors', 7), f('original/model.safetensors', 99), { type: 'directory', path: 'x.safetensors' }])).toBe(7);
+  });
+
+  it('R4b: con l\'indice (weight_map) contano solo i file elencati; senza corrispondenze si ripiega sulla regola', () => {
+    const tree = fx('tree-devstral-small-2507.json');
+    const weightMap = fx('index-devstral-small-2507.json').weight_map;
+    expect(weightsBytes(tree, { weightMap })).toBe(47144848872);
+    // l'indice elenca solo "consolidated": quello è il peso del modello
+    expect(weightsBytes(tree, { weightMap: { x: 'consolidated.safetensors' } })).toBe(47144846024);
+    expect(weightsBytes(tree, { weightMap: { x: 'file-inesistente.safetensors' } })).toBe(47144848872);
+  });
+
+  it('R4b: sottocartelle ignorate; consolidated conta solo se non ci sono shard model-*', () => {
+    const f = (path, size) => ({ type: 'file', path, size });
+    expect(weightsBytes([f('model-00001-of-00002.safetensors', 10), f('model-00002-of-00002.safetensors', 10), f('consolidated.safetensors', 20), f('consolidated-00001.safetensors', 5)])).toBe(20);
+    expect(weightsBytes([f('consolidated.safetensors', 20)])).toBe(20);
+    expect(weightsBytes([f('model.safetensors', 7), f('onnx/model.safetensors', 99), f('sub/dir/x.safetensors', 3)])).toBe(7);
+    expect(weightsBytes([{ type: 'directory', path: 'a.safetensors', size: 0 }, f('model.safetensors', 7)])).toBe(7);
   });
 
   it('KV per token con GQA (Qwen3-Coder: 2×48×4×128×2)', () => {
@@ -72,6 +103,19 @@ describe('vram', () => {
     expect(bytesFromSafetensorsParams({ BF16: 10, F8_E4M3: 4, F32: 1 })).toBe(10 * 2 + 4 + 4);
     expect(bytesFromSafetensorsParams({ BF16: 30532122624 })).toBe(61064245248);
     expect(bytesFromSafetensorsParams(undefined)).toBeNull();
+  });
+
+  it('R4a: I32/U32 compressi (AWQ/GPTQ/MLX): parametri totali × bits/8, senza bits → null', () => {
+    // QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ: I32 29,9 miliardi (non 29,9e9×4 = 111 GiB)
+    const awq = fx('model-awq-qwen3-coder-30b.json');
+    const bytes = bytesFromSafetensorsParams(awq.safetensors.parameters, { bits: awq.config.quantization_config.bits });
+    expect(bytes).toBe(30532122624 / 2);
+    expect(bytes / GiB).toBeCloseTo(14.2, 1);
+    expect(bytesFromSafetensorsParams({ I32: 29896998912, BF16: 635123712 })).toBeNull();
+    expect(bytesFromSafetensorsParams({ U32: 100, BF16: 100 }, { bits: 8 })).toBe(200);
+    expect(bytesFromSafetensorsParams({ U32: 100 }, { bits: 'x' })).toBeNull();
+    // senza dtype compressi i bits non cambiano nulla (es. FP8 o BF16)
+    expect(bytesFromSafetensorsParams({ BF16: 10 }, { bits: 4 })).toBe(20);
   });
 
   it('tpSizes rispetta il numero di attention heads', () => {

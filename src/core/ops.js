@@ -11,6 +11,7 @@ import { adviseRepair } from './advisor/advisor.js';
 import { diffArgs } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
+import { profileDownloadBytes } from './planner/vram.js';
 import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
@@ -146,7 +147,7 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
 
   async function offerTerminate(name, podId, yes) {
     let ok = true;
-    try { ok = yes || await ask(`Terminare il Pod ${podId} per non continuare a pagare?`, true); } catch { ok = true; } // Ctrl+C al prompt: meglio spegnere
+    try { ok = yes || await ask(`Terminare il Pod ${podId} per non continuare a pagare?`, true, { timeoutValue: true }); } catch { ok = true; } // Ctrl+C al prompt: meglio spegnere
     if (!ok) return;
     try {
       await terminate(name, podId);
@@ -313,7 +314,7 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       let cursor = 0; // cursore dei log del supervisore: dopo un riavvio non si rileggono i log del run precedente
       for (;;) {
         try {
-          let timeoutMs = readyTimeoutMs(profile.model.weightsBytes);
+          let timeoutMs = readyTimeoutMs(profileDownloadBytes(profile));
           for (;;) {
             try {
               st = await waitForReady({ ...readyOpts, since: cursor, timeoutMs });

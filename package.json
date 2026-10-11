@@ -12,12 +12,15 @@
   },
   "files": [
     "src",
-    "data"
+    "data",
+    "dist"
   ],
   "scripts": {
     "test": "npm run test:js && npm run test:py",
     "test:js": "vitest run",
     "test:py": "python3 -m unittest discover -s test/supervisor -v",
+    "build:web": "vite build --config web/vite.config.js",
+    "prepack": "npm run build:web",
     "e2e:cpu": "node scripts/e2e-cpu.js",
     "prepare": "git config core.hooksPath .githooks || true"
   },
@@ -25,6 +28,15 @@
     "commander": "^12.1.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^25.0.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^7.3.7",
     "vitest": "^3.2.7"
   }
 }

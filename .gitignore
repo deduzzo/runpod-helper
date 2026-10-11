@@ -22,3 +22,4 @@ config.local.json
 *.log
 .DS_Store
 Thumbs.db
+.playwright-mcp/

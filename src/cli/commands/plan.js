@@ -1,10 +1,6 @@
-import { LlmpodError, Codes } from '../../core/errors.js';
-import { makePlan, syncDerivedFields } from '../../core/planner/plan.js';
-import { loadFlags } from '../../core/planner/vllm-args.js';
+import { runPlan, applyAdvice } from '../../core/plan-flow.js';
 import { fmtUSD } from '../../core/confirm.js';
-import { advisePlan } from '../../core/advisor/advisor.js';
-import { makeFitsWith } from '../../core/advisor/advice.js';
-import { createRecipes } from '../../core/advisor/recipes.js';
+import { shellQuoteArgs } from '../../core/planner/shell-quote.js';
 import { table, fmtGiB, attachRenderer, renderAdvice } from '../render.js';
 
 const toInt = (v) => Number.parseInt(v, 10);
@@ -25,44 +21,23 @@ export function register(program, getCtx) {
     .option('--json', 'output JSON')
     .action(async (modelRef, opts) => {
       const ctx = getCtx();
-      const cfg = ctx.store.readConfig();
-      if (!cfg.dataCenterId) throw new LlmpodError(Codes.INVALID_INPUT, 'Nessun datacenter configurato', { hint: 'Esegui: llmpod init' });
       const off = attachRenderer(ctx.events, ctx.io);
-      let plan;
+      let result;
       try {
-        plan = await makePlan({
-          hf: ctx.hf, runpod: ctx.runpod, modelRef, context: opts.context, concurrency: opts.concurrency,
-          cloud: cfg.cloud, dataCenterId: cfg.dataCenterId, minCudaVersion: cfg.minCudaVersion,
-          vllmImage: opts.image ?? cfg.vllmImage, set: opts.set, extra: opts.extraArg, flags: loadFlags(),
-          allowTrustRemoteCode: Boolean(opts.allowTrustRemoteCode),
+        result = await runPlan({
+          ctx, modelRef, context: opts.context, concurrency: opts.concurrency, set: opts.set, extra: opts.extraArg,
+          image: opts.image, allowTrustRemoteCode: Boolean(opts.allowTrustRemoteCode), advisor: opts.advisor,
           onProgress: (message) => ctx.events.emit('phase', { message }),
         });
       } finally {
         off();
       }
-      plan.advisor = null;
-      const advisorWanted = opts.advisor === true || (opts.advisor !== false && ctx.advisor.active());
-      if (advisorWanted) {
-        try {
-          const provider = ctx.advisor.provider(undefined, { force: opts.advisor === true });
-          if (!provider) {
-            ctx.io.err('ℹ Consulente non configurato o disponibile solo per le correzioni dopo up: uso gli argomenti di base');
-          } else {
-            ctx.io.err(`▸ Consulto ${provider.label}`);
-            const advice = await advisePlan({ provider, plan, hf: ctx.hf, recipes: createRecipes({ http: ctx.http }), flags: loadFlags(), fitsWith: makeFitsWith(plan), allowTrustRemoteCode: Boolean(opts.allowTrustRemoteCode) });
-            const hasChanges = advice.accepted.length > 0;
-            if (!opts.json) renderAdvice(ctx.io, advice);
-            const apply = hasChanges && (opts.yes || (!opts.json && await ctx.io.ask('Applicare le modifiche proposte dal consulente?', false)));
-            if (apply) {
-              plan.vllm.args = advice.args;
-              syncDerivedFields(plan);
-            }
-            plan.advisor = { preset: ctx.advisor.config()?.preset ?? null, applied: Boolean(apply), rationale: advice.rationale, notes: advice.warnings, recipePath: advice.recipePath, rejected: advice.rejected };
-          }
-        } catch (err) {
-          if (err.code === 'CANCELLED') throw err;
-          ctx.io.err(`⚠ Consulente non disponibile: ${err.message}; uso gli argomenti di base`);
-        }
+      const { plan, advice, advisorError, advisorSkipped } = result;
+      if (advisorSkipped) ctx.io.err(`ℹ ${advisorSkipped}: uso gli argomenti di base`);
+      if (advisorError) ctx.io.err(`⚠ Consulente non disponibile: ${advisorError}; uso gli argomenti di base`);
+      if (advice) {
+        if (!opts.json) renderAdvice(ctx.io, advice);
+        if (advice.accepted.length > 0 && (opts.yes || (!opts.json && await ctx.io.ask('Applicare le modifiche proposte dal consulente?', false)))) applyAdvice(plan, advice);
       }
       ctx.store.writeJson('last-plan.json', plan);
       if (opts.json) return ctx.io.raw(JSON.stringify(plan, null, 2));
@@ -86,7 +61,7 @@ export function register(program, getCtx) {
       if (plan.gpu) io.out(`Scelta:    ${plan.gpu.id} ×${plan.gpu.count} a ${fmtUSD(plan.hourlyUSD)}/h`);
       if (plan.alternatives.length) io.out(`Alternative: ${plan.alternatives.map((a) => `${a.id} ×${a.count} (${fmtUSD(a.hourly)}/h)`).join(', ')}`);
       io.out(`vLLM:      ${plan.vllm.image}`);
-      io.out(`           vllm serve ${m.id} --served-model-name <profilo> ${plan.vllm.args.join(' ')}`);
+      io.out(`           vllm serve ${shellQuoteArgs([m.id])} --served-model-name <profilo> ${shellQuoteArgs(plan.vllm.args)}`);
       for (const w of plan.warnings) io.out(`⚠ ${w}`);
       io.out('\nSalva il piano come profilo con: llmpod save <nome>');
     });

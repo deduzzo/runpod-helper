@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+:root { color-scheme: dark; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: #e5e7eb;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(139, 92, 246, 0.25), transparent),
+    radial-gradient(900px 500px at 110% 10%, rgba(34, 211, 238, 0.18), transparent),
+    #07070d;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.glass {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1rem;
+}
+.neon-text {
+  background: linear-gradient(90deg, #22d3ee, #8b5cf6, #e879f9);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.neon-border { box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.35), 0 0 24px rgba(139, 92, 246, 0.25); }
+@keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.fade-up { animation: fade-up 0.35s ease-out both; }
+@keyframes glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.35); } 50% { box-shadow: 0 0 24px 4px rgba(34, 211, 238, 0.25); } }
+.glow { animation: glow 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .fade-up, .glow { animation: none; } }
