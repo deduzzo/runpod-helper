@@ -6,7 +6,7 @@
 
 `llmpod` è una CLI (con interfaccia web locale) che automatizza il ciclo di vita di un **LLM
 self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di coding agent come
-**Claude Code**, **OpenCode** e **ZCode**:
+**Claude Code**, **OpenCode**, **ZCode** e **pi**:
 
 1. scelta del modello da Hugging Face (ricerca o ID diretto);
 2. stima della VRAM e scelta automatica della GPU (o multi-GPU) più economica e disponibile;
@@ -24,7 +24,7 @@ self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di codin
 | `llmpod plan <modello>` | Stima VRAM (pesi + KV cache + margine), sceglie la GPU, propone gli argomenti di `vllm serve` |
 | `llmpod save <nome>` | Salva il piano come profilo riutilizzabile |
 | `llmpod up <profilo>` | Crea il Pod, attende vLLM, esegue uno smoke test con chiamata a strumento |
-| `llmpod run <client>` | Avvia Claude Code / OpenCode, o configura ZCode, puntandoli al Pod |
+| `llmpod run <client>` | Avvia Claude Code / OpenCode / pi, o configura ZCode, puntandoli al Pod |
 | `llmpod env` | Stampa gli `export` per altri client |
 | `llmpod chat` | Prova veloce con Open WebUI locale (Docker) collegato al Pod |
 | `llmpod status` | Pod attivi, uptime, costo della sessione, credito residuo, costo del volume |
@@ -93,6 +93,7 @@ User-Agent predefinito di Python (`Python-urllib/…`); serve uno User-Agent per
 | Claude Code | Anthropic `/v1/messages` | variabili d'ambiente (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, modelli) e avvio di `claude` |
 | OpenCode | OpenAI Chat Completions | provider `openai-compatible` e avvio di `opencode` |
 | ZCode | OpenAI Chat Completions | provider in `~/.zcode/v2/config.json` (da modificare ad app chiusa) |
+| pi | OpenAI Chat Completions | provider in `~/.pi/agent/models.json` con chiave da variabile d'ambiente, avvio di `pi` |
 | Open WebUI | OpenAI Chat Completions | container Docker locale per prove rapide |
 
 ## Licenza

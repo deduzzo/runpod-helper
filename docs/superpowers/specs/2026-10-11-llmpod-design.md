@@ -35,7 +35,7 @@ profilo salvato.
 
 | Tema | Decisione |
 |---|---|
-| Client v1 | Claude Code, OpenCode, ZCode; Open WebUI per prove rapide |
+| Client v1 | Claude Code, OpenCode, ZCode, pi; Open WebUI per prove rapide |
 | Interfaccia | CLI **e** web UI locale nella v1, sullo stesso core |
 | Classi di modelli | Sia 1 GPU (24–32B) sia multi-GPU con tensor parallel, a seconda del profilo |
 | API Runpod | REST v2 `https://api.runpod.io/v2` (niente GraphQL salvo il credito residuo, vedi §12) |
@@ -101,7 +101,7 @@ src/
       smoke.js              smoke test /v1/messages e /v1/chat/completions
       supervisor.py         eseguito nel Pod (solo stdlib)
     clients/
-      claude-code.js  opencode.js  zcode.js  openwebui-proxy.js
+      claude-code.js  opencode.js  zcode.js  pi.js  openwebui-proxy.js
     events.js               emettitore di eventi di avanzamento
     errors.js               LlmpodError (codice, messaggio IT, suggerimento)
     confirm.js              confirmCost() unico per CLI e UI, --yes, --dry-run
@@ -142,7 +142,7 @@ Principi:
 | `plan <modello[@rev]> [--context 65536] [--concurrency 2] [--set k=v] [--extra-arg …] [--no-advisor]` | Stima VRAM, tabella GPU (scelta + alternative), argomenti vLLM, proposta del consulente come differenza da confermare |
 | `save <nome>` | Salva l'ultimo piano come profilo; genera la chiave vLLM del profilo |
 | `up <profilo>` | §7 |
-| `run <claude\|opencode\|zcode> [--profile]` | §8; `claude` è anche alias di `run claude` |
+| `run <claude\|opencode\|zcode\|pi> [--profile]` | §8; `claude` è anche alias di `run claude` |
 | `env [--profile] [--format sh\|ps1\|json]` | Stampa gli export |
 | `chat` | Apre la prova veloce con Open WebUI |
 | `status` | Pod attivi, uptime, costo della sessione, credito residuo, costo mensile del volume, conto alla rovescia di inattività e durata massima, Pod `llmpod-*` orfani |
@@ -250,6 +250,12 @@ template aggiungerebbe solo uno stato da sincronizzare.
   `config.json.llmpod-bak`, scrittura atomica, permessi 600. Gli altri provider restano invariati.
   Dalla CLI host: controllo processo (`pgrep -x ZCode` / `tasklist`) e rifiuto se aperto.
   Dalla web UI: conferma esplicita "ZCode è chiuso".
+- **pi** (`earendil-works/pi`): inserisce/aggiorna solo `providers.llmpod` in
+  `${PI_CODING_AGENT_DIR:-~/.pi/agent}/models.json` (`baseUrl …/v1`, `api: "openai-completions"`,
+  `apiKey: "$LLMPOD_API_KEY"` — interpolazione d'ambiente di pi, la chiave non viene scritta su
+  disco —, `models: [{ id, name, contextWindow, maxTokens, reasoning }]`), con backup, scrittura
+  atomica e permessi 600; poi avvia `pi --provider llmpod --model <nome servito>` con
+  `LLMPOD_API_KEY` nell'ambiente. Gli altri provider restano invariati.
 - **Open WebUI:** `OPENAI_API_BASE_URL=http://llmpod:8081/v1` (proxy interno del container
   `llmpod`, solo rete compose, chiave interna fissa) → il proxy inoltra al Pod corrente con la
   chiave del profilo, streaming incluso. `ENABLE_PERSISTENT_CONFIG=false`, `WEBUI_AUTH=false`,
@@ -274,7 +280,7 @@ template aggiungerebbe solo uno stato da sincronizzare.
   `.dockerignore` esclude `.env*`, `.git`, `node_modules`.
 - `compose.yaml`:
   - `llmpod`: porte `127.0.0.1:7860:7860`; volumi `${LLMPOD_CONFIG_DIR}:/config`,
-    `${LLMPOD_CONFIG_DIR}/.env:/config/.env:ro`, `${ZCODE_DIR}:/zcode`.
+    `${LLMPOD_CONFIG_DIR}/.env:/config/.env:ro`, `${ZCODE_DIR}:/zcode`, `${PI_DIR}:/pi`.
   - `open-webui`: immagine con versione fissata, `127.0.0.1:3000:8080`, volume `open-webui-data`.
   - Nessun montaggio di `docker.sock`.
 - `scripts/start.{sh,command,ps1,bat}`: imposta `LLMPOD_CONFIG_DIR`/`ZCODE_DIR`, verifica Docker,
