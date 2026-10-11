@@ -27,7 +27,7 @@ export function createHttp({ fetch = globalThis.fetch, userAgent, timeoutMs = 30
         res = await fetch(u, { method, headers: h, body: payload, signal: AbortSignal.timeout(t) });
       } catch (err) {
         if (canRetryServer && attempt < maxRetries) { await sleep(backoff(attempt)); continue; }
-        throw new LlmpodError(Codes.NETWORK, redact(`Errore di rete verso ${u.host}: ${err.message}`), { cause: err });
+        throw new LlmpodError(Codes.NETWORK, redact(`Errore di rete verso ${u.host}: ${err.message}`), { cause: new Error(redact(err.message)) });
       }
       const retryable = res.status === 429 ? retry : canRetryServer && res.status >= 500;
       if (retryable && attempt < maxRetries) {

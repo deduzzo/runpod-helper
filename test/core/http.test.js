@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { inspect } from 'node:util';
 import { createHttp, httpError } from '../../src/core/http.js';
 import { registerSecret, clearSecrets } from '../../src/core/secrets.js';
 
@@ -44,9 +45,12 @@ describe('http', () => {
     registerSecret('rpa_SEGRETOFINTO1234');
     const fetch = vi.fn().mockRejectedValue(new Error('fallito con rpa_SEGRETOFINTO1234'));
     const http = createHttp({ fetch, userAgent: 'u', sleep: async () => {}, maxRetries: 0 });
-    await expect(http.request('GET', 'https://x.test')).rejects.toMatchObject({
+    const err = await http.request('GET', 'https://x.test').catch((e) => e);
+    expect(err).toMatchObject({
       code: 'NETWORK', message: expect.not.stringContaining('rpa_SEGRETOFINTO1234'),
     });
+    expect(String(err.cause?.message)).not.toContain('rpa_SEGRETOFINTO1234');
+    expect(inspect(err)).not.toContain('rpa_SEGRETOFINTO1234');
   });
 
   it('httpError usa il detail del problem+json e maschera', () => {
