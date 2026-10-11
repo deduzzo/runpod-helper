@@ -129,6 +129,14 @@ describe('llmpod chat: credenziali nell\'URL', () => {
     expect(s.all()).not.toContain('segretissima');
     expect(JSON.stringify(spawn.mock.calls)).not.toContain('segretissima');
   });
+  it('host con caratteri da CSP (";"): rifiutato come INVALID_INPUT, nessuna chiamata (stessa validazione della UI)', async () => {
+    const s = sandbox();
+    s.env.LLMPOD_OPENWEBUI_URL = 'http://a.com;script-src';
+    const http = { request: vi.fn() };
+    expect(await s.run(['chat'], { http })).toBe(1);
+    expect(s.err()).toContain('INVALID_INPUT');
+    expect(http.request).not.toHaveBeenCalled();
+  });
   it('URL non valido: il valore non è riportato nell\'errore', async () => {
     const s = sandbox();
     s.env.LLMPOD_OPENWEBUI_URL = 'ftp://utente:segretissima@host';

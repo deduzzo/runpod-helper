@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { resolveOpenwebuiUrl, frameSources, DEFAULT_OPENWEBUI_URL } from '../../src/server/openwebui-url.js';
+import { resolveOpenwebuiUrl, frameSources, DEFAULT_OPENWEBUI_URL } from '../../src/core/openwebui-url.js';
 import { SECURITY_HEADERS, setFrameSources } from '../../src/server/http-utils.js';
 import { LlmpodError } from '../../src/core/errors.js';
 
@@ -23,6 +23,23 @@ describe('indirizzo di Open WebUI (R27)', () => {
         expect(e.message).not.toContain(bad);
       }
     }
+  });
+
+  it('iniezione nella CSP: host con ";", "," o apice rifiutati; IPv6 e host normali ammessi', () => {
+    for (const bad of ['http://a.com;script-src', 'http://a.com,b', "http://a'b.com", 'http://a.com;script-src-elem']) {
+      expect(() => resolveOpenwebuiUrl({ LLMPOD_OPENWEBUI_URL: bad }), bad).toThrow(/LLMPOD_OPENWEBUI_URL non valido/);
+    }
+    expect(resolveOpenwebuiUrl({ LLMPOD_OPENWEBUI_URL: 'http://[::1]:3000' })).toBe('http://[::1]:3000');
+    expect(resolveOpenwebuiUrl({ LLMPOD_OPENWEBUI_URL: 'https://owui-1.example.org:8443' })).toBe('https://owui-1.example.org:8443');
+  });
+
+  it('difesa in profondità: setFrameSources rifiuta origini non conformi', () => {
+    for (const bad of ["http://a.com;script-src", "http://a.com 'unsafe-inline'", 'http://a.com,b', 'ftp://a.com', "*", "http://a.com/path"]) {
+      expect(() => setFrameSources([bad]), bad).toThrow();
+    }
+    expect(SECURITY_HEADERS['content-security-policy']).toContain('frame-src http://127.0.0.1:3000');
+    setFrameSources(['http://[::1]:3000', 'https://owui.example.org']);
+    expect(SECURITY_HEADERS['content-security-policy']).toContain('frame-src http://[::1]:3000 https://owui.example.org;');
   });
 
   it('frame-src: entrambi i nomi loopback con la stessa porta, altrimenti solo l\'origine', () => {

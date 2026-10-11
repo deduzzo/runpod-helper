@@ -42,7 +42,7 @@ export default function Clients() {
     setBusy('zcode'); setError(null);
     try {
       const r = await api('/api/clients/zcode', { method: 'POST', body: { profile: asked, zcodeClosed: closed } });
-      if (alive.current && current.current === asked) setZcodeFile(r.file);
+      if (alive.current && current.current === asked) { setZcodeFile(r.file); setClosed(false); }
     } catch (e) { if (alive.current && current.current === asked) setError(e); } finally { if (alive.current) setBusy(null); }
   }
 

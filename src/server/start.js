@@ -6,7 +6,7 @@ import { isZcodeRunning } from '../core/clients/zcode.js';
 import { createInterruptHandler } from '../cli/commands/up.js';
 import { createApp } from './app.js';
 import { setFrameSources } from './http-utils.js';
-import { resolveOpenwebuiUrl, frameSources } from './openwebui-url.js';
+import { resolveOpenwebuiUrl, frameSources } from '../core/openwebui-url.js';
 import { createRoutes } from './routes.js';
 import { createJobs } from './jobs.js';
 import { createSse } from './sse.js';

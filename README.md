@@ -105,12 +105,16 @@ Il proxy per Open WebUI (porta 8081) inoltra le richieste al Pod del profilo sce
 
 Note sulla scheda "Prova veloce":
 
-- Open WebUI si trova di default su `http://127.0.0.1:3000` (cambialo con `LLMPOD_OPENWEBUI_URL`;
-  il server ne ammette l'incorporamento nella pagina). Se apri l'interfaccia su `127.0.0.1`, la
-  finestra e il link usano `localhost` per Open WebUI, e viceversa: il cookie di sessione
-  (`llmpod_session`) è legato al nome dell'host, non alla porta, e in questo modo il browser non lo
-  invia a Open WebUI. Non aprire Open WebUI sullo stesso nome di host dell'interfaccia.
-- Se Open WebUI rifiuta di essere incorporato, usa il link "Apri in una nuova scheda".
+- Open WebUI si trova di default su `http://127.0.0.1:3000`; cambialo con `LLMPOD_OPENWEBUI_URL`
+  (indirizzo http(s) con nome host semplice: se non è valido, `llmpod ui` non si avvia). Il server
+  consente l'incorporamento in pagina solo di quell'indirizzo.
+- Per gli indirizzi loopback, se apri l'interfaccia su `127.0.0.1` la finestra e il link usano
+  `localhost` per Open WebUI, e viceversa: il cookie di sessione (`llmpod_session`) è legato al
+  nome dell'host, non alla porta, e in questo modo il browser non lo invia a Open WebUI. Lo
+  scambio vale solo per gli indirizzi loopback; non aprire Open WebUI sullo stesso nome di host
+  dell'interfaccia.
+- Open WebUI potrebbe rifiutare di essere incorporato in una pagina: in quel caso resta il link
+  "Apri in una nuova scheda".
 - La scheda "Client" mostra gli `export` (con la chiave del profilo) solo dopo il clic su
   "Mostra gli export": non vengono memorizzati nel browser.
 

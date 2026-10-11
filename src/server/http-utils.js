@@ -10,6 +10,8 @@ export class HttpError extends Error {
 }
 
 const DEFAULT_FRAME_SOURCES = ['http://127.0.0.1:3000', 'http://localhost:3000'];
+// Difesa in profondità: ogni origine va in una direttiva CSP, quindi solo schema://host[:porta] con caratteri sicuri.
+const ORIGIN_RE = /^https?:\/\/([A-Za-z0-9.-]+|\[[0-9a-fA-F:.]+\])(:\d{1,5})?$/;
 const buildCsp = (frameSources) => `default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src ${frameSources.join(' ')}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`;
 
 export const SECURITY_HEADERS = {
@@ -21,6 +23,7 @@ export const SECURITY_HEADERS = {
 // Imposta le origini consentite per l'iframe di Open WebUI (porta/host di LLMPOD_OPENWEBUI_URL). Un solo server per
 // processo: l'oggetto è condiviso e viene letto a ogni risposta. Senza argomenti ripristina i valori predefiniti.
 export function setFrameSources(origins = DEFAULT_FRAME_SOURCES) {
+  for (const o of origins) if (!ORIGIN_RE.test(o)) throw new Error('Origine non valida per la CSP (frame-src)');
   SECURITY_HEADERS['content-security-policy'] = buildCsp(origins);
 }
 

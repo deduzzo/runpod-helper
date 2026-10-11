@@ -30,6 +30,9 @@ describe('Client', () => {
     fireEvent.click(screen.getByLabelText(/ZCode è chiuso/));
     fireEvent.click(zcode);
     await screen.findByText(/config\.json/);
+    // dopo la scrittura la conferma va ridata: la casella si azzera e il pulsante si disabilita
+    expect(screen.getByLabelText(/ZCode è chiuso/).checked).toBe(false);
+    expect(screen.getByRole('button', { name: 'Configura ZCode' }).disabled).toBe(true);
     expect(body(fetchMock, '/api/clients/zcode')).toEqual({ profile: 'qwen3-coder', zcodeClosed: true });
   });
 
@@ -80,6 +83,8 @@ describe('Prova veloce', () => {
     const frame = await screen.findByTitle('Open WebUI');
     expect(frame.getAttribute('src')).toBe('http://127.0.0.1:3000');
     expect(screen.getByText('Apri in una nuova scheda').getAttribute('href')).toBe('http://127.0.0.1:3000');
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads');
+    expect(frame.getAttribute('allow')).toBe('clipboard-write');
     expect(screen.getByText(/8081/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/Profilo per Open WebUI/), { target: { value: 'qwen3-coder' } });
     await screen.findByText(/Profilo impostato/);
@@ -100,6 +105,14 @@ describe('Prova veloce', () => {
     expect(screen.queryByText(/Profilo impostato/)).toBeNull();
   });
 
+  it('indirizzo non http(s): niente iframe né link, errore mostrato', async () => {
+    mockApi({ 'GET /api/overview': overview, 'GET /api/openwebui': { url: 'javascript:alert(1)', profile: null, proxy: null } });
+    render(<QuickTest />);
+    await screen.findByText(/non è un indirizzo http\(s\)/);
+    expect(screen.queryByTitle('Open WebUI')).toBeNull();
+    expect(screen.queryByText('Apri in una nuova scheda')).toBeNull();
+  });
+
   it('errore nel caricamento mostrato', async () => {
     mockApi({});
     render(<QuickTest />);
@@ -115,5 +128,6 @@ describe('embedUrl (R27)', () => {
     expect(embedUrl('https://owui.example.org', 'localhost')).toBe('https://owui.example.org');
     expect(embedUrl('http://127.0.0.1:3000/chat?x=1', '127.0.0.1')).toBe('http://localhost:3000/chat?x=1');
     expect(embedUrl('non-un-url', 'localhost')).toBe('non-un-url');
+    expect(embedUrl('http://[::1]:3000', '::1')).toBe('http://[::1]:3000'); // IPv6 non è nello scambio loopback
   });
 });

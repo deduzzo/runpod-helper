@@ -1,6 +1,7 @@
-import { LlmpodError, Codes } from '../core/errors.js';
+import { LlmpodError, Codes } from './errors.js';
 
 export const DEFAULT_OPENWEBUI_URL = 'http://127.0.0.1:3000';
+const HOST_RE = /^([A-Za-z0-9.-]+|\[[0-9a-fA-F:.]+\])$/;
 const LOOPBACK = new Set(['127.0.0.1', 'localhost']);
 
 // Indirizzo di Open WebUI: LLMPOD_OPENWEBUI_URL (come per "llmpod chat") oppure quello predefinito.
@@ -13,6 +14,10 @@ export function resolveOpenwebuiUrl(env = {}) {
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('protocollo');
   } catch {
     throw new LlmpodError(Codes.INVALID_INPUT, 'LLMPOD_OPENWEBUI_URL non valido', { hint: 'Usa un indirizzo http(s), ad esempio http://127.0.0.1:3000' });
+  }
+  // Il nome host finisce nella CSP (frame-src): il parser URL ammette ";", "," e "'" che ne altererebbero le direttive.
+  if (!HOST_RE.test(url.hostname)) {
+    throw new LlmpodError(Codes.INVALID_INPUT, 'LLMPOD_OPENWEBUI_URL non valido', { hint: 'Il nome host può contenere solo lettere, cifre, "." e "-" (oppure un indirizzo IPv6 tra parentesi quadre)' });
   }
   url.username = '';
   url.password = '';
