@@ -28,7 +28,8 @@ describe('buildPodBody', () => {
     expect(b.mounts).toBeUndefined();
     expect(b.env.HF_HOME).toBe('/root/.cache/huggingface');
     expect(b.disk).toBe(Math.ceil(61.066575656 * 1.2) + 20);
-    expect(JSON.parse(b.env.LLMPOD_VLLM_ARGS)).toEqual(['--max-model-len', '65536', '--tensor-parallel-size', '2']);
+    // GPU sconosciuta ×2: trattata come PCIe senza NVLink → modalità NCCL sicura
+    expect(JSON.parse(b.env.LLMPOD_VLLM_ARGS)).toEqual(['--max-model-len', '65536', '--tensor-parallel-size', '2', '--disable-custom-all-reduce']);
   });
 
   it('senza volume: disco e LLMPOD_MODEL_BYTES sul totale da scaricare (estimate.downloadBytes), non sui soli pesi in VRAM', () => {

@@ -7,7 +7,7 @@ import { profileKeyVar } from './config.js';
 import { proxyUrl } from './runpod.js';
 import { confirmCost, confirmAction, fmtUSD } from './confirm.js';
 import { validateWatchdog, maxCostUSD, fmtHours, idleText, exceedsDefaults, DEFAULT_WATCHDOG, MIN_REMAINING_SECONDS } from './watchdog.js';
-import { buildPodBody, argsForCount } from './pod/body.js';
+import { buildPodBody, podArgs, profileArgs } from './pod/body.js';
 import { adviseRepair } from './advisor/advisor.js';
 import { diffArgs, fitsForOption } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
@@ -210,6 +210,12 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
 
   async function repairWithAdvisor({ err, attempts, yes, endpoint, profile, currentArgs, sup, hourly }) {
     if (!advisor || yes || attempts >= 3 || err.details?.terminating || !REPAIRABLE.includes(err.code)) return null;
+    // Un errore NCCL dipende dall'ambiente del Pod (GPU, P2P), che il consulente non può cambiare, e una ricarica
+    // rileggerebbe tutti i pesi a pagamento: niente consultazione.
+    if (err.details?.nccl) {
+      events.emit('warning', { message: 'Errore NCCL tra le GPU: riparazione con il consulente saltata (non può cambiare l\'ambiente del Pod e una ricarica rileggerebbe tutti i pesi). Elimina il Pod e scegli una sola GPU più grande o GPU SXM con NVLink' });
+      return null;
+    }
     let provider;
     try {
       provider = advisor.provider(endpoint);
@@ -250,7 +256,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
 
   function saveProfileArgs(name, args) {
     const profile = store.readProfile(name);
-    profile.vllm.args = argsForCount(args, profile.gpu.count);
+    profile.vllm.args = profileArgs(args, profile.gpu.count);
     syncDerivedFields(profile);
     store.writeProfile(profile);
     return profile;
@@ -322,7 +328,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
             affordable: balance >= c.hourly,
             // Tempo e costo stimati prima che il modello sia pronto (download + caricamento dei pesi).
             startup: startupOf(profile, c),
-            // NCCL_P2P_DISABLE=1 nel Pod (più GPU senza NVLink)
+            // modalità NCCL sicura nel Pod (più GPU senza NVLink completo: variabili NCCL e --disable-custom-all-reduce)
             ncclSafe: ncclSafeFor(profile, c),
           })),
           moreOptions: Math.max(0, unique.length - max),
@@ -420,7 +426,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const conf = await confirmCost({
       hourlyUSD: first.hourly, yes: yes || costConfirmed, dryRun, ask,
       description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`
-        + `; ${startupOf(profile, first).text}${ncclSafeFor(profile, first) ? '; NCCL_P2P_DISABLE=1 (più GPU senza NVLink)' : ''}`,
+        + `; ${startupOf(profile, first).text}${ncclSafeFor(profile, first) ? '; modalità NCCL sicura (più GPU senza NVLink completo)' : ''}`,
     });
     if (conf.dryRun) {
       const body = buildBody(first);
@@ -474,7 +480,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       const readyOpts = { sup, sleep, now, onStatus: (s) => events.emit('progress', progressOf(s)), onLog: (line) => events.emit('log', { line }) };
       const baseUrl = proxyUrl(pod.id, 8000);
       const endpoint = { baseUrl, apiKey, servedName: profile.servedName, context: profile.context, reasoning: Boolean(profile.parsers?.reasoning) };
-      let currentArgs = argsForCount(profile.vllm.args, candidate.count);
+      let currentArgs = podArgs(profile, candidate); // come nel corpo del Pod (anche la modalità NCCL sicura)
       let repairedArgs = null;
       let attempts = 0;
       let st;

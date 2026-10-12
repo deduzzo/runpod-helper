@@ -9,7 +9,7 @@ import { computeTune } from './tune.js';
 import { memoryCheck } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
-import { argsForCount } from './pod/body.js';
+import { profileArgs } from './pod/body.js';
 import { profileDownloadBytes } from './planner/vram.js';
 import { createSupervisorClient, waitForReady, waitReloadStarted, readyTimeoutMs, progressOf } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
@@ -188,7 +188,7 @@ export function createLiveOps({ store, runpod, http, events, ask, now, sleep, fi
     let saved = false;
     if (save) {
       const profile = store.readProfile(name);
-      profile.vllm.args = argsForCount(p.args, profile.gpu.count);
+      profile.vllm.args = profileArgs(p.args, profile.gpu.count);
       syncDerivedFields(profile);
       if (p.contextChange) profile.context = p.contextChange.to;
       store.writeProfile(profile);

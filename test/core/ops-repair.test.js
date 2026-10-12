@@ -125,6 +125,16 @@ describe('up: correzione con il consulente (livello 3)', () => {
     }
   });
 
+  it('errore NCCL: riparazione con il consulente saltata con un avviso (non cambia l\'ambiente e ricaricherebbe i pesi)', async () => {
+    const cause = 'RuntimeError: NCCL error: unhandled cuda error (run with NCCL_DEBUG=INFO for details)';
+    const t = setup({ smokeResults: [true], advisorText: FIX, statusFn: () => ({ phase: 'error', lastError: 'vLLM terminato con codice 1', errorCause: cause }) });
+    await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'VLLM_ERROR' });
+    expect(t.provider.complete).not.toHaveBeenCalled();
+    expect(t.ask.mock.calls.map((c) => c[0]).join('\n')).not.toMatch(/correzione al consulente/);
+    expect(t.seen.some((e) => e.type === 'warning' && /NCCL.*consulente/.test(e.message))).toBe(true);
+    expect(t.runpod.deletePod).toHaveBeenCalled();
+  });
+
   it('consulente che lancia → avviso e terminazione proposta', async () => {
     const t = setup({ smokeResults: [false], advisorText: FIX, advisorFails: true });
     await expect(t.ops.up('qwen3-coder', {})).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });

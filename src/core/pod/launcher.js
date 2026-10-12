@@ -132,11 +132,14 @@ export function progressOf(st) {
   return { message: { loading: 'Caricamento del modello in GPU', ready: 'vLLM pronto' }[st.phase] ?? `Fase: ${st.phase}` };
 }
 
-const NCCL_RE = /NCCL error|NCCL WARN|ncclUnhandledCudaError|ncclSystemError/i;
-const NCCL_HINT = 'Errore NCCL tra le GPU: su GPU PCIe senza NVLink (RTX, RTX PRO, L40S, A40…) llmpod avvia il Pod con NCCL_P2P_DISABLE=1, '
-  + 'salvo profili creati con --no-nccl-safe (rigenera il piano senza). Se succede comunque, scegli una sola GPU più grande o GPU SXM con NVLink (H100/H200/B200)';
+const NCCL_RE = /NCCL error|NCCL WARN|ncclUnhandledCudaError|ncclSystemError|ncclInternalError|possibile problema NCCL/i;
+const NCCL_HINT = 'Errore NCCL tra le GPU: su GPU senza NVLink completo (RTX, RTX PRO, L40S, A40, NVL…) llmpod avvia il Pod in modalità NCCL sicura '
+  + '(NCCL_P2P_DISABLE=1 o NCCL_P2P_LEVEL=NVL, --disable-custom-all-reduce), salvo profili creati con --no-nccl-safe (rigenera il piano senza). '
+  + 'Se succede comunque, scegli una sola GPU più grande o GPU SXM con NVLink (H100/H200/B200)';
+// Righe d'errore NCCL di vLLM (non quelle del supervisore, che elencano solo le variabili d'ambiente).
+export const isNcclError = (lines) => lines.some((l) => !String(l).startsWith('[llmpod] ambiente') && NCCL_RE.test(String(l)));
 
-export const readyTimeoutMs =(weightsBytes) => Math.round((weightsBytes / 50e6) * 1000) + 600_000;
+export const readyTimeoutMs = (weightsBytes) => Math.round((weightsBytes / 50e6) * 1000) + 600_000;
 
 // `since`: cursore dei log da cui ripartire (dopo un riavvio di vLLM). Il cursore raggiunto è in `logCursor`
 // sul valore restituito e in `details.logCursor` degli errori.
@@ -166,10 +169,10 @@ export async function waitForReady({ sup, timeoutMs, since: sinceOpt = 0, sleep 
         const cause = st.errorCause ?? rootCause.at(-1);
         const what = st.lastError ?? st.terminateReason ?? st.phase;
         const withCause = cause && !String(what).includes(cause.slice(0, 120)) ? ` — causa: ${cause.slice(0, 300)}` : '';
-        const nccl = NCCL_RE.test(cause ?? '') || NCCL_RE.test(String(st.lastError ?? ''));
+        const nccl = isNcclError([cause ?? '', String(st.lastError ?? ''), ...rootCause, ...recent]);
         throw new LlmpodError(oom ? Codes.OOM : Codes.VLLM_ERROR, `vLLM non è partito: ${what}${withCause}`, {
           hint: oom ? 'Memoria GPU insufficiente: riduci --context, usa --set kv-cache-dtype=fp8 o scegli una GPU più grande' : nccl ? NCCL_HINT : 'Controlla i log mostrati sopra',
-          details: { lastLines: rootCause.length ? [...rootCause, '…', ...recent.slice(-22)] : recent.slice(-30), rootCause, logCursor: since, ...(st.phase === 'terminating' ? { terminating: true } : {}) },
+          details: { lastLines: rootCause.length ? [...rootCause, '…', ...recent.slice(-22)] : recent.slice(-30), rootCause, logCursor: since, nccl, ...(st.phase === 'terminating' ? { terminating: true } : {}) },
         });
       }
     }

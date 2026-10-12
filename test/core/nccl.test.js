@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { hasNvlink, needsNcclSafe, ncclEnv, refreshNcclWarning, NCCL_WARNING } from '../../src/core/planner/nccl.js';
-import { buildPodBody } from '../../src/core/pod/body.js';
+import { hasNvlink, nvlinkClass, needsNcclSafe, ncclEnv, ncclArgs, refreshNcclWarning, NCCL_WARNING } from '../../src/core/planner/nccl.js';
+import { buildPodBody, podArgs, profileArgs } from '../../src/core/pod/body.js';
 import { profileFromPlan } from '../../src/core/ops.js';
 
 describe('hasNvlink: NVLink presunto solo per GPU SXM/HGX', () => {
@@ -21,13 +21,37 @@ describe('needsNcclSafe / ncclEnv', () => {
     expect(needsNcclSafe('NVIDIA RTX PRO 6000 Blackwell Server Edition', 2)).toBe(true);
     expect(needsNcclSafe('NVIDIA RTX PRO 6000 Blackwell Server Edition', 1)).toBe(false);
     expect(needsNcclSafe('NVIDIA H100 80GB HBM3', 4)).toBe(false);
+    expect(needsNcclSafe('NVIDIA H100 NVL', 2)).toBe(true); // NVLink parziale (bridge a coppie)
   });
 
-  it('NCCL_P2P_DISABLE=1 (e non NCCL_IB_DISABLE), salvo ncclSafe: false', () => {
-    expect(ncclEnv({ gpuId: 'NVIDIA L40S', count: 2 })).toEqual({ NCCL_P2P_DISABLE: '1' });
+  it('nvlinkClass: completo (SXM/HGX), parziale (NVL), assente (PCIe)', () => {
+    expect(nvlinkClass('NVIDIA H100 80GB HBM3')).toBe('full');
+    expect(nvlinkClass('NVIDIA H200 NVL')).toBe('partial');
+    expect(nvlinkClass('NVIDIA H100 NVL')).toBe('partial');
+    expect(nvlinkClass('NVIDIA L40S')).toBe('none');
+    expect(nvlinkClass('NVIDIA H100 PCIe')).toBe('none');
+  });
+
+  const COMMON = { VLLM_ALLREDUCE_USE_SYMM_MEM: '0', NCCL_CUMEM_HOST_ENABLE: '0', NCCL_DEBUG: 'WARN' };
+  it('PCIe: NCCL_P2P_DISABLE=1 più le variabili comuni (e non NCCL_IB_DISABLE), salvo ncclSafe: false', () => {
+    expect(ncclEnv({ gpuId: 'NVIDIA L40S', count: 2 })).toEqual({ NCCL_P2P_DISABLE: '1', ...COMMON });
     expect(ncclEnv({ gpuId: 'NVIDIA L40S', count: 2, ncclSafe: false })).toEqual({});
     expect(ncclEnv({ gpuId: 'NVIDIA L40S', count: 1 })).toEqual({});
     expect(ncclEnv({ gpuId: 'NVIDIA B200', count: 8 })).toEqual({});
+  });
+
+  it('NVLink parziale: NCCL_P2P_LEVEL=NVL invece di disattivare il P2P', () => {
+    expect(ncclEnv({ gpuId: 'NVIDIA H200 NVL', count: 2 })).toEqual({ NCCL_P2P_LEVEL: 'NVL', ...COMMON });
+  });
+
+  it('ncclArgs: --disable-custom-all-reduce in modalità sicura, senza duplicati', () => {
+    const base = ['--tensor-parallel-size', '2'];
+    expect(ncclArgs(base, { gpuId: 'NVIDIA L40S', count: 2 })).toEqual([...base, '--disable-custom-all-reduce']);
+    expect(ncclArgs(base, { gpuId: 'NVIDIA H100 NVL', count: 2 })).toEqual([...base, '--disable-custom-all-reduce']);
+    expect(ncclArgs([...base, '--disable-custom-all-reduce'], { gpuId: 'NVIDIA L40S', count: 2 })).toEqual([...base, '--disable-custom-all-reduce']);
+    expect(ncclArgs(base, { gpuId: 'NVIDIA L40S', count: 2, ncclSafe: false })).toEqual(base);
+    expect(ncclArgs(base, { gpuId: 'NVIDIA H200', count: 2 })).toEqual(base);
+    expect(ncclArgs(['--tensor-parallel-size', '1'], { gpuId: 'NVIDIA L40S', count: 1 })).toEqual(['--tensor-parallel-size', '1']);
   });
 });
 
@@ -72,8 +96,22 @@ describe('Pod: variabili NCCL nell\'ambiente del container', () => {
     expect(body({ id: 'NVIDIA L40S', count: 2 }).env.NCCL_IB_DISABLE).toBeUndefined();
   });
 
+  it('modalità sicura: anche --disable-custom-all-reduce negli argomenti di vLLM (con il tensor parallel del candidato)', () => {
+    const args = (c, p) => JSON.parse(body(c, p).env.LLMPOD_VLLM_ARGS);
+    expect(args({ id: 'NVIDIA L40S', count: 2 })).toEqual(['--tensor-parallel-size', '2', '--disable-custom-all-reduce']);
+    expect(args({ id: 'NVIDIA L40S', count: 1 })).toEqual(['--tensor-parallel-size', '1']);
+    expect(args({ id: 'NVIDIA H100 80GB HBM3', count: 2 })).toEqual(['--tensor-parallel-size', '2']);
+    expect(args({ id: 'NVIDIA L40S', count: 2 }, { ...profile, ncclSafe: false })).toEqual(['--tensor-parallel-size', '2']);
+    expect(podArgs(profile, { id: 'NVIDIA L40S', count: 2 })).toEqual(['--tensor-parallel-size', '2', '--disable-custom-all-reduce']);
+  });
+
+  it('profileArgs: salvando nel profilo gli argomenti del Pod, la modalità sicura non resta (si riapplica a ogni avvio)', () => {
+    expect(profileArgs(['--tensor-parallel-size', '2', '--disable-custom-all-reduce'], 2)).toEqual(['--tensor-parallel-size', '2']);
+  });
+
   it('profilo con ncclSafe: false → nessuna variabile', () => {
-    expect(body({ id: 'NVIDIA L40S', count: 2 }, { ...profile, ncclSafe: false }).env.NCCL_P2P_DISABLE).toBeUndefined();
+    const env = body({ id: 'NVIDIA L40S', count: 2 }, { ...profile, ncclSafe: false }).env;
+    expect(Object.keys(env).filter((k) => k.startsWith('NCCL_') || k.startsWith('VLLM_ALLREDUCE'))).toEqual([]);
   });
 
   it('il profilo eredita ncclSafe dal piano (predefinito true)', () => {

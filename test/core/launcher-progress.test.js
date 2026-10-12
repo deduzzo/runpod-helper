@@ -46,6 +46,29 @@ describe('waitForReady: errore con la causa dal supervisore', () => {
     expect(err.details.rootCause).toContain(cause);
   });
 
+  it('suggerimento NCCL anche se la riga NCCL è solo nei log (non nella causa); le righe del supervisore non contano', async () => {
+    const lines = [
+      { n: 1, line: '[llmpod] ambiente NCCL: NCCL_P2P_DISABLE=1' },
+      { n: 2, line: "(Worker_TP0 pid=2) transport/shm.cc:590 NCCL WARN Cuda failure 217 'peer access is not supported between these two devices'" },
+    ];
+    let first = true;
+    const sup = { logs: async () => { const r = first ? { lines } : { lines: [] }; first = false; return r; }, status: async () => ({ phase: 'error', lastError: 'vLLM terminato con codice 1', errorCause: 'RuntimeError: Engine core initialization failed. See root cause above.' }) };
+    const err = await waitForReady({ sup, timeoutMs: 60_000, sleep }).catch((e) => e);
+    expect(err.hint).toMatch(/NCCL/);
+    expect(err.details.nccl).toBe(true);
+
+    const only = { logs: async () => ({ lines: [{ n: 1, line: '[llmpod] ambiente NCCL: NCCL_P2P_DISABLE=1' }] }), status: async () => ({ phase: 'error', lastError: 'vLLM terminato con codice 1', errorCause: 'ValueError: x' }) };
+    const err2 = await waitForReady({ sup: only, timeoutMs: 60_000, sleep }).catch((e) => e);
+    expect(err2.details.nccl).toBe(false);
+  });
+
+  it('vLLM bloccato dopo i pesi: suggerimento NCCL', async () => {
+    const sup = { logs: async () => ({ lines: [] }), status: async () => ({ phase: 'error', lastError: 'vLLM bloccato (possibile problema NCCL/P2P): nessuna riga di log da 10 min dopo il caricamento dei pesi', errorCause: 'vLLM bloccato (possibile problema NCCL/P2P)' }) };
+    const err = await waitForReady({ sup, timeoutMs: 60_000, sleep }).catch((e) => e);
+    expect(err.details.nccl).toBe(true);
+    expect(err.message.match(/bloccato/g)).toHaveLength(1);
+  });
+
   it('errorCause senza righe di log: la causa compare nel messaggio', async () => {
     const sup = { logs: async () => ({ lines: [] }), status: async () => ({ phase: 'error', lastError: 'vLLM terminato con codice 1', errorCause: 'ValueError: argomento non valido' }) };
     const err = await waitForReady({ sup, timeoutMs: 60_000, sleep }).catch((e) => e);
