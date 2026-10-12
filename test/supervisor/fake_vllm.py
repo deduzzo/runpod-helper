@@ -72,4 +72,7 @@ for extra in json.loads(os.environ.get('FAKE_VLLM_LINES') or '[]'):
     print(extra, flush=True)
 if os.environ.get('FAKE_VLLM_EXIT_AFTER'):
     threading.Timer(float(os.environ['FAKE_VLLM_EXIT_AFTER']), lambda: os._exit(3)).start()
+if os.environ.get('FAKE_VLLM_NOT_READY'):  # vLLM che muore durante l'avvio, prima di rispondere
+    while True:
+        time.sleep(1)
 ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

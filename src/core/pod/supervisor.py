@@ -53,17 +53,25 @@ def parse_kv_tokens(line):
 
 # Barra tqdm di vLLM durante la lettura dei pesi: "Loading safetensors checkpoint shards:  66% Completed | 135/206 [14:39<08:15, 6.98s/it]".
 LOAD_LINE = re.compile(r'Loading safetensors checkpoint shards:\s*(\d+)%\s*Completed\s*\|\s*(\d+)/(\d+)\s*\[([\d:]+)<([\d:]+|\?)')
-# Righe che indicano che vLLM ha iniziato a leggere i pesi (da qui un riavvio ricaricherebbe tutto).
-LOAD_START = re.compile(r'Loading safetensors checkpoint shards|Starting to load model|Loading weights took|Model loading took')
+# Righe che indicano che vLLM sta leggendo i pesi (da qui un riavvio ricaricherebbe tutto). Non "Starting to load model":
+# il download da Hugging Face avviene dentro load_model, dopo quella riga.
+LOAD_START = re.compile(r'Loading safetensors checkpoint shards|Loading weights took')
+# Pesi letti: da qui vLLM prepara KV cache, compilazione e CUDA graph (con comunicazione NCCL tra le GPU).
+LOAD_DONE = re.compile(r'Loading weights took|Model loading took')
+# Messaggi "contenitore" di EngineCore e APIServer: ripetono o rimandano alla causa stampata prima da un altro processo.
+WRAPPER_RE = re.compile(r'Engine core initialization failed|Worker failed with error|check the stack trace above|'
+                        r'See root cause above|EngineCore failed|EngineDeadError|Worker proc \S+ died', re.I)
 # Errori non transitori: un riavvio ripeterebbe lo stesso errore (e, durante il caricamento, ricaricherebbe tutti i pesi).
-FATAL_RE = re.compile(r'NCCL error|CUDA error|cudaError|out of memory|OutOfMemoryError|illegal memory access|Worker failed|'
-                      r'EngineCore failed|Engine core initialization failed|NotImplementedError|ValueError|AssertionError', re.I)
+FATAL_RE = re.compile(r'NCCL error|CUDA error|Cuda failure|cudaError|out of memory|OutOfMemoryError|illegal memory access|'
+                      r'NotImplementedError|ValueError|AssertionError', re.I)
 # Errori di rete o del download (Hugging Face), che possono sparire ritentando.
 TRANSIENT_RE = re.compile(r'ConnectionError|ConnectTimeout|ReadTimeout|Timeout(Error)?\b|Connection (reset|refused|aborted)|'
                           r'Temporary failure in name resolution|Name or service not known|MaxRetryError|IncompleteRead|'
                           r'ChunkedEncodingError|ProtocolError|LocalEntryNotFoundError|HfHubHTTPError: 5\d\d|'
                           r'\b50[234] Server Error|429 Client Error')
-CAUSE_RE = re.compile(r'(\b[A-Z]\w*(Error|Exception|Timeout)\b|CUDA error|out of memory|not supported|unsupported|NotImplemented)')
+CAUSE_RE = re.compile(r'(\b[A-Z]\w*(Error|Exception|Timeout)\b|CUDA error|Cuda failure|out of memory|not supported|unsupported|NotImplemented)')
+WARNING_RE = re.compile(r'\bWARNING\b')
+STALL_CAUSE = 'vLLM bloccato (possibile problema NCCL/P2P)'
 FRAME_RE = re.compile(r'^\s*(File "|\^+\s*$|Traceback \(most recent call last\)|return |raise$)')
 PROC_PREFIX = re.compile(r'^\([\w.-]+ pid=\d+\)\s*')
 
@@ -97,10 +105,12 @@ def cause_line(line):
 
 
 def classify_line(line):
-    """'fatal' (errore non transitorio), 'transient' (rete/download) o None."""
+    """'wrapper' (messaggio contenitore), 'fatal' (errore non transitorio), 'transient' (rete/download) o None."""
     clean = cause_line(line)
     if clean is None:
         return None
+    if WRAPPER_RE.search(clean):
+        return 'wrapper'
     if FATAL_RE.search(clean):
         return 'fatal'
     if TRANSIENT_RE.search(clean):
@@ -108,9 +118,14 @@ def classify_line(line):
     return None
 
 
-def restart_decision(loading_started, fatal, transient, restarts, max_restarts):
-    """(riavviare?, motivo). Si riavvia solo per errori chiaramente transitori prima della lettura dei pesi:
-    un riavvio dopo ricaricherebbe tutti i pesi (anche 20 minuti a pagamento) e un errore NCCL/CUDA/OOM si ripeterebbe."""
+def restart_decision(loading_started, fatal, transient, restarts, max_restarts, was_ready=False):
+    """(riavviare?, motivo). Durante l'avvio si riavvia solo per errori chiaramente transitori prima della lettura dei pesi:
+    un riavvio dopo ricaricherebbe tutti i pesi (anche 20 minuti a pagamento) e un errore NCCL/CUDA/OOM si ripeterebbe.
+    Un crash con vLLM già pronto (a runtime) ha diritto a un riavvio."""
+    if was_ready:
+        if restarts >= max_restarts:
+            return False, f'dopo {restarts} riavvii'
+        return True, 'crash di vLLM dopo che era pronto'
     if loading_started:
         return False, 'durante il caricamento dei pesi: nessun riavvio automatico (ricaricare i pesi costerebbe altro tempo)'
     if fatal:
@@ -252,6 +267,10 @@ def env_config(env):
         'status_port': int(env.get('LLMPOD_STATUS_PORT', '8001')),
         'max_restarts': int(env.get('LLMPOD_MAX_RESTARTS', '1')),  # solo errori transitori prima dei pesi
         'state_dir': env.get('LLMPOD_STATE_DIR', '/root'),
+        # vLLM fermo senza log dopo la lettura dei pesi: si dichiara bloccato (tipico di un problema NCCL/P2P tra le GPU)
+        'stall_seconds': float(env.get('LLMPOD_STALL_MINUTES', '10')) * 60,
+        # un Pod in errore si elimina dopo questo tempo anche con l'inattività disattivata
+        'error_seconds': float(env.get('LLMPOD_ERROR_MINUTES', '15')) * 60,
     }
 
 
@@ -292,6 +311,7 @@ class Supervisor:
         self.restarts = 0
         self.last_error = None
         self.error_cause = None
+        self.error_since = None
         self.kv_tokens = None
         self.downloaded = 0
         self.tracker = None
@@ -305,9 +325,27 @@ class Supervisor:
         """Stato del singolo processo vLLM: si azzera a ogni avvio (riavvio o ricarica)."""
         self.load_progress = None
         self.loading_started = False
+        self.weights_loaded = False
+        self.last_output_at = self.clock()
         self.fatal_cause = None
         self.transient_cause = None
+        self.wrapper_cause = None
         self.last_cause = None
+
+    def current_cause(self):
+        """La causa più specifica vista: prima riga fatale, poi transitoria, poi il primo messaggio contenitore, poi l'ultima riga d'errore."""
+        return self.fatal_cause or self.transient_cause or self.wrapper_cause or self.last_cause
+
+    def fail(self, message, cause=None):
+        """Passa a 'error' (una sola volta per evento): l'inattività inizia a contare e dopo error_seconds il Pod si elimina."""
+        now = self.clock()
+        self.phase = 'error'
+        self.error_cause = cause
+        self.last_error = message
+        self.error_since = now
+        self.log(f'[llmpod] {message}')
+        if self.tracker is None:
+            self.tracker = IdleTracker(now)
 
     def _load_started_at(self):
         """Istante di avvio persistito per Pod: se il container riparte la durata massima non si azzera."""
@@ -390,20 +428,28 @@ class Supervisor:
 
     def _observe(self, line):
         """Avanzamento del caricamento dei pesi e cause d'errore dalle righe di vLLM."""
+        self.last_output_at = self.clock()
         progress = parse_load_progress(line)
         if progress:
             self.load_progress = progress
+            if progress['total'] and progress['done'] >= progress['total']:
+                self.weights_loaded = True
             if self.phase == 'downloading':
                 self.phase = 'loading'  # vLLM sta leggendo i pesi: il download è concluso
         if LOAD_START.search(line):
             self.loading_started = True
+        if LOAD_DONE.search(line):
+            self.weights_loaded = True
         kind = classify_line(line)
-        if kind == 'fatal':
-            self.fatal_cause = cause_line(line)
-        elif kind == 'transient':
-            self.transient_cause = cause_line(line)
         cause = cause_line(line)
-        if cause:
+        # Vince la PRIMA riga specifica: i messaggi successivi di EngineCore/APIServer la ripetono o la avvolgono.
+        if kind == 'fatal' and self.fatal_cause is None:
+            self.fatal_cause = cause
+        elif kind == 'transient' and self.transient_cause is None:
+            self.transient_cause = cause
+        elif kind == 'wrapper' and self.wrapper_cause is None:
+            self.wrapper_cause = cause
+        if cause and not WARNING_RE.search(line):
             self.last_cause = cause
 
     def logs_since(self, since):
@@ -465,6 +511,7 @@ class Supervisor:
                 self.restarts = 0
                 self.last_error = None
                 self.error_cause = None
+                self.error_since = None
             return True
 
     def reload(self, args):
@@ -477,11 +524,10 @@ class Supervisor:
                 self.restarts = 0
                 self.last_error = None
                 self.error_cause = None
+                self.error_since = None
                 self.start_vllm()
         except Exception as e:  # noqa: BLE001
-            self.phase = 'error'
-            self.last_error = f'ricarica fallita: {e}'
-            self.log(f'[llmpod] {self.last_error}')
+            self.fail(f'ricarica fallita: {e}')
         finally:
             with self.lock:
                 # Come al primo avvio: l'inattività si conta da 'ready' (lo imposta step) o subito in caso di errore.
@@ -529,29 +575,35 @@ class Supervisor:
         # così il controllo di terminazione non resta bloccato.
         if self.proc_lock.acquire(blocking=False):
             try:
-                if (self.phase != 'terminating' and self.proc is not None
+                # In 'error' il processo morto resta lì: il crash si gestisce una volta sola.
+                if (self.phase not in ('terminating', 'error') and self.proc is not None
                         and self.proc.poll() is not None and not self.expected_exit):
                     code = self.proc.returncode
+                    was_ready = self.phase == 'ready'
                     reader = self.reader
                     if reader is not None:
                         reader.join(5)  # le ultime righe (la causa) arrivano dopo la fine del processo
                     self.log(f'[llmpod] vLLM terminato con codice {code}')
                     restart, why = restart_decision(self.loading_started, self.fatal_cause is not None,
-                                                    self.transient_cause is not None, self.restarts, self.cfg['max_restarts'])
-                    cause = self.fatal_cause or self.transient_cause or self.last_cause
+                                                    self.transient_cause is not None, self.restarts, self.cfg['max_restarts'],
+                                                    was_ready=was_ready)
+                    cause = self.current_cause()
                     if restart:
                         self.restarts += 1
                         self.log(f'[llmpod] {why} ({cause}): nuovo tentativo {self.restarts}/{self.cfg["max_restarts"]}')
-                        self.phase = 'downloading' if self.cfg['model_bytes'] > 0 else 'loading'
+                        if was_ready:
+                            self.tracker = None  # come in una ricarica: l'inattività riparte da 'ready'
+                        self.phase = 'downloading' if self.cfg['model_bytes'] > 0 and not was_ready else 'loading'
                         self.start_vllm()
                         self._start_download_meter()
                     else:
-                        self.phase = 'error'
-                        self.error_cause = cause
-                        self.last_error = f'vLLM terminato con codice {code} {why}' + (f' — causa: {cause[:300]}' if cause else '')
-                        self.log(f'[llmpod] {self.last_error}')
-                        if self.tracker is None:
-                            self.tracker = IdleTracker(now)
+                        self.fail(f'vLLM terminato con codice {code} {why}' + (f' — causa: {cause[:300]}' if cause else ''), cause)
+                elif self._stalled(now):
+                    minutes = round(self.cfg['stall_seconds'] / 60)
+                    self.expected_exit = True
+                    if self.proc is not None and self.proc.poll() is None:
+                        self.proc.terminate()  # senza attendere: il controllo non si blocca
+                    self.fail(f'{STALL_CAUSE}: nessuna riga di log da {minutes} min dopo il caricamento dei pesi', STALL_CAUSE)
             finally:
                 self.proc_lock.release()
         if self.phase in ('downloading', 'loading'):
@@ -577,7 +629,17 @@ class Supervisor:
                 self.log(f'[llmpod] metriche non disponibili: {e}')
         tracker = self.tracker
         idle = tracker.idle_seconds(now) if tracker else None
-        return termination_reason(now, self.started_at, self.max_seconds, idle, self.idle_seconds)
+        reason = termination_reason(now, self.started_at, self.max_seconds, idle, self.idle_seconds)
+        # Un Pod in errore non serve a nessuno: si elimina anche con l'inattività disattivata ("mai").
+        if (reason is None and self.phase == 'error' and self.error_since is not None
+                and now - self.error_since >= self.cfg.get('error_seconds', 900)):
+            reason = 'error-timeout'
+        return reason
+
+    def _stalled(self, now):
+        """Vero se vLLM, dopo aver letto i pesi, non scrive più nulla da stall_seconds (es. NCCL bloccato tra le GPU)."""
+        return (self.phase == 'loading' and self.weights_loaded and not self.reloading
+                and now - self.last_output_at >= self.cfg.get('stall_seconds', 600))
 
     def status(self):
         now = self.clock()
@@ -625,10 +687,7 @@ class Supervisor:
         try:
             self.start_vllm()
         except Exception as e:  # noqa: BLE001
-            self.phase = 'error'
-            self.last_error = f'avvio di vLLM fallito: {e}'
-            self.log(f'[llmpod] {self.last_error}')
-            self.tracker = IdleTracker(self.clock())
+            self.fail(f'avvio di vLLM fallito: {e}')
         self._start_download_meter()
         while True:
             try:
