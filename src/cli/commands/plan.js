@@ -2,6 +2,7 @@ import { runPlan, applyAdvice } from '../../core/plan-flow.js';
 import { fmtUSD } from '../../core/confirm.js';
 import { shellQuoteArgs } from '../../core/planner/shell-quote.js';
 import { mtpLabel } from '../../core/planner/mtp-label.js';
+import { resolveSetRef } from '../../core/model-sets.js';
 import { optionLabel, applyGpuChoice, isUsable, vramLabel } from '../../core/planner/gpu-choice.js';
 import { table, fmtGiB, attachRenderer, renderAdvice } from '../render.js';
 
@@ -23,8 +24,8 @@ async function chooseGpu(ctx, plan) {
 
 export function register(program, getCtx) {
   program.command('plan <modello>')
-    .description('Stima VRAM, sceglie la GPU e gli argomenti di vllm serve (org/modello, org/modello@rev o URL)')
-    .option('--context <n>', 'lunghezza massima del contesto', toInt, 65536)
+    .description('Stima VRAM, sceglie la GPU e gli argomenti di vllm serve (org/modello, org/modello@rev, URL o <set>/<n> di un set consigliato)')
+    .option('--context <n>', 'lunghezza massima del contesto (con <set>/<n>: quello consigliato dal set)', toInt, 65536)
     .option('--concurrency <n>', 'richieste in parallelo previste', toInt, 2)
     .option('--set <chiave=valore>', 'imposta un argomento di vLLM (ripetibile)', collect, [])
     .option('--extra-arg <arg>', 'aggiunge un argomento di vLLM (ripetibile)', collect, [])
@@ -35,13 +36,17 @@ export function register(program, getCtx) {
     .option('--gpu <id>', 'usa questa GPU, nella forma <id>[x<numero>] (senza domanda)')
     .option('--yes', 'applica la proposta del consulente senza chiedere (e non chiede la GPU)')
     .option('--json', 'output JSON')
-    .action(async (modelRef, opts) => {
+    .action(async (ref, opts, cmd) => {
       const ctx = getCtx();
+      // <set>/<n>: modello del set alla revisione verificata; senza --context esplicito vale il contesto consigliato.
+      const fromSet = resolveSetRef(ref);
+      const modelRef = fromSet ? fromSet.modelRef : ref;
+      const context = fromSet && cmd.getOptionValueSource('context') === 'default' ? fromSet.recommendedContext : opts.context;
       const off = attachRenderer(ctx.events, ctx.io);
       let result;
       try {
         result = await runPlan({
-          ctx, modelRef, context: opts.context, concurrency: opts.concurrency, set: opts.set, extra: opts.extraArg,
+          ctx, modelRef, context, concurrency: opts.concurrency, set: opts.set, extra: opts.extraArg,
           image: opts.image, allowTrustRemoteCode: Boolean(opts.allowTrustRemoteCode), advisor: opts.advisor, gpu: opts.gpu,
           onProgress: (message) => ctx.events.emit('phase', { message }),
         });
