@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { vi } from 'vitest';
 import { runCli } from '../../src/cli/program.js';
 import { createIo } from '../../src/cli/render.js';
@@ -28,6 +29,13 @@ export function sandbox({ answers = {} } = {}) {
     out: () => outBuf.join(''),
     err: () => errBuf.join(''),
     all: () => outBuf.join('') + errBuf.join(''),
-    run: (argv, overrides = {}) => runCli(argv, { io, env, overrides }),
+    run: (argv, overrides = {}, extra = {}) => runCli(argv, { io, env, overrides, ...extra }),
   };
+}
+
+// Standard input finto: un flusso con il testo dato (null = vuoto); tty true simula un terminale.
+export function fakeStdin(text, { tty = false } = {}) {
+  const r = Readable.from(text === null ? [] : [text]);
+  r.isTTY = tty;
+  return r;
 }

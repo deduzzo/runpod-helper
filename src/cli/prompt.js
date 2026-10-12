@@ -28,6 +28,8 @@ export function createPrompt({ input = process.stdin, output = process.stderr } 
 
   function open() {
     if (rl || ended) return;
+    // Flusso già letto fino in fondo (es. la chiave è stata letta da stdin): non arriverà più nessun evento "close".
+    if (input.readableEnded || input.destroyed) { ended = true; return; }
     const current = readline.createInterface({ input, output: sink, terminal: isTty });
     rl = current;
     current.on('line', (line) => {
@@ -53,7 +55,9 @@ export function createPrompt({ input = process.stdin, output = process.stderr } 
     current.close();
   }
 
-  async function question(text, { secret = false } = {}) {
+  // eofHint: se l'input è terminato (nessuna riga disponibile), invece del valore predefinito fallisce
+  // indicando l'opzione della riga di comando che sostituisce la domanda.
+  async function question(text, { secret = false, eofHint = null } = {}) {
     output.write(text);
     let answer;
     if (queue.length) {
@@ -64,7 +68,7 @@ export function createPrompt({ input = process.stdin, output = process.stderr } 
       open();
       muted = secret;
       try {
-        answer = await new Promise((resolve, reject) => { waiter = { resolve, reject }; });
+        answer = ended ? null : await new Promise((resolve, reject) => { waiter = { resolve, reject }; });
       } finally {
         muted = false;
         // In un terminale l'interfaccia resta in raw mode finché è aperta: la chiudiamo
@@ -73,21 +77,24 @@ export function createPrompt({ input = process.stdin, output = process.stderr } 
       }
     }
     if (secret) output.write('\n');
+    if (answer === null && eofHint) {
+      throw new LlmpodError(Codes.INVALID_INPUT, 'Domanda senza risposta: l\'input non è un terminale e non contiene altre righe', { hint: eofHint });
+    }
     return answer === null ? null : answer.trim();
   }
 
   return {
     isTty,
-    async ask(q, defYes = false) {
-      const a = await question(`${q} ${defYes ? '[S/n]' : '[s/N]'} `);
+    async ask(q, defYes = false, { eofHint } = {}) {
+      const a = await question(`${q} ${defYes ? '[S/n]' : '[s/N]'} `, { eofHint });
       if (!a) return defYes;
       return ['s', 'si', 'sì', 'y', 'yes'].includes(a.toLowerCase());
     },
-    async askText(q, def) {
-      return (await question(def ? `${q} [${def}] ` : `${q} `)) || (def ?? '');
+    async askText(q, def, { eofHint } = {}) {
+      return (await question(def ? `${q} [${def}] ` : `${q} `, { eofHint })) || (def ?? '');
     },
-    async askSecret(q) {
-      return (await question(`${q} `, { secret: true })) ?? '';
+    async askSecret(q, { eofHint } = {}) {
+      return (await question(`${q} `, { secret: true, eofHint })) ?? '';
     },
     close() {
       closeRl();

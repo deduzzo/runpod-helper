@@ -27,7 +27,7 @@ import * as manage from './commands/manage.js';
 
 export const COMMANDS = [init, search, plan, save, up, down, keep, status, metrics, logs, tune, manage, env, run, rotateKey, destroyVolume, advisor, ui, chat, prepare];
 
-export async function runCli(argv, { io, env = process.env, overrides = {} } = {}) {
+export async function runCli(argv, { io, env = process.env, overrides = {}, stdin = process.stdin } = {}) {
   const ownPrompt = io ? null : createPrompt();
   io ??= createIo({ prompt: ownPrompt });
   const result = { code: 0 };
@@ -38,7 +38,7 @@ export async function runCli(argv, { io, env = process.env, overrides = {} } = {
     .exitOverride()
     .configureOutput({ writeOut: (s) => io.raw(s.trimEnd()), writeErr: (s) => io.err(s.trimEnd()) });
   let ctx;
-  const getCtx = () => (ctx ??= createContext({ env, io, overrides }));
+  const getCtx = () => (ctx ??= createContext({ env, io, overrides, stdin }));
   for (const cmd of COMMANDS) cmd.register(program, getCtx, result);
 
   try {
