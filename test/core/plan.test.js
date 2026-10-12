@@ -82,6 +82,29 @@ describe('makePlan', () => {
     expect(plan.vllm.args.filter((a) => a === '--enable-auto-tool-choice')).toHaveLength(1);
   });
 
+  it('DeepSeek-V4.1 con draft head nei pesi: --speculative-config DSpark della regola, non MTP', async () => {
+    const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
+    hf.getConfig.mockResolvedValue({ ...fx('config-qwen3-coder-30b.json'), architectures: ['DeepseekV41ForCausalLM'], model_type: 'deepseek_v41', num_nextn_predict_layers: 3 });
+    hf.getWeightIndex = vi.fn().mockResolvedValue({ 'mtp.0.attn.wq_a.weight': 'model-00001-of-00016.safetensors' });
+    const plan = await makePlan({ hf, runpod, ...base, modelRef: 'dealignai/DeepSeek-V4.1-Flash-UNCENSORED-FP8' });
+    const spec = plan.vllm.args[plan.vllm.args.indexOf('--speculative-config') + 1];
+    expect(JSON.parse(spec)).toMatchObject({ method: 'dspark', num_speculative_tokens: 5 });
+    expect(plan.vllm.args).toEqual(expect.arrayContaining(['--tokenizer-mode', 'deepseek_v41']));
+    expect(plan.mtp).toEqual({ present: true, enabled: true });
+  });
+
+  it('senza chat template ma con --tokenizer-mode della regola (DeepSeek-V4): nessun avviso sul chat template', async () => {
+    const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
+    const model = fx('model-qwen3-coder-30b.json');
+    hf.getModel.mockResolvedValue({ ...model, config: { ...model.config, tokenizer_config: {}, chat_template_jinja: undefined } });
+    hf.getConfig.mockResolvedValue({ ...fx('config-qwen3-coder-30b.json'), architectures: ['DeepseekV4ForCausalLM'], model_type: 'deepseek_v4' });
+    const plan = await makePlan({ hf, runpod, ...base, modelRef: 'apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8' });
+    expect(plan.warnings.join(' ')).not.toMatch(/chat template/);
+    hf.getConfig.mockResolvedValue({ ...fx('config-qwen3-coder-30b.json'), architectures: ['FooForCausalLM'], model_type: 'foo' });
+    const other = await makePlan({ hf, runpod, ...base, modelRef: 'x/Foo' });
+    expect(other.warnings.join(' ')).toMatch(/chat template/);
+  });
+
   it('contesto oltre il massimo del modello viene ridotto con avviso', async () => {
     const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
     const plan = await makePlan({ hf, runpod, ...base, context: 10_000_000 });

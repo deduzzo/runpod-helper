@@ -82,10 +82,11 @@ export async function makePlan({
     warnings.push(`Contesto ridotto da ${context} a ${maxCtx}, il massimo dichiarato dal modello`);
     ctx = maxCtx;
   }
-  if (!summary.hasChatTemplate) warnings.push('Il modello non dichiara un chat template: le chiamate a strumento potrebbero non funzionare');
   if (summary.gated) warnings.push(`Modello gated (${summary.gated}): serve HF_TOKEN con accesso approvato`);
 
   const parsers = detectParsers({ modelId: id, config });
+  // Con --tokenizer-mode della regola (DeepSeek-V4, Mistral) è il tokenizer di vLLM a costruire il prompt: il chat template non serve.
+  if (!summary.hasChatTemplate && !parsers.extraArgs.includes('--tokenizer-mode')) warnings.push('Il modello non dichiara un chat template: le chiamate a strumento potrebbero non funzionare');
   warnings.push(...parsers.warnings);
 
   const sizes = tpSizes(config);
@@ -121,7 +122,7 @@ export async function makePlan({
   }
 
   const tp = sel.choice?.count ?? 1;
-  const args = applyOverrides(buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype, speculative: mtpPresent ? MTP_SPEC : null }), { set, extra });
+  const args = applyOverrides(buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype, speculative: mtpPresent ? (parsers.speculative ?? MTP_SPEC) : null }), { set, extra });
   const { unknown, forbidden } = validateArgs(args, flags, { allowTrustRemoteCode });
   if (forbidden.length) {
     throw new LlmpodError(Codes.INVALID_INPUT, `Argomenti vLLM non consentiti: ${forbidden.join(', ')}`, { hint: 'llmpod gestisce da solo chiave, host, porta e nome servito' });

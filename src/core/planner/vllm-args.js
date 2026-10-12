@@ -19,7 +19,7 @@ export function detectParsers({ modelId, config }) {
   const rule = RULES.find((r) => matches(r, modelId, c));
   if (!rule) {
     return {
-      tool: null, reasoning: null, extraArgs: [],
+      tool: null, reasoning: null, extraArgs: [], speculative: null,
       warnings: [`UNKNOWN_TOOL_PARSER: nessun tool-call parser noto per ${modelId} (${(c.architectures ?? []).join(', ') || c.model_type}); usa --set tool-call-parser=<nome>`],
     };
   }
@@ -27,6 +27,8 @@ export function detectParsers({ modelId, config }) {
     tool: rule.tool ?? null,
     reasoning: rule.reasoning ?? null,
     extraArgs: rule.extraArgs ?? [],
+    // Decodifica speculativa propria dell'architettura (es. DSpark di DeepSeek-V4.1) al posto di MTP_SPEC; null = MTP_SPEC.
+    speculative: rule.speculative ?? null,
     warnings: rule.warning ? [rule.warning] : [],
   };
 }
