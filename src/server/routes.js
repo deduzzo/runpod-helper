@@ -4,6 +4,7 @@ import { assertProfileName } from '../core/config.js';
 import { createEvents } from '../core/events.js';
 import { redact } from '../core/secrets.js';
 import { searchRows } from '../core/search.js';
+import { modelSetsDocument, resolveSetRef } from '../core/model-sets.js';
 import { runPlan, applyAdvice } from '../core/plan-flow.js';
 import { testAdvisor } from '../core/advisor/advisor.js';
 import { clientExports } from '../core/clients/env-format.js';
@@ -62,9 +63,14 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     rows: await searchRows(ctx.hf, url.searchParams.get('q') ?? '', { limit: intParam(url.searchParams.get('limit'), 20, 1, 100, 'limit'), all: url.searchParams.get('all') === '1' }),
   })));
 
+  // Set di modelli consigliati (data/model-sets.json, già validato): la pagina Modelli li mostra come schede.
+  add('GET', '/api/model-sets', json(() => modelSetsDocument()));
+
   add('POST', '/api/plan', json(async ({ req }) => {
     const b = await readJson(req);
-    const r = await runPlan({ ctx, modelRef: String(b.model ?? ''), context: intParam(b.context, 65536, 1024, 1_048_576, 'context'), concurrency: intParam(b.concurrency, 2, 1, 256, 'concurrency'), set: Array.isArray(b.set) ? b.set.map(String) : [], extra: Array.isArray(b.extra) ? b.extra.map(String) : [], advisor: typeof b.advisor === 'boolean' ? b.advisor : undefined });
+    // <set>/<n> come nella CLI: revisione verificata e, senza context, il contesto consigliato dal set.
+    const fromSet = resolveSetRef(String(b.model ?? ''));
+    const r = await runPlan({ ctx, modelRef: fromSet ? fromSet.modelRef : String(b.model ?? ''), context: intParam(b.context, fromSet?.recommendedContext ?? 65536, 1024, 1_048_576, 'context'), concurrency: intParam(b.concurrency, 2, 1, 256, 'concurrency'), set: Array.isArray(b.set) ? b.set.map(String) : [], extra: Array.isArray(b.extra) ? b.extra.map(String) : [], advisor: typeof b.advisor === 'boolean' ? b.advisor : undefined });
     ctx.store.writeJson('last-plan.json', r.plan);
     state.lastAdvice = r.advice && r.advice.accepted.length ? r.advice : null;
     state.lastAdvicePlanId = state.lastAdvice ? planId(r.plan) : null;
