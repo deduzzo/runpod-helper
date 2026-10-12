@@ -140,6 +140,8 @@ const NCCL_HINT = 'Errore NCCL tra le GPU: su GPU senza NVLink completo (RTX, RT
 export const isNcclError = (lines) => lines.some((l) => !String(l).startsWith('[llmpod] ambiente') && NCCL_RE.test(String(l)));
 
 export const readyTimeoutMs = (weightsBytes) => Math.round((weightsBytes / 50e6) * 1000) + 600_000;
+// Attesa di up: almeno 1,5 volte la stima dell'avvio (modelli grandi e multi-GPU caricano molto più lentamente di 50 MB/s).
+export const startupTimeoutMs = (weightsBytes, estimate) => Math.max(readyTimeoutMs(weightsBytes), Math.round(1.5 * (estimate?.totalSeconds ?? 0) * 1000));
 
 // `since`: cursore dei log da cui ripartire (dopo un riavvio di vLLM). Il cursore raggiunto è in `logCursor`
 // sul valore restituito e in `details.logCursor` degli errori.

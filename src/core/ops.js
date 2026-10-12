@@ -13,12 +13,12 @@ import { diffArgs, fitsForOption } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
 import { profileDownloadBytes } from './planner/vram.js';
-import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs, waitReloadStarted, progressOf } from './pod/launcher.js';
+import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, startupTimeoutMs, waitReloadStarted, progressOf } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
 import { applyGpuChoice, vramLabel } from './planner/gpu-choice.js';
 import { podState, STOPPED_STATUSES } from './pod-state.js';
-import { estimateStartup, startupText } from './planner/startup.js';
+import { estimateStartup, startupText, weightsOnVolume, rememberWeightsOnVolume } from './planner/startup.js';
 import { needsNcclSafe } from './planner/nccl.js';
 import { createLiveOps } from './ops-live.js';
 
@@ -39,8 +39,11 @@ function watchdogNote(wd, hourly) {
 }
 
 // Stima del tempo e del costo dell'avvio (download + caricamento dei pesi) su un candidato: il Pod costa anche prima di essere pronto.
-function startupOf(profile, c) {
-  const e = estimateStartup({ downloadBytes: profileDownloadBytes(profile), weightsBytes: profile.model?.weightsBytes, count: c.count, hourlyUSD: c.hourly });
+function startupOf(profile, c, state) {
+  const e = estimateStartup({
+    downloadBytes: profileDownloadBytes(profile), weightsBytes: profile.model?.weightsBytes, count: c.count, withVolume: Boolean(c.withVolume),
+    cached: weightsOnVolume(state, profile, c), hourlyUSD: c.hourly,
+  });
   return { ...e, text: startupText(e) };
 }
 const ncclSafeFor = (profile, c) => profile.ncclSafe !== false && needsNcclSafe(c.id, c.count);
@@ -303,6 +306,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const { balance } = await runpod.getBalance();
     const { startable } = await launchCandidates(profile, cfg, { all: true });
     const wd = { ...DEFAULT_WATCHDOG, ...profile.watchdog };
+    const state = store.readState();
     return {
       profile: name, model: profile.model.id, context: profile.context, mtp: profile.mtp ?? null,
       watchdog: wd, balanceUSD: balance,
@@ -327,7 +331,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
             maxCostUSD: Math.round(c.hourly * wd.maxHours * 100) / 100,
             affordable: balance >= c.hourly,
             // Tempo e costo stimati prima che il modello sia pronto (download + caricamento dei pesi).
-            startup: startupOf(profile, c),
+            startup: startupOf(profile, c, state),
             // modalità NCCL sicura nel Pod (più GPU senza NVLink completo: variabili NCCL e --disable-custom-all-reduce)
             ncclSafe: ncclSafeFor(profile, c),
           })),
@@ -426,7 +430,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const conf = await confirmCost({
       hourlyUSD: first.hourly, yes: yes || costConfirmed, dryRun, ask,
       description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`
-        + `; ${startupOf(profile, first).text}${ncclSafeFor(profile, first) ? '; modalità NCCL sicura (più GPU senza NVLink completo)' : ''}`,
+        + `; ${startupOf(profile, first, store.readState()).text}${ncclSafeFor(profile, first) ? '; modalità NCCL sicura (più GPU senza NVLink completo)' : ''}`,
     });
     if (conf.dryRun) {
       const body = buildBody(first);
@@ -488,7 +492,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       let cursor = 0; // cursore dei log del supervisore: dopo un riavvio non si rileggono i log del run precedente
       for (;;) {
         try {
-          let timeoutMs = readyTimeoutMs(profileDownloadBytes(profile));
+          let timeoutMs = startupTimeoutMs(profileDownloadBytes(profile), startupOf(profile, candidate, store.readState()));
           for (;;) {
             try {
               st = await waitForReady({ ...readyOpts, since: cursor, timeoutMs });
@@ -517,6 +521,8 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
           endpoint.reasoning = Boolean(syncDerivedFields({ vllm: { args: [...next] } }).parsers.reasoning);
         }
       }
+      // I pesi di questa revisione ora sono sul volume: il prossimo avvio con il volume non li riscarica.
+      if (candidate.withVolume && profile.volume?.id) store.writeState(rememberWeightsOnVolume(store.readState(), profile));
       await refreshZcode(endpoint);
       return {
         podId: pod.id, baseUrl, hourlyUSD: runningPod.cost ?? candidate.hourly, candidate,
