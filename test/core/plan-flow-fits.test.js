@@ -28,4 +28,17 @@ describe('applyAdvice e opzioni che non entrano più', () => {
     applyAdvice(plan, { args: [...plan.vllm.args, '--enable-prefix-caching'] });
     expect(plan.options.every((o) => o.fits === true)).toBe(true);
   });
+
+  it('le alternative che non entrano più vengono tolte, così up --yes non ripiega su GPU dove il modello non entra', () => {
+    const plan = makePlan();
+    expect(plan.alternatives.map((a) => a.id)).toEqual(['G70']);
+    applyAdvice(plan, { args: [...plan.vllm.args, '--gpu-memory-utilization', '0.85'] });
+    expect(plan.alternatives).toEqual([]);
+  });
+
+  it('le alternative che entrano ancora restano', () => {
+    const plan = makePlan();
+    applyAdvice(plan, { args: [...plan.vllm.args, '--enable-prefix-caching'] });
+    expect(plan.alternatives.map((a) => a.id)).toEqual(['G70']);
+  });
 });

@@ -278,8 +278,8 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const { inVolumeDc, otherDcs } = rankCandidates({ profile: { ...profile, gpu: wanted[0], alternatives: wanted.slice(1) }, catalogs, cloud: profile.cloud });
     let candidates = inVolumeDc.filter((c) => c.hourly > 0);
     if (choiceMode) {
-      // Modalità scelta: niente domanda di ripiego, la scelta stessa è il consenso. Si propongono sempre anche le opzioni
-      // disponibili in altri datacenter (senza volume). Si escludono le GPU non disponibili ora e quelle che con gli argomenti
+      // Modalità scelta: niente domanda di ripiego, la scelta stessa è il consenso. Si propongono anche le opzioni
+      // disponibili in altri datacenter (senza volume), salvo allowFallbackWithoutVolume "never". Si escludono le GPU non disponibili ora e quelle che con gli argomenti
       // salvati del profilo non entrerebbero in memoria.
       const optionOf = (c) => profile.options?.find((o) => o.id === c.id && o.count === c.count);
       const fits = (c) => {
@@ -290,7 +290,9 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
         if (!memoryGiB || !profile.estimate?.weightsGiB || !Number.isFinite(o.perGpuGiB)) return true;
         return fitsForOption({ estimate: profile.estimate, kvCacheDtype: null }, { count: c.count, memoryGiB, perGpuGiB: o.perGpuGiB })(profile.vllm.args);
       };
-      candidates = [...candidates, ...otherDcs].filter((c) => c.hourly > 0 && c.availability !== 'NONE' && fits(c)).sort((a, b) => a.hourly - b.hourly);
+      // allowFallbackWithoutVolume "never": mai opzioni di altri datacenter (senza volume).
+      const elsewhere = profile.allowFallbackWithoutVolume === 'never' ? [] : otherDcs;
+      candidates = [...candidates, ...elsewhere].filter((c) => c.hourly > 0 && c.availability !== 'NONE' && fits(c)).sort((a, b) => a.hourly - b.hourly);
     } else if (!candidates.some((c) => c.availability !== 'NONE') && otherDcs.length) {
       const policy = profile.allowFallbackWithoutVolume ?? 'ask';
       const allow = policy === 'always' || (policy === 'ask' && (yes || dryRun || await ask(

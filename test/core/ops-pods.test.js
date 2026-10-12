@@ -241,6 +241,20 @@ describe('up in modalità scelta: disponibilità, altri datacenter, memoria', ()
     expect(t.runpod.createPod).toHaveBeenCalledTimes(1);
   });
 
+  it('con allowFallbackWithoutVolume "never" non propone opzioni di altri datacenter', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE'], ['US-1', 'MEDIUM']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async (_t, _o, def) => def });
+    t.store.writeProfile({ ...t.store.readProfile('p'), allowFallbackWithoutVolume: 'never' });
+    await t.ops.up('p');
+    expect(t.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPU96|1|EU-A']);
+  });
+
+  it('con "never" e nessuna GPU nel datacenter del volume: NO_GPU_AVAILABLE, niente altri datacenter', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE'], ['US-1', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+    t.store.writeProfile({ ...t.store.readProfile('p'), allowFallbackWithoutVolume: 'never' });
+    await expect(t.ops.up('p')).rejects.toMatchObject({ code: 'NO_GPU_AVAILABLE' });
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+  });
+
   it('con yes: comportamento precedente (volume, ripieghi, nessuna domanda)', async () => {
     const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE'], ['US-1', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async () => 'x' });
     await t.ops.up('p', { yes: true });
