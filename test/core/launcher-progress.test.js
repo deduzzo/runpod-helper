@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { progressOf, waitForReady } from '../../src/core/pod/launcher.js';
+import { progressOf, waitForReady, isNcclError } from '../../src/core/pod/launcher.js';
 
 const GiB = 1024 ** 3;
 
@@ -62,11 +62,32 @@ describe('waitForReady: errore con la causa dal supervisore', () => {
     expect(err2.details.nccl).toBe(false);
   });
 
-  it('vLLM bloccato dopo i pesi: suggerimento NCCL', async () => {
-    const sup = { logs: async () => ({ lines: [] }), status: async () => ({ phase: 'error', lastError: 'vLLM bloccato (possibile problema NCCL/P2P): nessuna riga di log da 10 min dopo il caricamento dei pesi', errorCause: 'vLLM bloccato (possibile problema NCCL/P2P)' }) };
+  it('vLLM fermo dopo i pesi: suggerimento NCCL', async () => {
+    const cause = 'vLLM fermo senza log da 30 minuti dopo il caricamento dei pesi (possibile blocco NCCL/P2P o compilazione molto lunga)';
+    const sup = { logs: async () => ({ lines: [] }), status: async () => ({ phase: 'error', lastError: cause, errorCause: cause }) };
     const err = await waitForReady({ sup, timeoutMs: 60_000, sleep }).catch((e) => e);
     expect(err.details.nccl).toBe(true);
-    expect(err.message.match(/bloccato/g)).toHaveLength(1);
+    expect(err.message.match(/fermo senza log/g)).toHaveLength(1);
+  });
+
+  it('righe NCCL WARN generiche (benigne con NCCL_DEBUG=WARN) + OOM: errore OOM, nessun suggerimento NCCL', async () => {
+    const lines = [
+      { n: 1, line: '(Worker_TP0 pid=2) NCCL WARN NET/Plugin: Failed to open libibverbs.so' },
+      { n: 2, line: 'torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB' },
+    ];
+    let first = true;
+    const sup = { logs: async () => { const r = first ? { lines } : { lines: [] }; first = false; return r; }, status: async () => ({ phase: 'error', lastError: 'vLLM terminato con codice 1' }) };
+    const err = await waitForReady({ sup, timeoutMs: 60_000, sleep }).catch((e) => e);
+    expect(err.code).toBe('OOM');
+    expect(err.details.nccl).toBe(false);
+  });
+
+  it('isNcclError: solo errori veri, non gli avvisi NCCL WARN generici', () => {
+    expect(isNcclError(['NCCL WARN NET/Plugin: Failed to open libibverbs.so'])).toBe(false);
+    expect(isNcclError(["NCCL WARN Cuda failure 217 'peer access is not supported'"])).toBe(true);
+    expect(isNcclError(['RuntimeError: NCCL error: unhandled cuda error'])).toBe(true);
+    expect(isNcclError(['ncclInternalError: Internal check failed'])).toBe(true);
+    expect(isNcclError(['[llmpod] ambiente NCCL: NCCL_P2P_DISABLE=1'])).toBe(false);
   });
 
   it('errorCause senza righe di log: la causa compare nel messaggio', async () => {

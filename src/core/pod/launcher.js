@@ -1,6 +1,8 @@
 import { LlmpodError, Codes } from '../errors.js';
 import { redact } from '../secrets.js';
 import { proxyUrl } from '../runpod.js';
+import { estimateStartup } from '../planner/startup.js';
+import { profileDownloadBytes } from '../planner/vram.js';
 
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RANK = { HIGH: 0, MEDIUM: 1, LOW: 2, NONE: 3 };
@@ -132,7 +134,9 @@ export function progressOf(st) {
   return { message: { loading: 'Caricamento del modello in GPU', ready: 'vLLM pronto' }[st.phase] ?? `Fase: ${st.phase}` };
 }
 
-const NCCL_RE = /NCCL error|NCCL WARN|ncclUnhandledCudaError|ncclSystemError|ncclInternalError|possibile problema NCCL/i;
+// Solo errori NCCL veri (e la causa di stallo del supervisore): le righe "NCCL WARN" generiche, frequenti e benigne con
+// NCCL_DEBUG=WARN (es. "NET/Plugin: Failed to open libibverbs.so"), non contano.
+const NCCL_RE = /NCCL error|Cuda failure|unhandled cuda error|ncclUnhandledCudaError|ncclSystemError|ncclInternalError|possibile blocco NCCL/i;
 const NCCL_HINT = 'Errore NCCL tra le GPU: su GPU senza NVLink completo (RTX, RTX PRO, L40S, A40, NVL…) llmpod avvia il Pod in modalità NCCL sicura '
   + '(NCCL_P2P_DISABLE=1 o NCCL_P2P_LEVEL=NVL, --disable-custom-all-reduce), salvo profili creati con --no-nccl-safe (rigenera il piano senza). '
   + 'Se succede comunque, scegli una sola GPU più grande o GPU SXM con NVLink (H100/H200/B200)';
@@ -142,6 +146,11 @@ export const isNcclError = (lines) => lines.some((l) => !String(l).startsWith('[
 export const readyTimeoutMs = (weightsBytes) => Math.round((weightsBytes / 50e6) * 1000) + 600_000;
 // Attesa di up: almeno 1,5 volte la stima dell'avvio (modelli grandi e multi-GPU caricano molto più lentamente di 50 MB/s).
 export const startupTimeoutMs = (weightsBytes, estimate) => Math.max(readyTimeoutMs(weightsBytes), Math.round(1.5 * (estimate?.totalSeconds ?? 0) * 1000));
+// Attesa di una ricarica (tune, riparazione) sul Pod avviato: come up, ma senza download (i pesi sono già sul disco del Pod).
+export function reloadTimeoutMs(profile, { count = 1, withVolume = false } = {}) {
+  const bytes = profileDownloadBytes(profile);
+  return startupTimeoutMs(bytes, estimateStartup({ downloadBytes: bytes, weightsBytes: profile.model?.weightsBytes, count, withVolume, cached: true }));
+}
 
 // `since`: cursore dei log da cui ripartire (dopo un riavvio di vLLM). Il cursore raggiunto è in `logCursor`
 // sul valore restituito e in `details.logCursor` degli errori.
@@ -171,7 +180,8 @@ export async function waitForReady({ sup, timeoutMs, since: sinceOpt = 0, sleep 
         const cause = st.errorCause ?? rootCause.at(-1);
         const what = st.lastError ?? st.terminateReason ?? st.phase;
         const withCause = cause && !String(what).includes(cause.slice(0, 120)) ? ` — causa: ${cause.slice(0, 300)}` : '';
-        const nccl = isNcclError([cause ?? '', String(st.lastError ?? ''), ...rootCause, ...recent]);
+        // Solo se non è un OOM: un errore di memoria resta riparabile con il consulente anche con righe NCCL nei log.
+        const nccl = !oom && isNcclError([cause ?? '', String(st.lastError ?? ''), ...rootCause, ...recent]);
         throw new LlmpodError(oom ? Codes.OOM : Codes.VLLM_ERROR, `vLLM non è partito: ${what}${withCause}`, {
           hint: oom ? 'Memoria GPU insufficiente: riduci --context, usa --set kv-cache-dtype=fp8 o scegli una GPU più grande' : nccl ? NCCL_HINT : 'Controlla i log mostrati sopra',
           details: { lastLines: rootCause.length ? [...rootCause, '…', ...recent.slice(-22)] : recent.slice(-30), rootCause, logCursor: since, nccl, ...(st.phase === 'terminating' ? { terminating: true } : {}) },

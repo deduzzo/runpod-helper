@@ -125,6 +125,14 @@ describe('up: correzione con il consulente (livello 3)', () => {
     }
   });
 
+  it('OOM con righe NCCL WARN benigne nei log: la riparazione con il consulente resta consentita', async () => {
+    const logLines = [{ n: 1, line: '(Worker_TP0 pid=2) NCCL WARN NET/Plugin: Failed to open libibverbs.so' }, ...OOM_LINES.map((l) => ({ ...l, n: 2 }))];
+    const t = setup({ smokeResults: [true], advisorText: FIX, statusFn: erroring, logLines });
+    await t.ops.up('qwen3-coder', {});
+    expect(t.provider.complete).toHaveBeenCalledTimes(1);
+    expect(t.seen.some((e) => e.type === 'warning' && /NCCL/.test(e.message))).toBe(false);
+  });
+
   it('errore NCCL: riparazione con il consulente saltata con un avviso (non cambia l\'ambiente e ricaricherebbe i pesi)', async () => {
     const cause = 'RuntimeError: NCCL error: unhandled cuda error (run with NCCL_DEBUG=INFO for details)';
     const t = setup({ smokeResults: [true], advisorText: FIX, statusFn: () => ({ phase: 'error', lastError: 'vLLM terminato con codice 1', errorCause: cause }) });

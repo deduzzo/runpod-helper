@@ -10,8 +10,7 @@ import { memoryCheck } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
 import { profileArgs } from './pod/body.js';
-import { profileDownloadBytes } from './planner/vram.js';
-import { createSupervisorClient, waitForReady, waitReloadStarted, readyTimeoutMs, progressOf } from './pod/launcher.js';
+import { createSupervisorClient, waitForReady, waitReloadStarted, reloadTimeoutMs, progressOf } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 
 export const RELOAD_NOTE = 'vLLM verrà ricaricato: interruzione di alcuni minuti; il Pod resta acceso';
@@ -135,7 +134,7 @@ export function createLiveOps({ store, runpod, http, events, ask, now, sleep, fi
     events.emit('phase', { message: 'Ricarica di vLLM con i nuovi argomenti' });
     if (!(await waitReloadStarted({ sup, args, sleep, now }))) throw new LlmpodError(Codes.VLLM_ERROR, 'Il supervisore non ha confermato la ricarica di vLLM entro 60 secondi');
     const st = await waitForReady({
-      sup, since: cursor, sleep, now, timeoutMs: readyTimeoutMs(profileDownloadBytes(profile)),
+      sup, since: cursor, sleep, now, timeoutMs: reloadTimeoutMs(profile, { count: pod.gpu?.count ?? profile.gpu?.count ?? 1, withVolume: Boolean(store.readState().pods?.[profile.name]?.withVolume) }),
       onStatus: (s) => events.emit('progress', progressOf(s)),
       onLog: (line) => events.emit('log', { line }),
     });

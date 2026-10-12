@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { estimateStartup, startupText, weightsOnVolume, rememberWeightsOnVolume } from '../../src/core/planner/startup.js';
-import { startupTimeoutMs, readyTimeoutMs } from '../../src/core/pod/launcher.js';
+import { startupTimeoutMs, readyTimeoutMs, reloadTimeoutMs } from '../../src/core/pod/launcher.js';
 
 const GiB = 1024 ** 3;
 
@@ -55,6 +55,14 @@ describe('pesi già sul volume', () => {
     expect(weightsOnVolume(state, { ...profile, model: { ...profile.model, revision: 'b'.repeat(40) } }, { withVolume: true })).toBe(false);
     expect(weightsOnVolume(state, { ...profile, volume: { id: 'vol2' } }, { withVolume: true })).toBe(false);
     expect(weightsOnVolume({ pods: {} }, profile, { withVolume: true })).toBe(false);
+  });
+});
+
+describe('reloadTimeoutMs: attesa di tune/ricarica come up (pesi già sul disco del Pod)', () => {
+  it('usa startupTimeoutMs con la stima senza download, con volume e numero di GPU del Pod', () => {
+    const profile = { model: { weightsBytes: 126 * GiB }, estimate: { downloadBytes: 126 * GiB } };
+    const est = estimateStartup({ downloadBytes: 126 * GiB, weightsBytes: 126 * GiB, count: 2, withVolume: true, cached: true });
+    expect(reloadTimeoutMs(profile, { count: 2, withVolume: true })).toBe(startupTimeoutMs(126 * GiB, est));
   });
 });
 

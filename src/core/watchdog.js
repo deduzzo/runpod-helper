@@ -32,12 +32,26 @@ export function validateWatchdog(input) {
   return { idleMinutes, maxHours };
 }
 
+// Minuti senza log dopo la lettura dei pesi oltre i quali il supervisore dichiara vLLM fermo (se non sta compilando).
+// 30 di base: la compilazione di vLLM (Inductor, JIT FlashInfer/Triton) su Blackwell a freddo può restare muta a lungo.
+export const STALL_MINUTES_RANGE = [5, 240];
+export const DEFAULT_STALL_MINUTES = 30;
+export const stallMinutesOf = (wd) => wd?.stallMinutes ?? DEFAULT_STALL_MINUTES;
+
+function stallError(value) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < STALL_MINUTES_RANGE[0] || value > STALL_MINUTES_RANGE[1]) {
+    return `stallMinutes deve essere un intero tra ${STALL_MINUTES_RANGE[0]} e ${STALL_MINUTES_RANGE[1]}`;
+  }
+  return null;
+}
+
 // Sezione `watchdog` di un profilo o della configurazione, se presente: tipi e intervalli (altrimenti il supervisore nel Pod la rifiuterebbe).
 export function assertWatchdogSettings(wd, where) {
   if (wd === undefined || wd === null) return;
   const bad = (typeof wd !== 'object' || Array.isArray(wd)) ? 'deve essere un oggetto { idleMinutes, maxHours }'
-    : (wd.idleMinutes !== undefined && idleError(wd.idleMinutes, 'idleMinutes')) || (wd.maxHours !== undefined && hoursError(wd.maxHours, 'maxHours'));
-  if (bad) throw new LlmpodError(Codes.INVALID_INPUT, `Sezione watchdog non valida in ${where}: ${bad}`, { hint: 'idleMinutes: 0 (mai) oppure intero tra 5 e 1440; maxHours: tra 0,25 e 168' });
+    : (wd.idleMinutes !== undefined && idleError(wd.idleMinutes, 'idleMinutes')) || (wd.maxHours !== undefined && hoursError(wd.maxHours, 'maxHours'))
+      || (wd.stallMinutes !== undefined && stallError(wd.stallMinutes));
+  if (bad) throw new LlmpodError(Codes.INVALID_INPUT, `Sezione watchdog non valida in ${where}: ${bad}`, { hint: 'idleMinutes: 0 (mai) oppure intero tra 5 e 1440; maxHours: tra 0,25 e 168; stallMinutes (facoltativo): intero tra 5 e 240' });
 }
 
 // Costo massimo fino alla scadenza per durata massima: ore rimanenti (dall'avvio) × costo orario. null se il costo orario non è noto.
