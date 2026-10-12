@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { maxOutputTokens } from './claude-code.js';
+import { maxOutputTokens, clientContext } from './claude-code.js';
 
 export function opencodeConfig({ baseUrl, servedName, context }) {
   return {
@@ -12,7 +12,7 @@ export function opencodeConfig({ baseUrl, servedName, context }) {
         npm: '@ai-sdk/openai-compatible',
         name: 'llmpod (Runpod)',
         options: { baseURL: `${baseUrl}/v1`, apiKey: '{env:LLMPOD_API_KEY}' },
-        models: { [servedName]: { name: servedName, limit: { context, output: maxOutputTokens(context) } } },
+        models: { [servedName]: { name: servedName, limit: { context: clientContext(context), output: maxOutputTokens(context) } } },
       },
     },
   };

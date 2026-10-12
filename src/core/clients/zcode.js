@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LlmpodError, Codes } from '../errors.js';
 import { updateJsonFile } from './json-file.js';
-import { maxOutputTokens } from './claude-code.js';
+import { maxOutputTokens, clientContext } from './claude-code.js';
 
 const execFileP = promisify(execFile);
 
@@ -18,7 +18,7 @@ export function mergeZcodeConfig(cfg, { baseUrl, apiKey, servedName, context }) 
     kind: 'openai-compatible',
     source: 'custom',
     options: { apiKey, baseURL: `${baseUrl}/v1`, apiKeyRequired: true },
-    models: { [servedName]: { limit: { context, output: maxOutputTokens(context) } } },
+    models: { [servedName]: { limit: { context: clientContext(context), output: maxOutputTokens(context) } } },
   };
   return out;
 }

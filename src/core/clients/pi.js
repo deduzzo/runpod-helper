@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Codes } from '../errors.js';
 import { updateJsonFile } from './json-file.js';
-import { maxOutputTokens } from './claude-code.js';
+import { maxOutputTokens, clientContext } from './claude-code.js';
 
 export const piDir = (env = process.env) => env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent');
 
@@ -14,7 +14,7 @@ export function mergePiModels(cfg, { baseUrl, servedName, context, reasoning }) 
     baseUrl: `${baseUrl}/v1`,
     api: 'openai-completions',
     apiKey: '$LLMPOD_API_KEY',
-    models: [{ id: servedName, name: `${servedName} (llmpod)`, contextWindow: context, maxTokens: maxOutputTokens(context), reasoning: Boolean(reasoning) }],
+    models: [{ id: servedName, name: `${servedName} (llmpod)`, contextWindow: clientContext(context), maxTokens: maxOutputTokens(context), reasoning: Boolean(reasoning) }],
   };
   return out;
 }

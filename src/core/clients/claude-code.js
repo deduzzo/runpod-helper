@@ -1,4 +1,7 @@
 export const maxOutputTokens = (context) => Math.min(32000, Math.max(1024, Math.floor(context / 4)));
+// Contesto dichiarato ai client: un margine sotto --max-model-len, perché la stima dei token del client
+// (es. pi) può differire di qualche token da quella di vLLM e far superare il limite (errore 400).
+export const clientContext = (context) => context - Math.max(1024, Math.min(8192, Math.floor(context * 0.03)));
 
 export function claudeEnv({ baseUrl, apiKey, servedName, context }) {
   return {

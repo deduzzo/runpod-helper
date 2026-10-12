@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { formatEnv } from '../../src/core/clients/env-format.js';
 import { updateJsonFile } from '../../src/core/clients/json-file.js';
-import { claudeEnv, maxOutputTokens, prepareClaude } from '../../src/core/clients/claude-code.js';
+import { claudeEnv, maxOutputTokens, clientContext, prepareClaude } from '../../src/core/clients/claude-code.js';
 import { opencodeConfig, prepareOpencode } from '../../src/core/clients/opencode.js';
 import { mergeZcodeConfig, updateZcode, isZcodeRunning } from '../../src/core/clients/zcode.js';
 import { mergePiModels, preparePi } from '../../src/core/clients/pi.js';
@@ -40,6 +40,12 @@ describe('Claude Code', () => {
     expect(prepareClaude(endpoint).command).toBe('claude');
   });
 
+  it('clientContext: margine sotto max-model-len (stima dei token del client diversa da vLLM)', () => {
+    expect(clientContext(131072)).toBe(127140);
+    expect(clientContext(262144)).toBe(254280);
+    expect(clientContext(4096)).toBe(3072);
+  });
+
   it('maxOutputTokens', () => {
     expect(maxOutputTokens(65536)).toBe(16384);
     expect(maxOutputTokens(262144)).toBe(32000);
@@ -52,7 +58,7 @@ describe('OpenCode', () => {
     const c = opencodeConfig(endpoint);
     expect(c.model).toBe('llmpod/qwen3-coder');
     expect(c.provider.llmpod).toMatchObject({ npm: '@ai-sdk/openai-compatible', options: { baseURL: 'https://p1-8000.proxy.runpod.net/v1', apiKey: '{env:LLMPOD_API_KEY}' } });
-    expect(c.provider.llmpod.models['qwen3-coder'].limit).toEqual({ context: 65536, output: 16384 });
+    expect(c.provider.llmpod.models['qwen3-coder'].limit).toEqual({ context: 63570, output: 16384 });
   });
 
   it('prepareOpencode scrive un file senza segreti e passa la chiave via env', () => {
@@ -89,7 +95,7 @@ describe('ZCode', () => {
     const out = mergeZcodeConfig(existing, endpoint);
     expect(out.provider['builtin:zai']).toEqual(existing.provider['builtin:zai']);
     expect(out.provider.llmpod).toMatchObject({ kind: 'openai-compatible', source: 'custom', options: { baseURL: 'https://p1-8000.proxy.runpod.net/v1', apiKey: endpoint.apiKey, apiKeyRequired: true } });
-    expect(out.provider.llmpod.models['qwen3-coder'].limit).toEqual({ context: 65536, output: 16384 });
+    expect(out.provider.llmpod.models['qwen3-coder'].limit).toEqual({ context: 63570, output: 16384 });
   });
 
   it('rifiuta se ZCode è aperto', async () => {
@@ -118,7 +124,7 @@ describe('pi', () => {
     expect(out.providers.ollama).toEqual({ baseUrl: 'http://localhost:11434/v1' });
     expect(out.providers.llmpod).toEqual({
       baseUrl: 'https://p1-8000.proxy.runpod.net/v1', api: 'openai-completions', apiKey: '$LLMPOD_API_KEY',
-      models: [{ id: 'qwen3-coder', name: 'qwen3-coder (llmpod)', contextWindow: 65536, maxTokens: 16384, reasoning: true }],
+      models: [{ id: 'qwen3-coder', name: 'qwen3-coder (llmpod)', contextWindow: 63570, maxTokens: 16384, reasoning: true }],
     });
   });
 
