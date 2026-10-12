@@ -6,7 +6,7 @@ import { registerSecret, redactObject } from './secrets.js';
 import { profileKeyVar } from './config.js';
 import { proxyUrl } from './runpod.js';
 import { confirmCost, confirmAction, fmtUSD } from './confirm.js';
-import { validateWatchdog, maxCostUSD, fmtHours } from './watchdog.js';
+import { validateWatchdog, maxCostUSD, fmtHours, idleText, exceedsDefaults, DEFAULT_WATCHDOG, MIN_REMAINING_SECONDS } from './watchdog.js';
 import { buildPodBody, argsForCount } from './pod/body.js';
 import { adviseRepair } from './advisor/advisor.js';
 import { diffArgs, fitsForOption } from './advisor/advice.js';
@@ -27,6 +27,12 @@ const podName = (profile) => `llmpod-${profile}`;
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export const generateKey = () => randomBytes(32).toString('base64url');
+
+// Limiti di spegnimento fuori dal predefinito (inattività mai o più di 8 ore): la conferma dell'avvio li mostra con il costo massimo.
+function watchdogNote(wd, hourly) {
+  if (!exceedsDefaults(wd)) return '';
+  return `; ${idleText(wd.idleMinutes)}, massimo ${wd.maxHours} h → costo massimo ${fmtUSD(wd.maxHours * hourly)}`;
+}
 
 export const AMBIGUOUS_CREATE_WARNING = 'Potrebbe essere stato creato un Pod non ancora visibile: controlla tra un minuto con "llmpod status" o su https://www.runpod.io/console/pods';
 
@@ -331,7 +337,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const buildBody = (c) => buildPodBody({ profile, candidate: c, apiKey, hfToken: env.HF_TOKEN, minCudaVersion: cfg.minCudaVersion });
     const conf = await confirmCost({
       hourlyUSD: first.hourly, yes, dryRun, ask,
-      description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}`,
+      description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`,
     });
     if (conf.dryRun) {
       const body = buildBody(first);
@@ -461,10 +467,11 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
   }
 
   // Cambia i limiti di spegnimento (inattività, durata massima dall'avvio) di un Pod già avviato, senza riavviarlo.
-  // Con `save` aggiorna anche il profilo, per i prossimi avvii. `yes` salta la conferma del costo massimo (chiesta se le ore massime aumentano).
+  // Con `save` aggiorna anche il profilo, per i prossimi avvii. `yes` salta le conferme (costo massimo se la spesa possibile
+  // aumenta; profilo con inattività mai o più di 8 ore).
   async function keep(name, { idleMinutes, maxHours, save = false, yes = false } = {}) {
     const wanted = validateWatchdog({ idleMinutes, maxHours });
-    store.readProfile(name); // NOT_FOUND se il profilo non esiste
+    const profile = store.readProfile(name); // NOT_FOUND se il profilo non esiste
     const pod = await findPod(name);
     if (!pod) throw new LlmpodError(Codes.NOT_FOUND, `Nessun Pod attivo per il profilo ${name}`, { hint: `Esegui: llmpod up ${name}` });
     if (pod.status !== 'RUNNING') throw new LlmpodError(Codes.INVALID_INPUT, `Il Pod ${pod.id} non è ancora avviato (${pod.status}): riprova quando è pronto`);
@@ -473,36 +480,48 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const sup = createSupervisorClient({ http, podId: pod.id, apiKey });
     const current = await sup.status();
     if (!current) throw new LlmpodError(Codes.HTTP, `Il supervisore del Pod ${pod.id} non risponde`, { hint: 'Il Pod potrebbe essere ancora in avvio: riprova tra poco, oppure controlla con: llmpod status' });
-    const hourlyUSD = pod.cost ?? 0;
+    // Un supervisore vecchio non dichiara la funzione: lo si scopre prima di chiedere conferme.
+    const oldSupervisor = () => new LlmpodError(Codes.INVALID_INPUT, `Il supervisore del Pod ${pod.id} è di una versione precedente e non supporta la modifica dei limiti`, { hint: `Serve un Pod avviato con questa versione di llmpod: "llmpod down ${name}" e poi "llmpod up ${name}"` });
+    if (!current.features?.includes('watchdog')) throw oldSupervisor();
+
+    const hourlyUSD = pod.cost || profile.estimate?.hourlyUSD || null;
+    const curIdleMinutes = current.idleLimitSeconds / 60;
     const newMaxSeconds = wanted.maxHours != null ? wanted.maxHours * 3600 : current.maxSeconds;
-    if (wanted.maxHours != null && newMaxSeconds > current.maxSeconds && !yes) {
+    const newIdleMinutes = wanted.idleMinutes ?? curIdleMinutes;
+    if (wanted.maxHours != null && newMaxSeconds <= current.uptimeSeconds + MIN_REMAINING_SECONDS) {
+      throw new LlmpodError(Codes.INVALID_INPUT, `Il Pod è acceso da ${fmtHours(current.uptimeSeconds)}: con un massimo di ${fmtHours(newMaxSeconds)} verrebbe eliminato subito. Per spegnerlo usa llmpod down ${name}`, { hint: `Scegli un massimo che lasci almeno 5 minuti oltre il tempo già trascorso, oppure spegni il Pod con: llmpod down ${name}` });
+    }
+    // La spesa possibile aumenta con più ore massime, con l'inattività disattivata o con una soglia più alta.
+    const idleRaised = wanted.idleMinutes != null && curIdleMinutes !== 0 && (wanted.idleMinutes === 0 || wanted.idleMinutes > curIdleMinutes);
+    const hoursRaised = wanted.maxHours != null && newMaxSeconds > current.maxSeconds;
+    if ((idleRaised || hoursRaised) && !yes) {
       const remaining = newMaxSeconds - current.uptimeSeconds;
       const cost = maxCostUSD({ hourlyUSD, maxSeconds: newMaxSeconds, uptimeSeconds: current.uptimeSeconds });
       await confirmAction({
-        description: `Prolungare il Pod ${pod.id} (${name}) fino a ${fmtHours(newMaxSeconds)} dall'avvio: resterà acceso al massimo ${fmtHours(remaining)} ancora — costo massimo stimato ${fmtUSD(cost)} (${fmtUSD(hourlyUSD)}/h)`,
+        description: `Cambiare i limiti del Pod ${pod.id} (${name}): ${idleText(newIdleMinutes)}, massimo ${fmtHours(newMaxSeconds)} dall'avvio — resterà acceso al massimo ${fmtHours(remaining)} ancora, ${cost == null ? 'costo orario non noto' : `costo massimo stimato ${fmtUSD(cost)} (${fmtUSD(hourlyUSD)}/h)`}`,
         ask,
       });
     }
-    const r = await sup.setWatchdog(wanted);
-    if (r.status === 404) {
-      throw new LlmpodError(Codes.INVALID_INPUT, `Il supervisore del Pod ${pod.id} è di una versione precedente e non supporta la modifica dei limiti`, { hint: `Serve un Pod avviato con questa versione di llmpod: "llmpod down ${name}" e poi "llmpod up ${name}"` });
+    let nextWatchdog = null;
+    if (save) {
+      nextWatchdog = { ...DEFAULT_WATCHDOG, ...profile.watchdog, ...(wanted.idleMinutes != null && { idleMinutes: wanted.idleMinutes }), ...(wanted.maxHours != null && { maxHours: wanted.maxHours }) };
+      if (exceedsDefaults(nextWatchdog) && !yes) {
+        const cost = hourlyUSD ? ` → costo massimo ${fmtUSD(nextWatchdog.maxHours * hourlyUSD)} a ogni avvio` : '';
+        await confirmAction({ description: `Salvare nel profilo ${name} ${idleText(nextWatchdog.idleMinutes)}, massimo ${fmtHours(nextWatchdog.maxHours * 3600)}${cost}: i prossimi Pod resteranno accesi così a lungo`, ask });
+      }
     }
+    const r = await sup.setWatchdog(wanted);
+    if (r.status === 404) throw oldSupervisor();
     if (!r.ok) throw new LlmpodError(Codes.HTTP, `Il supervisore ha rifiutato i nuovi limiti: HTTP ${r.status}${r.data?.error ? ` ${String(r.data.error).slice(0, 200)}` : ''}`);
     const idleLimitSeconds = r.data?.idleLimitSeconds ?? current.idleLimitSeconds;
     const maxSeconds = r.data?.maxSeconds ?? newMaxSeconds;
     const uptimeSeconds = r.data?.uptimeSeconds ?? current.uptimeSeconds;
     const remainingSeconds = Math.max(0, maxSeconds - uptimeSeconds);
-    let saved = false;
-    if (save) {
-      const p = store.readProfile(name);
-      p.watchdog = { ...p.watchdog, ...(wanted.idleMinutes != null && { idleMinutes: wanted.idleMinutes }), ...(wanted.maxHours != null && { maxHours: wanted.maxHours }) };
-      store.writeProfile(p);
-      saved = true;
-    }
+    if (save) store.writeProfile({ ...store.readProfile(name), watchdog: nextWatchdog });
     return {
       podId: pod.id, idleLimitSeconds, maxSeconds, uptimeSeconds, remainingSeconds,
       expiresAt: new Date(now() + remainingSeconds * 1000).toISOString(),
-      hourlyUSD, maxCostUSD: maxCostUSD({ hourlyUSD, maxSeconds, uptimeSeconds }), saved,
+      hourlyUSD, maxCostUSD: maxCostUSD({ hourlyUSD, maxSeconds, uptimeSeconds }), saved: save,
     };
   }
 

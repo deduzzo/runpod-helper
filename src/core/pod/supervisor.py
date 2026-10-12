@@ -64,8 +64,9 @@ class IdleTracker:
         return now - self.last_activity
 
 
-IDLE_MINUTES_RANGE = (0, 1440)
+IDLE_MINUTES_RANGE = (5, 1440)   # oppure 0 = inattività disattivata
 MAX_HOURS_RANGE = (0.25, 168)
+MIN_REMAINING_SECONDS = 300      # margine: non si accorcia il massimo fin quasi all'uptime (il Pod verrebbe eliminato subito)
 
 
 def termination_reason(now, started_at, max_seconds, idle_seconds, idle_limit):
@@ -77,22 +78,33 @@ def termination_reason(now, started_at, max_seconds, idle_seconds, idle_limit):
     return None
 
 
-def _bounded_number(value, low, high, label):
+def _bounded_number(value, low, high, label, integer=False, allow_zero=False):
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f'{label} deve essere un numero')
-    if not low <= value <= high:
-        raise ValueError(f'{label} deve essere tra {low} e {high}')
-    return float(value)
+    try:
+        if not math.isfinite(value) or (integer and float(value) != int(value)):
+            raise ValueError(f'{label} deve essere un numero' + (' intero' if integer else ''))
+        ok = (allow_zero and value == 0) or low <= value <= high
+        value = float(value)
+    except OverflowError:  # interi JSON enormi
+        raise ValueError(f'{label} fuori intervallo') from None
+    if not ok:
+        raise ValueError(f'{label} deve essere ' + ('0 oppure ' if allow_zero else '') + f'tra {low} e {high}')
+    return value
 
 
 def valid_watchdog(payload):
-    """Valida il corpo di POST /watchdog. Restituisce (idleMinutes, maxHours); None = invariato. ValueError se non valido."""
+    """Valida il corpo di POST /watchdog. Restituisce (idleMinutes, maxHours); None = invariato.
+    idleMinutes: intero, 0 (disattivata) oppure 5..1440. ValueError se non valido o se non c'è nessun valore."""
     if not isinstance(payload, dict):
         raise ValueError('corpo non valido')
-    return (_bounded_number(payload.get('idleMinutes'), *IDLE_MINUTES_RANGE, 'idleMinutes'),
-            _bounded_number(payload.get('maxHours'), *MAX_HOURS_RANGE, 'maxHours'))
+    idle = _bounded_number(payload.get('idleMinutes'), *IDLE_MINUTES_RANGE, 'idleMinutes', integer=True, allow_zero=True)
+    hours = _bounded_number(payload.get('maxHours'), *MAX_HOURS_RANGE, 'maxHours')
+    if idle is None and hours is None:
+        raise ValueError('nessun valore da cambiare')
+    return idle, hours
 
 
 def valid_reload_args(payload):
@@ -232,19 +244,27 @@ class Supervisor:
         """Limiti modificati con POST /watchdog: se il supervisore riparte restano quelli (non tornano a quelli dell'ambiente)."""
         try:
             with open(self._watchdog_path()) as f:
-                idle, hours = valid_watchdog(json.load(f))
-        except (OSError, ValueError):  # assente, corrotto o fuori intervallo: valgono i valori dell'ambiente
+                data = json.load(f)
+        except (OSError, ValueError):  # assente o corrotto: valgono i valori dell'ambiente
             return
-        if idle is not None:
-            self.idle_seconds = idle * 60
-        if hours is not None:
-            self.max_seconds = hours * 3600
+        if not isinstance(data, dict):
+            return
+        for key, factor, attr in (('idleMinutes', 60, 'idle_seconds'), ('maxHours', 3600, 'max_seconds')):
+            try:  # ogni valore si valida da solo: uno fuori intervallo non scarta l'altro
+                value = [v for v in valid_watchdog({key: data.get(key)}) if v is not None][0]
+            except (ValueError, IndexError):
+                continue
+            setattr(self, attr, value * factor)
 
     def set_watchdog(self, idle_minutes, max_hours):
         """Aggiorna i limiti di spegnimento (None = invariato) e li persiste. maxHours si misura sempre dall'avvio.
         Cambiando l'inattività si riparte da adesso, così riattivarla non spegne subito un Pod rimasto fermo."""
         persisted = True
         with self.lock:
+            uptime = self.clock() - self.started_at
+            if max_hours is not None and max_hours * 3600 <= uptime + MIN_REMAINING_SECONDS:
+                raise ValueError(f'con questo massimo il Pod verrebbe eliminato subito: è acceso da {round(uptime)} s '
+                                 f'(serve almeno {MIN_REMAINING_SECONDS} s di margine)')
             if idle_minutes is not None:
                 self.idle_seconds = idle_minutes * 60
                 if self.tracker is not None:
@@ -439,7 +459,7 @@ class Supervisor:
             'idleLimitSeconds': self.idle_seconds, 'uptimeSeconds': round(now - self.started_at),
             'maxSeconds': self.max_seconds, 'restarts': self.restarts, 'lastError': self.last_error,
             'kvCacheTokens': self.kv_tokens, 'terminateReason': self.terminate_reason, 'args': self.args,
-            'version': VERSION,
+            'version': VERSION, 'features': ['watchdog'],
         }
 
     def _measure_download(self):
@@ -529,9 +549,11 @@ def make_server(sup):
             if self.path == '/watchdog':
                 try:
                     idle, hours = valid_watchdog(payload)
+                    if sup.phase == 'terminating':
+                        return self._send(409, {'error': 'il Pod si sta già spegnendo'})
+                    return self._send(200, sup.set_watchdog(idle, hours))
                 except ValueError as e:
                     return self._send(400, {'error': str(e)})
-                return self._send(200, sup.set_watchdog(idle, hours))
             args = valid_reload_args(payload)
             if args is None:
                 return self._send(400, {'error': 'args non validi'})

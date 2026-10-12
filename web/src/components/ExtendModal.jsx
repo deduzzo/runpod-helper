@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { api, fmtUSD, fmtDuration } from '../lib/api.js';
 import { Button, ErrorBox, Field, inputClass } from './ui.jsx';
 
-const IDLE_RANGE = [0, 1440];
+const IDLE_RANGE = [5, 1440]; // oppure 0 = mai
+const MIN_REMAINING_SECONDS = 300; // come nel supervisore: oltre l'uptime serve un margine di 5 minuti
 const HOURS_RANGE = [0.25, 168];
 
 // Numero da un campo di testo: stringa vuota o non numerica = non valido.
@@ -34,13 +35,21 @@ export function ExtendModal({ pod, onClose, onDone }) {
 
   const idleValue = never ? 0 : num(idle);
   const hoursValue = num(hours);
-  const idleError = !never && !(idleValue >= IDLE_RANGE[0] && idleValue <= IDLE_RANGE[1]) ? `L'inattività deve essere tra ${IDLE_RANGE[0]} e ${IDLE_RANGE[1]} minuti` : null;
-  const hoursError = !(hoursValue >= HOURS_RANGE[0] && hoursValue <= HOURS_RANGE[1]) ? `Le ore massime devono essere tra ${String(HOURS_RANGE[0]).replace('.', ',')} e ${HOURS_RANGE[1]}` : null;
+  const uptime = sup.uptimeSeconds ?? 0;
+  const idleError = !never && !(Number.isInteger(idleValue) && (idleValue === 0 || (idleValue >= IDLE_RANGE[0] && idleValue <= IDLE_RANGE[1])))
+    ? `L'inattività deve essere un intero tra ${IDLE_RANGE[0]} e ${IDLE_RANGE[1]} minuti (oppure "Mai")` : null;
+  let hoursError = !(hoursValue >= HOURS_RANGE[0] && hoursValue <= HOURS_RANGE[1]) ? `Le ore massime devono essere tra ${String(HOURS_RANGE[0]).replace('.', ',')} e ${HOURS_RANGE[1]}` : null;
+  if (!hoursError && hoursValue * 3600 <= uptime + MIN_REMAINING_SECONDS) {
+    hoursError = `Il Pod è acceso da ${fmtDuration(uptime)}: con un massimo di ${fmtDuration(hoursValue * 3600)} verrebbe eliminato subito. Per spegnerlo usa llmpod down ${pod.profile}`;
+  }
   const idleChanged = !idleError && idleValue !== curIdleMin;
   const hoursChanged = !hoursError && hoursValue !== curHours;
-  const increases = hoursChanged && hoursValue > curHours;
-  const remaining = !hoursError ? hoursValue * 3600 - (sup.uptimeSeconds ?? 0) : 0;
-  const maxCost = increases ? Math.max(0, (remaining / 3600) * (pod.hourlyUSD ?? 0)) : null;
+  // La spesa possibile aumenta con più ore massime, con l'inattività disattivata o con una soglia più alta.
+  const idleRaised = idleChanged && curIdleMin !== 0 && (idleValue === 0 || idleValue > curIdleMin);
+  const increases = !idleError && !hoursError && ((hoursChanged && hoursValue > curHours) || idleRaised);
+  const remaining = !hoursError ? hoursValue * 3600 - uptime : 0;
+  const hourly = pod.hourlyUSD || null; // 0 o assente: costo orario non noto, mai "0,00 $"
+  const maxCost = increases && hourly ? Math.max(0, (remaining / 3600) * hourly) : null;
   const valid = !idleError && !hoursError && (idleChanged || hoursChanged);
 
   async function submit() {
@@ -62,7 +71,7 @@ export function ExtendModal({ pod, onClose, onDone }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <div className="glass neon-border fade-up w-full max-w-md space-y-4 p-6">
         <h2 id={titleId} className="text-lg font-semibold neon-text">Prolunga {pod.profile} ({pod.podId})</h2>
-        <p className="text-sm text-gray-400">Cambia quando il Pod si spegne da solo, senza riavviarlo. Le ore massime si contano dall'avvio del Pod (già trascorse: {fmtDuration(sup.uptimeSeconds ?? 0)}).</p>
+        <p className="text-sm text-gray-400">Cambia quando il Pod si spegne da solo, senza riavviarlo. Le ore massime si contano dall'avvio del Pod (già trascorse: {fmtDuration(uptime)}).</p>
         <Field label="Inattività (minuti)">
           <input ref={firstRef} type="number" min={IDLE_RANGE[0]} max={IDLE_RANGE[1]} step="1" className={`${inputClass} disabled:opacity-50`} value={idle} disabled={never} onChange={(e) => setIdle(e.target.value)} />
         </Field>
@@ -77,14 +86,14 @@ export function ExtendModal({ pod, onClose, onDone }) {
         {hoursError && <p role="alert" className="text-sm text-rose-300">{hoursError}</p>}
         {increases && (
           <p className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-sm text-amber-200">
-            Il Pod potrà restare acceso ancora {fmtDuration(remaining)}. Costo massimo stimato fino alla scadenza: {fmtUSD(maxCost)} ({fmtUSD(pod.hourlyUSD)}/h).
+            Il Pod potrà restare acceso ancora {fmtDuration(remaining)}. {hourly ? `Costo massimo stimato fino alla scadenza: ${fmtUSD(maxCost)} (${fmtUSD(hourly)}/h).` : 'Costo orario non noto: controlla il costo su Runpod.'}
           </p>
         )}
         {never && !idleError && idleChanged && <p className="text-sm text-amber-200">Senza spegnimento per inattività il Pod resta acceso (e a pagamento) fino al limite di ore massime.</p>}
         <ErrorBox error={error} />
         <div className="flex justify-end gap-3">
           <Button variant="ghost" onClick={onClose} disabled={busy}>Annulla</Button>
-          <Button onClick={submit} disabled={!valid} loading={busy}>{increases ? `Conferma e prolunga (costo massimo ${fmtUSD(maxCost)})` : 'Applica'}</Button>
+          <Button onClick={submit} disabled={!valid} loading={busy}>{increases ? `Conferma e prolunga${maxCost != null ? ` (costo massimo ${fmtUSD(maxCost)})` : ''}` : 'Applica'}</Button>
         </div>
       </div>
     </div>,

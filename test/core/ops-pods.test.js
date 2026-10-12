@@ -379,3 +379,31 @@ describe('Pod spenti: status, down, up', () => {
     await expect(t.ops.up('p')).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 });
+
+describe('up: conferma con i limiti di spegnimento fuori dal predefinito', () => {
+  const withWatchdog = (watchdog) => {
+    const t = setup();
+    t.store.writeProfile({ ...t.store.readProfile('p'), watchdog });
+    return t;
+  };
+
+  it('inattività mai e/o più di 8 ore: la conferma lo dice con il costo massimo', async () => {
+    const never = withWatchdog({ idleMinutes: 0, maxHours: 24 });
+    await never.ops.up('p');
+    // 24 h x 1,50 $/h = 36,00 $
+    expect(never.ask.mock.calls[0][0]).toMatch(/inattività: mai, massimo 24 h → costo massimo 36,00 \$/);
+    const long = withWatchdog({ idleMinutes: 30, maxHours: 12 });
+    await long.ops.up('p');
+    expect(long.ask.mock.calls[0][0]).toMatch(/inattività: 30 min, massimo 12 h → costo massimo 18,00 \$/);
+    const idle = withWatchdog({ idleMinutes: 0, maxHours: 8 });
+    await idle.ops.up('p');
+    expect(idle.ask.mock.calls[0][0]).toMatch(/inattività: mai, massimo 8 h → costo massimo 12,00 \$/);
+  });
+
+  it('con i limiti predefiniti la conferma non cambia', async () => {
+    const t = setup();
+    await t.ops.up('p');
+    expect(t.ask.mock.calls[0][0]).not.toMatch(/inattività/);
+    expect(t.ask.mock.calls[0][0]).not.toMatch(/costo massimo/);
+  });
+});

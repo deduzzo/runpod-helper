@@ -10,16 +10,17 @@ const profile = {
   volume: null, allowFallbackWithoutVolume: 'ask', watchdog: { idleMinutes: 30, maxHours: 8 },
 };
 const RUNNING = { id: 'pod1', name: 'llmpod-qwen3-coder', status: 'RUNNING', cost: 1.5, runtime: { uptime: 7200 } };
-const SUP = { phase: 'ready', idleSeconds: 100, idleLimitSeconds: 1800, uptimeSeconds: 7200, maxSeconds: 28800 };
+const SUP = { phase: 'ready', features: ['watchdog'], idleSeconds: 100, idleLimitSeconds: 1800, uptimeSeconds: 7200, maxSeconds: 28800 };
 
-function setup({ supStatus = SUP, post = null, answers = {} } = {}) {
+function setup({ supStatus = SUP, post = null, answers = {}, cost = RUNNING.cost } = {}) {
+  const pod = { ...RUNNING, cost };
   const s = sandbox({ answers });
   s.store.writeEnv({ ...SECRETS, LLMPOD_KEY_QWEN3_CODER: KEY });
   s.store.writeConfig({ dataCenterId: 'EU-A' });
   s.store.writeProfile(profile);
   const runpod = {
-    listPods: vi.fn(async () => [RUNNING]),
-    getPod: vi.fn(async () => RUNNING),
+    listPods: vi.fn(async () => [pod]),
+    getPod: vi.fn(async () => pod),
     getBalance: vi.fn(async () => ({ balance: 42.5, spendPerHour: 0 })),
   };
   const http = {
@@ -53,10 +54,11 @@ describe('CLI keep', () => {
     expect(out).not.toMatch(/Profilo aggiornato/);
   });
 
-  it('--no-idle disattiva l\'inattività (senza conferma) e lo dice', async () => {
+  it('--no-idle disattiva l\'inattività (con conferma del costo massimo) e lo dice', async () => {
     const t = setup();
     expect(await t.go(['keep', 'qwen3-coder', '--no-idle'])).toBe(0);
-    expect(t.prompt.ask).not.toHaveBeenCalled();
+    expect(t.prompt.ask).toHaveBeenCalledTimes(1);
+    expect(t.prompt.ask.mock.calls[0][0]).toMatch(/inattività: mai.*costo massimo stimato 9,00 \$/);
     expect(t.posts()).toEqual([{ idleMinutes: 0, maxHours: null }]);
     expect(t.out()).toMatch(/Inattività: nessuno spegnimento/);
   });
@@ -88,8 +90,29 @@ describe('CLI keep', () => {
     expect(t.posts()).toEqual([{ idleMinutes: null, maxHours: 4 }]);
   });
 
+  it('accetta la virgola decimale (12,5 ore)', async () => {
+    const t = setup();
+    expect(await t.go(['keep', 'qwen3-coder', '--max-hours', '12,5', '--yes'])).toBe(0);
+    expect(t.posts()).toEqual([{ idleMinutes: null, maxHours: 12.5 }]);
+  });
+
+  it('ore massime sotto l\'uptime: errore con l\'indicazione di usare down, nessuna chiamata', async () => {
+    const t = setup();
+    expect(await t.go(['keep', 'qwen3-coder', '--max-hours', '2'])).toBe(1);
+    expect(t.err()).toMatch(/verrebbe eliminato subito/);
+    expect(t.err()).toMatch(/llmpod down qwen3-coder/);
+    expect(t.posts()).toEqual([]);
+  });
+
+  it('costo orario ignoto: non mostra 0,00 $', async () => {
+    const t = setup({ cost: null });
+    expect(await t.go(['keep', 'qwen3-coder', '--max-hours', '12', '--yes'])).toBe(0);
+    expect(t.out()).toMatch(/costo orario non noto/);
+    expect(t.out()).not.toContain('0,00');
+  });
+
   it('errori di input: nessuna opzione, valori non numerici o fuori intervallo, --no-idle con --idle-minutes', async () => {
-    for (const argv of [['keep', 'qwen3-coder'], ['keep', 'qwen3-coder', '--max-hours', 'tanto'], ['keep', 'qwen3-coder', '--max-hours', '999'], ['keep', 'qwen3-coder', '--idle-minutes', '-5'], ['keep', 'qwen3-coder', '--no-idle', '--idle-minutes', '10']]) {
+    for (const argv of [['keep', 'qwen3-coder'], ['keep', 'qwen3-coder', '--max-hours', 'tanto'], ['keep', 'qwen3-coder', '--max-hours', '999'], ['keep', 'qwen3-coder', '--idle-minutes', '-5'], ['keep', 'qwen3-coder', '--idle-minutes', '3'], ['keep', 'qwen3-coder', '--idle-minutes', '7,5'], ['keep', 'qwen3-coder', '--no-idle', '--idle-minutes', '10']]) {
       const t = setup();
       expect(await t.go(argv), argv.join(' ')).toBe(1);
       expect(t.err()).toMatch(/INVALID_INPUT/);

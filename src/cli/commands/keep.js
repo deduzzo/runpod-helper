@@ -4,7 +4,7 @@ import { fmtHours } from '../../core/watchdog.js';
 import { attachRenderer, fmtDuration } from '../render.js';
 
 function number(value, label) {
-  const n = Number(value);
+  const n = Number(String(value).trim().replace(',', '.')); // virgola decimale (0,25) come in italiano
   if (String(value).trim() === '' || !Number.isFinite(n)) throw new LlmpodError(Codes.INVALID_INPUT, `${label}: "${value}" non è un numero`);
   return n;
 }
@@ -12,7 +12,7 @@ function number(value, label) {
 export function register(program, getCtx) {
   program.command('keep [profilo]')
     .description('Cambia i limiti di spegnimento di un Pod già avviato (inattività, ore massime) senza riavviarlo')
-    .option('--idle-minutes <n>', 'minuti di inattività dopo cui spegnere il Pod (0..1440)')
+    .option('--idle-minutes <n>', 'minuti di inattività dopo cui spegnere il Pod (intero tra 5 e 1440; 0 = mai)')
     .option('--no-idle', 'non spegnere mai il Pod per inattività (resta il limite di ore massime)')
     .option('--max-hours <n>', 'ore massime di vita dall\'avvio del Pod (0,25..168)')
     .option('--save', 'aggiorna anche il profilo, per i prossimi avvii')
@@ -33,7 +33,7 @@ export function register(program, getCtx) {
         io.out(`✓ Limiti di spegnimento aggiornati sul Pod ${r.podId} (${profile})`);
         io.out(`  Inattività: ${r.idleLimitSeconds > 0 ? fmtDuration(r.idleLimitSeconds) : 'nessuno spegnimento per inattività'}`);
         io.out(`  Durata massima: ${fmtHours(r.maxSeconds)} dall'avvio — si spegnerà tra ${fmtDuration(r.remainingSeconds)} (circa ${new Date(r.expiresAt).toLocaleString('it-IT')})`);
-        io.out(`  Costo massimo fino alla scadenza: ${fmtUSD(r.maxCostUSD)} (${fmtUSD(r.hourlyUSD)}/h)`);
+        io.out(r.maxCostUSD == null ? '  Costo massimo fino alla scadenza: costo orario non noto' : `  Costo massimo fino alla scadenza: ${fmtUSD(r.maxCostUSD)} (${fmtUSD(r.hourlyUSD)}/h)`);
         if (r.saved) io.out(`  Profilo ${profile} aggiornato per i prossimi avvii`);
         else io.out(`  Vale solo per questo Pod: con --save si aggiorna anche il profilo ${profile}`);
       } finally {

@@ -56,13 +56,48 @@ describe('Stato: Prolunga un Pod avviato', () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter(([p]) => p === '/api/status').length).toBeGreaterThanOrEqual(2));
   });
 
-  it('"Mai" disattiva l\'inattività (0 minuti) e blocca il campo, senza costo né conferma extra', async () => {
+  it('"Mai" disattiva l\'inattività (0 minuti), blocca il campo e chiede la conferma del costo massimo fino alla scadenza', async () => {
     const { fetchMock, dialog } = await open({ 'POST /api/pods/qwen3-coder/watchdog': { podId: 'p1' } });
     fireEvent.click(within(dialog).getByLabelText('Mai (non spegnere per inattività)'));
     expect(within(dialog).getByLabelText('Inattività (minuti)').disabled).toBe(true);
-    expect(within(dialog).queryByText(/Costo massimo stimato/)).toBeNull();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Applica' }));
+    // restano 8 h - 2 h = 6 h × 1,50 $/h = 9,00 $
+    expect(within(dialog).getByText(/Costo massimo stimato fino alla scadenza: 9,00 \$/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Conferma e prolunga.*9,00 \$/ }));
     await waitFor(() => expect(posts(fetchMock)).toEqual([{ idleMinutes: 0, maxHours: null }]));
+  });
+
+  it('aumentare l\'inattività chiede il costo massimo; ridurla no', async () => {
+    const up = await open({ 'POST /api/pods/qwen3-coder/watchdog': { podId: 'p1' } });
+    fireEvent.change(within(up.dialog).getByLabelText('Inattività (minuti)'), { target: { value: '60' } });
+    expect(within(up.dialog).getByText(/Costo massimo stimato fino alla scadenza: 9,00 \$/)).toBeTruthy();
+    cleanup();
+    const down = await open({ 'POST /api/pods/qwen3-coder/watchdog': { podId: 'p1' } });
+    fireEvent.change(within(down.dialog).getByLabelText('Inattività (minuti)'), { target: { value: '10' } });
+    expect(within(down.dialog).queryByText(/Costo massimo stimato/)).toBeNull();
+    fireEvent.click(within(down.dialog).getByRole('button', { name: 'Applica' }));
+    await waitFor(() => expect(posts(down.fetchMock)).toEqual([{ idleMinutes: 10, maxHours: null }]));
+  });
+
+  it('costo orario non noto: non mostra 0,00 $', async () => {
+    mockApi({ 'GET /api/status': statusBody([pod({ hourlyUSD: 0 })]) });
+    render(<Status />);
+    await screen.findByText('p1');
+    fireEvent.click(screen.getByRole('button', { name: 'Prolunga il Pod p1' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Ore massime dall\'avvio'), { target: { value: '12' } });
+    expect(within(dialog).getByText(/Costo orario non noto/)).toBeTruthy();
+    expect(dialog.textContent).not.toContain('0,00');
+  });
+
+  it('ore massime sotto l\'uptime (+5 min): errore rosso e pulsante disattivato', async () => {
+    const { fetchMock, dialog } = await open();
+    fireEvent.change(within(dialog).getByLabelText('Ore massime dall\'avvio'), { target: { value: '2' } });
+    expect(within(dialog).getByText(/verrebbe eliminato subito/)).toBeTruthy();
+    expect(within(dialog).getByText(/llmpod down/)).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: /Applica|Conferma/ }).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('Ore massime dall\'avvio'), { target: { value: '2,1' } });
+    expect(within(dialog).queryByText(/verrebbe eliminato subito/)).toBeNull();
+    expect(posts(fetchMock)).toHaveLength(0);
   });
 
   it('accorciare le ore massime non richiede conferma del costo', async () => {
@@ -80,7 +115,11 @@ describe('Stato: Prolunga un Pod avviato', () => {
     expect(within(dialog).getByRole('button', { name: /Applica|Conferma/ }).disabled).toBe(true);
     fireEvent.change(within(dialog).getByLabelText('Ore massime dall\'avvio'), { target: { value: '8' } });
     fireEvent.change(within(dialog).getByLabelText('Inattività (minuti)'), { target: { value: '2000' } });
-    expect(within(dialog).getByText(/tra 0 e 1440/)).toBeTruthy();
+    expect(within(dialog).getByText(/tra 5 e 1440/)).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText('Inattività (minuti)'), { target: { value: '3' } });
+    expect(within(dialog).getByText(/tra 5 e 1440/)).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText('Inattività (minuti)'), { target: { value: '7.5' } });
+    expect(within(dialog).getByText(/intero/)).toBeTruthy();
     expect(posts(fetchMock)).toHaveLength(0);
   });
 

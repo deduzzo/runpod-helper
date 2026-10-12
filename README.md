@@ -181,12 +181,20 @@ llmpod keep <profilo> --idle-minutes 120      # spegni dopo 2 ore senza richiest
 llmpod keep <profilo> --max-hours 24 --save   # aggiorna anche il profilo, per i prossimi avvii
 ```
 
-- `--idle-minutes` accetta da 0 a 1440 (`--no-idle` equivale a 0); `--max-hours` da 0,25 a 168. Le ore
-  massime si contano **sempre dall'avvio del Pod**, non da quando lanci `keep`. Cambiando l'inattività il
-  conteggio riparte da adesso.
+- `--idle-minutes` accetta un intero tra 5 e 1440, oppure **0 = mai** (nessuno spegnimento per inattività;
+  `--no-idle` equivale a 0); `--max-hours` da 0,25 a 168 (anche con la virgola: `0,25`). Gli stessi valori
+  valgono per la sezione `watchdog` dei profili (`idleMinutes`, `maxHours`: 0 = mai), che viene validata.
+  Le ore massime si contano **sempre dall'avvio del Pod**, non da quando lanci `keep`. Cambiando
+  l'inattività il conteggio riparte da adesso.
 - Il comando stampa i nuovi limiti, quando il Pod si spegnerà e il **costo massimo** fino a quel momento
-  (ore rimanenti × costo orario). Se aumenti le ore massime chiede conferma (`--yes` per saltarla): un Pod
-  tenuto acceso costa finché non lo spegni con `llmpod down` o non scatta un limite.
+  (ore rimanenti × costo orario; se il costo orario non è noto lo dice invece di mostrare 0,00 $). Chiede
+  conferma (`--yes` per saltarla) ogni volta che la spesa possibile aumenta: più ore massime, inattività
+  disattivata (0) o soglia più alta. Con `--save`, se il profilo avrà inattività 0 o più di 8 ore massime,
+  chiede una conferma esplicita; anche `llmpod up` mostra nella conferma "inattività: mai (o N min),
+  massimo N h → costo massimo X $" quando il profilo esce dai limiti predefiniti (30 min, 8 h).
+  Un Pod tenuto acceso costa finché non lo spegni con `llmpod down` o non scatta un limite.
+- `keep` non accorcia il massimo fino a eliminare il Pod in silenzio: se le ore massime sono sotto il
+  tempo già trascorso più 5 minuti viene rifiutato (per spegnere il Pod usa `llmpod down`).
 - I limiti restano anche se il supervisore nel Pod si riavvia. Senza `--save` valgono solo per questo Pod.
 - Nell'interfaccia web, pagina "Stato e costi": il pulsante **Prolunga** di ogni Pod avviato apre una
   finestra con inattività (anche "Mai") e ore massime, e riporta il costo massimo prima della conferma.
