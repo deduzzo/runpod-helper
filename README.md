@@ -28,6 +28,11 @@ self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di codin
 | `llmpod chat` | Prova veloce con Open WebUI locale (Docker) collegato al Pod |
 | `llmpod status` | Pod avviati, in avvio e spenti, uptime, costo della sessione, credito residuo, costo del volume |
 | `llmpod keep <profilo>` | Cambia inattività e ore massime di un Pod già avviato, con il costo massimo fino alla nuova scadenza (vedi "Tenere acceso un Pod") |
+| `llmpod metrics` | Metriche di vLLM sul Pod: token/s, richieste, KV cache %, accettazione MTP/DSpark, errori |
+| `llmpod logs` | Log di vLLM dal supervisore (mascherati), anche in continuo con `--follow` |
+| `llmpod tune <profilo>` | Cambia gli argomenti di vLLM sul Pod avviato e lo ricarica (il Pod resta), con stima di memoria e smoke test |
+| `llmpod manage` | Modalità "Claude Code managed": avvia Claude Code nella cartella del progetto (vedi sotto) |
+| `llmpod mcp` | Server MCP di llmpod su stdio (anche `llmpod-mcp` o `node src/mcp/server.js`) |
 | `llmpod down` | Elimina il Pod, acceso o spento (il volume con i pesi resta) |
 | `llmpod rotate-key` | Rigenera la chiave API di vLLM del profilo |
 | `llmpod destroy-volume` | Elimina il network volume (doppia conferma) |
@@ -123,16 +128,160 @@ La CI di GitHub esegue test (Node 20 e 22), build dell'interfaccia, gitleaks, bu
 container, validazione di `compose.yaml` e controllo degli script PowerShell (sintassi e prova con
 un `docker` finto).
 
-## Installazione (CLI, senza Docker)
+## Installazione
 
-Requisiti: Node.js ≥ 20, git. Python serve solo per i test del supervisore.
+### 1. Requisiti
+
+- **Node.js ≥ 20** e **Git**;
+- **Docker** facoltativo: serve solo per `llmpod chat` (Open WebUI) o per l'installazione con Docker
+  (sezione precedente);
+- Python 3 solo per eseguire i test del supervisore (`npm test`);
+- un account [Runpod](https://www.runpod.io) con credito; un account Hugging Face solo per i modelli gated.
+
+### 2. Clone, dipendenze e comando globale
 
 ```bash
 git clone https://github.com/deduzzo/runpod-helper.git
 cd runpod-helper
-npm install          # attiva anche l'hook anti-segreti
-npm link             # rende disponibile il comando "llmpod"
+npm ci                # dipendenze esatte del lockfile; attiva anche l'hook anti-segreti
+npm run build:web     # interfaccia web (llmpod ui)
+npm link              # comandi globali "llmpod" e "llmpod-mcp"
 ```
+
+Senza `npm link` si può usare `node src/cli/index.js <comando>` dalla cartella del progetto.
+
+### 3. Configurazione: `llmpod init`
+
+```bash
+llmpod init
+```
+
+- **Chiave Runpod**: su https://www.runpod.io/console/user/settings crea una chiave *Restricted* con
+  **Pods**, **Network Volumes** e **Templates** in Read/Write, oppure una chiave con accesso completo (*All*).
+  llmpod usa l'API REST (Pod, volumi, catalogo GPU e datacenter) e l'API GraphQL per il credito residuo, che
+  `llmpod up` controlla prima di creare un Pod. `llmpod init` verifica la chiave elencando i Pod (REST): se
+  poi `llmpod status` mostra "Credito residuo: non disponibile" o `llmpod up` si ferma sul credito, la chiave
+  *Restricted* non consente la lettura via GraphQL e serve una chiave con accesso completo;
+- **token Hugging Face** facoltativo: serve solo per i modelli gated (basta un token *Read*);
+- **datacenter** preferito (llmpod mostra quelli con GPU disponibili) e **network volume** per i pesi
+  (facoltativo, con il costo mensile: evita di riscaricarli a ogni avvio).
+
+Le chiavi finiscono in `~/.config/llmpod/.env` (permessi 600) e non vengono mai stampate.
+
+### 4. Client (almeno uno)
+
+| Client | Installazione ufficiale |
+|---|---|
+| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` (oppure `npm install -g @anthropic-ai/claude-code`) |
+| OpenCode | `curl -fsSL https://opencode.ai/install \| bash` (oppure `npm install -g opencode-ai`) |
+| pi | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` |
+| ZCode | app desktop di Z.ai, dal sito ufficiale; llmpod ne scrive la configurazione ad app chiusa |
+
+### 5. Prima prova
+
+```bash
+llmpod search --set abliterated          # set di modelli consigliati (con MTP/DSpark); oppure: llmpod search qwen3 coder
+llmpod plan abliterated/1                # stima VRAM, GPU con prezzo e disponibilità: scegli la GPU
+llmpod save prova
+llmpod up prova                          # GPU disponibili ora, costo orario: conferma
+llmpod run claude --profile prova        # oppure opencode, pi, zcode
+llmpod down prova                        # ELIMINA il Pod (il volume con i pesi resta)
+llmpod status                            # verifica: nessun Pod rimasto
+```
+
+### 6. Con Docker
+
+Vedi [Installazione con Docker](#installazione-con-docker-consigliata): stessi passi, con `scripts/start.*` e
+il wrapper `bin/llmpod`.
+
+### 7. Aggiornamento
+
+```bash
+cd runpod-helper
+git pull && npm ci && npm run build:web
+```
+
+## Modalità Claude Code managed
+
+In questa modalità è **Claude Code** a fare da operatore di llmpod: lanciato nella cartella del progetto legge
+`CLAUDE.md`, le skill e i permessi di `.claude/` e il server MCP di `.mcp.json`, e ti guida in italiano dalla
+scelta del modello allo spegnimento, al posto del consulente esterno (che resta disponibile con `llmpod advisor`).
+
+```bash
+llmpod manage                     # avvia "claude" nella cartella di llmpod (con --profile <nome> parte da quel profilo)
+# oppure
+cd runpod-helper && claude
+```
+
+Al primo avvio Claude Code chiede di approvare il server MCP `llmpod` del progetto.
+
+**Cosa può fare** (strumenti MCP e skill `/llmpod-avvia`, `/llmpod-stato`, `/llmpod-tune`, `/llmpod-spegni`):
+
+- proporre il set consigliato o cercare modelli, calcolare il piano e **mostrarti GPU e varianti con prezzo e
+  disponibilità** (preferendo quelle con MTP/DSpark), salvare il profilo con la GPU che scegli;
+- avviare il Pod **in background** e seguirne l'avanzamento, mostrandoti le domande del core (es. riparazione,
+  Pod spento da eliminare) prima di rispondere;
+- monitorare con `llmpod metrics` (token/s, richieste, KV cache %, accettazione MTP/DSpark per posizione,
+  errori) e `llmpod logs`;
+- fare **tuning** con `llmpod tune` partendo dalle recipe ufficiali di vLLM: diff, stima di memoria sulla GPU
+  del Pod, ricarica di vLLM senza eliminare il Pod, smoke test e ritorno agli argomenti precedenti se fallisce;
+- prolungare (`keep`) o **eliminare** i Pod (mai fermarli) e verificare alla fine l'elenco completo dei Pod.
+
+**Permessi** (`.claude/settings.json`):
+
+- senza domande solo le operazioni di sola lettura: `status`, `metrics`, `logs`, `search`, `plan`,
+  `model_sets`, `profiles`, `job_status`, `job_events`, `up_preview`, `tune_preview`, `keep_preview`,
+  `client_commands` (e gli stessi comandi CLI di sola lettura);
+- **chiedono sempre conferma** (regole `ask`, che valgono anche se altrove hai consentito di più): gli strumenti
+  `up`, `tune`, `keep`, `down`, `save_profile`, `job_answer`, `job_cancel` e i comandi `llmpod up|tune|keep|down|
+  destroy-volume|rotate-key|save|init|advisor` (anche nella forma `node src/cli/index.js …`). In più gli strumenti
+  che costano richiedono `confirm: true`, `up` anche il prezzo orario mostrato dall'anteprima
+  (`expectedHourlyUSD`: se nel frattempo è cambiato si ferma con `PRICE_CHANGED` senza creare nulla), `tune` gli
+  argomenti attivi visti nell'anteprima (`expectedArgs`) e `save_profile` il modello del piano mostrato;
+- **vietato** (`deny`): leggere o modificare `~/.config/llmpod/.env` e i file `.env` del progetto, `cat`/`grep`/
+  `head`/`tail` sui `.env`, `llmpod env` (stampa le chiavi). `.env.example` resta leggibile. Le chiavi non
+  compaiono mai nelle risposte del server MCP; i client si avviano con `llmpod run …`.
+- **Se usi una cartella di configurazione diversa** (`LLMPOD_CONFIG_DIR`): le regole sopra coprono solo
+  `~/.config/llmpod/.env` e i `.env` sotto la cartella del progetto. Aggiungi in `.claude/settings.local.json`
+  (non versionato) una regola con il percorso assoluto, es. `"deny": ["Read(//percorso/llmpod/.env)",
+  "Edit(//percorso/llmpod/.env)"]`.
+- Le regole `Read`/`Edit` valgono per gli strumenti di Claude Code e per i comandi di file riconosciuti (`cat`,
+  `head`, …), non per un programma qualsiasi che apra il file da sé (es. uno script Python). Per un blocco a
+  livello di sistema operativo attiva la **sandbox** di Claude Code (`/sandbox`), che applica le stesse regole
+  a tutti i comandi della shell.
+
+**Sicurezza dei job**: se un avvio fallisce, il server MCP elimina subito il Pod (senza aspettare una risposta);
+mentre un Pod costa, le domande pendenti scadono dopo 3 minuti con il valore sicuro; `job_cancel` su un `up`
+non ancora pronto lo annulla ed elimina il Pod appena creato, su un `tune` riporta vLLM agli argomenti precedenti
+e lascia il Pod acceso; `down` (anche durante un `up`/`tune`) è l'unico modo esplicito per eliminare un Pod e
+chiede sempre conferma; alla chiusura del server (fine sessione, SIGINT,
+SIGTERM) un `up` ancora in corso con il Pod già creato viene annullato e il Pod eliminato (entro 60 s).
+
+**Comandi CLI pensati anche per l'agente** (tutti con `--json`):
+
+```bash
+llmpod metrics [profilo] --window 10     # due letture di /metrics a 10 s: tassi, KV %, MTP/DSpark, errori
+llmpod logs [profilo] --since 120       # --follow resta aperto: solo da terminale, non dall'agente
+llmpod status --all                     # anche gli altri Pod dell'account (non creati da llmpod), sola lettura
+llmpod tune <profilo> --set max-num-seqs=4 --dry-run     # diff e memoria, senza ricaricare
+llmpod tune <profilo> --set kv-cache-dtype=fp8 --save    # conferma, ricarica vLLM, smoke test, salva nel profilo
+```
+
+`tune` parte dagli argomenti attivi sul Pod (solo con vLLM pronto), accetta anche `max-model-len` (mai
+revisione, numero di GPU, chiave, host, porta o nome servito), normalizza i nomi (`--max_model_len=…` diventa
+`--max-model-len …`), rifiuta forme brevi (`-tp`), abbreviazioni, flag sconosciuti o duplicati e le modifiche che
+non entrano nella memoria della GPU del Pod. Se la ricarica fallisce propone di tornare agli argomenti
+precedenti e, se vLLM non riparte, `llmpod down`.
+
+**Il server MCP in altri progetti**:
+
+```bash
+claude mcp add llmpod -- node /percorso/runpod-helper/src/mcp/server.js
+# oppure, dopo npm link: claude mcp add llmpod -- llmpod-mcp   (o llmpod mcp)
+```
+
+In quel caso valgono le conferme di Claude Code e i controlli del server (`confirm`, prezzo atteso), ma non le
+regole di `CLAUDE.md` né i permessi di questo progetto: copia le regole che ti servono nel `CLAUDE.md` dell'altro progetto.
 
 ## Primo utilizzo end-to-end
 

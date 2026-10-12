@@ -54,7 +54,7 @@ export function parseAdvice(text) {
   };
 }
 
-function argMap(args) {
+export function argMap(args) {
   const m = new Map();
   for (let i = 0; i < args.length; i++) {
     if (!args[i].startsWith('--')) continue;
@@ -166,6 +166,13 @@ export function reviewAdvice({ advice, baseArgs, flags, allowTrustRemoteCode = f
 // Entra la configurazione `option` ({ count, memoryGiB, perGpuGiB }) con questi argomenti? La stima parte da quella del piano
 // (o del profilo): pesi, stato costante, dtype di base della KV; il resto (KV, utilizzo della memoria) dipende dagli argomenti.
 export function fitsForOption(plan, option) {
+  const check = memoryCheck({ ...plan, context: undefined }, option);
+  return (args) => check(args).fits;
+}
+
+// Memoria per GPU stimata con questi argomenti ({ neededGiB, availableGiB, fits }). Se `plan.context` è noto (contesto su cui è
+// calcolata la stima), la KV si scala anche con --max-model-len (llmpod tune può cambiarlo); altrimenti solo con il dtype della KV.
+export function memoryCheck(plan, option) {
   const tp = option.count;
   const perGpu = option.perGpuGiB ?? plan.estimate.perGpuGiB;
   const fixed = plan.estimate.weightsGiB / tp + 2 + (plan.estimate.extraGiB ?? 0);
@@ -176,8 +183,13 @@ export function fitsForOption(plan, option) {
     const isFp8 = /fp8/i.test(m.get('--kv-cache-dtype') ?? 'auto');
     const planFp8 = plan.estimate.kvDtype ? plan.estimate.kvDtype === 'fp8' : plan.kvCacheDtype === 'fp8';
     const factor = isFp8 === planFp8 ? 1 : (isFp8 ? 0.5 : 2);
+    const len = Number(m.get('--max-model-len'));
+    const ctxFactor = plan.context > 0 && Number.isFinite(len) && len > 0 ? len / plan.context : 1;
     const util = Number(m.get('--gpu-memory-utilization') ?? 0.9);
-    return Number.isFinite(util) && util > 0 && util <= 0.98 && fixed + kvPerGpu * factor <= memoryGiB * util;
+    const neededGiB = Math.round((fixed + kvPerGpu * factor * ctxFactor) * 10) / 10;
+    const validUtil = Number.isFinite(util) && util > 0 && util <= 0.98;
+    const availableGiB = validUtil ? Math.round(memoryGiB * util * 10) / 10 : 0;
+    return { neededGiB, availableGiB, fits: validUtil && fixed + kvPerGpu * factor * ctxFactor <= memoryGiB * util };
   };
 }
 

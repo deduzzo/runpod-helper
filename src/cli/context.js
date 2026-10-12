@@ -23,6 +23,7 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
     env, io, store, http, events, platform,
     spawn: overrides.spawn ?? spawn,
     exit: overrides.exit ?? ((code) => process.exit(code)),
+    sleep: overrides.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
     isZcodeRunning: overrides.isZcodeRunning ?? (() => isZcodeRunning({ platform })),
     get runpod() {
       if (overrides.runpod) return overrides.runpod;
@@ -36,8 +37,8 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
     get ops() {
       return (cache.ops ??= ctx.makeOps({ ask: io.ask, askChoice: io.interactive ? io.askChoice : null, events }));
     },
-    makeOps({ ask, askChoice = null, events: ev }) {
-      return createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events: ev, ask, askChoice, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning }, advisor: ctx.advisor });
+    makeOps({ ask, askChoice = null, events: ev, sleep = overrides.sleep }) {
+      return createOps({ store, runpod: ctx.runpod, hf: ctx.hf, http, events: ev, ask, askChoice, sleep, zcode: { dir: zcodeDir(env), isRunning: ctx.isZcodeRunning }, advisor: ctx.advisor });
     },
     get advisor() {
       return {
