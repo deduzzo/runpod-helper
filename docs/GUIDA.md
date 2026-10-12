@@ -267,7 +267,8 @@ le mette prima. **Preferisci le varianti con MTP o DSpark**: generano più token
 Altre opzioni di `plan`: `--concurrency <n>` (richieste in parallelo previste, predefinito 2), `--extra-arg <arg>`
 (argomento di vLLM aggiuntivo), `--image <immagine>` (immagine vLLM diversa da quella predefinita),
 `--allow-trust-remote-code` (consente `--trust-remote-code`, solo se ti fidi del codice del repository),
-`--json`.
+`--no-nccl-safe` (sui Pod con più GPU senza NVLink non imposta `NCCL_P2P_DISABLE=1`, sconsigliato: vedi
+[Scegliere la GPU](#scegliere-la-gpu)), `--json`.
 
 ---
 
@@ -280,6 +281,15 @@ disponibili da nessuna parte sono marcate "non disponibile ora").
 - In un terminale interattivo `plan` chiede **"Quale GPU usare?"** (predefinita: la più economica disponibile).
 - `--gpu "NVIDIA A100 80GB PCIe"` o `--gpu "NVIDIA A100 80GB PCIe x2"` la imposta senza domanda.
 - `--yes` o `--json` non chiedono nulla.
+
+**Più GPU senza NVLink.** Le configurazioni multi-GPU su schede PCIe (RTX/GeForce, RTX PRO 6000 "Server/Workstation
+Edition", RTX A-series, L4/L40/L40S, A10/A16/A40, A100/H100 PCIe) comunicano attraverso il bus PCIe; in molte
+macchine virtuali il trasporto diretto P2P di NCCL fallisce con `NCCL error: unhandled cuda error`. Per queste
+llmpod avvia il Pod con la variabile **`NCCL_P2P_DISABLE=1`** e il piano mostra un avviso `NCCL:`. NVLink si
+presume solo per le GPU SXM/HGX (H100/H200/B200/B300, A100 SXM, GB200/GB300), che non ne hanno bisogno. Se vuoi
+provare senza (ad esempio per misurare la differenza), crea il piano con `llmpod plan … --no-nccl-safe`: il
+profilo salvato avrà `ncclSafe: false`. Con un modello grande, a parità di prezzo, **una sola GPU più grande** è
+di solito la scelta più semplice e veloce da avviare.
 
 Il profilo salvato conserva tutte le configurazioni compatibili. Al momento dell'avvio `llmpod up` rilegge il
 catalogo e ti propone quelle **disponibili ora**, per costo, comprese quelle di altri datacenter, etichettate
@@ -329,10 +339,15 @@ llmpod up prova
    se ha un **Pod spento** chiede di eliminarlo prima di crearne uno nuovo (predefinito sì; se rifiuti, `up` si
    ferma senza creare nulla); per i modelli *gated* verifica l'accesso; legge il credito;
 2. **scelta della GPU** tra quelle disponibili ora (vedi [Scegliere la GPU](#scegliere-la-gpu));
-3. **conferma del costo**: costo orario (e per 24 ore) e, se il profilo esce dai limiti predefiniti, "inattività:
-   mai (o N min), massimo N h → costo massimo X $". Si ferma se il credito è inferiore a un'ora di utilizzo;
+3. **conferma del costo**: costo orario (e per 24 ore), **stima del tempo e del costo dell'avvio** (vedi
+   [Stimare i costi](#stimare-i-costi)), `NCCL_P2P_DISABLE=1` se il Pod ha più GPU senza NVLink e, se il profilo
+   esce dai limiti predefiniti, "inattività: mai (o N min), massimo N h → costo massimo X $". Si ferma se il
+   credito è inferiore a un'ora di utilizzo;
 4. **creazione del Pod**, attesa dell'avvio, **download e caricamento dei pesi** (con `--verbose` vedi i log di
-   vLLM in diretta). Se vLLM non è pronto entro il tempo previsto chiede se aspettare altri 15 minuti;
+   vLLM in diretta). L'avanzamento distingue le due parti: *"Download dei pesi: 45% (57 di 126 GiB)"* (i byte del
+   modello nella cache di Hugging Face; non dice mai 100% finché il download è in corso) e poi *"Caricamento dei
+   pesi: 147/206 file, circa 7 min rimanenti"* (la barra di vLLM). Se vLLM non è pronto entro il tempo previsto
+   chiede se aspettare altri 15 minuti;
 5. **smoke test**: `/v1/models`, una chiamata a strumento su `/v1/messages` (protocollo Anthropic) e una su
    `/v1/chat/completions` (protocollo OpenAI).
 
@@ -560,6 +575,13 @@ llmpod destroy-volume             # conferma + digitazione del nome del volume; 
 - **Il caso peggiore** di un avvio è prezzo orario × ore massime del watchdog: con 8 ore su A100, circa 14,32 $.
   `llmpod up` e `llmpod keep` lo mostrano quando i limiti escono da quelli predefiniti; in modalità managed è il
   "costo massimo" dell'anteprima.
+- **L'avvio si paga**: il Pod costa da quando esiste, anche mentre scarica e carica i pesi. Per i modelli grandi
+  non è poco: nel collaudo del 12/10/2026 un modello da 126 GiB su 2× RTX PRO 6000 (PCIe) ha impiegato circa
+  **20–25 minuti solo per leggere i pesi in GPU** (~7 s per ognuno dei 206 file da ~0,6 GiB), oltre al download.
+  La conferma di `llmpod up` (e `up_preview` in modalità managed) mostra la stima: *"avvio stimato ~52 min
+  (download ~23, caricamento dei pesi ~25) ≈ 3,12 $ prima che il modello sia pronto"*. La stima è prudente:
+  5 minuti fissi, download a ~100 MB/s (si salta se i pesi sono già sul volume), caricamento a ~2 s/GiB con una
+  GPU, ×3 con più GPU, ×2 oltre 100 GiB.
 - **Fisso**: il volume, al mese.
 - `llmpod status` mostra il costo della sessione in corso e il credito residuo.
 
@@ -769,6 +791,8 @@ managed il consulente è Claude Code stesso e il piano non chiama il consulente 
 | `GATED_MODEL` / `HF_AUTH` | modello con accesso su richiesta | richiedi l'accesso sulla pagina del modello e imposta il token con `llmpod init` |
 | `OOM` | memoria GPU insufficiente | contesto minore, `--set kv-cache-dtype=fp8`, `--set gpu-memory-utilization=0.85` o una GPU più grande |
 | `POD_START_TIMEOUT` | download o caricamento più lunghi del previsto | rispondi sì alla domanda per attendere altri 15 minuti; guarda `llmpod logs` |
+| `VLLM_ERROR` con `NCCL error: unhandled cuda error` (spesso con `SymmMemCommunicator: Device capability 12.0 not supported` e `FlashInfer All Reduce is disabled`) | Pod **multi-GPU su GPU PCIe senza NVLink** (RTX/GeForce, RTX PRO 6000 "Server/Workstation Edition", RTX A-series, L4/L40/L40S, A10/A16/A40, A100/H100 PCIe): il trasporto diretto tra GPU (P2P) di NCCL fallisce nella macchina virtuale, anche dopo molti minuti di caricamento dei pesi. I due avvisi sono normali su Blackwell e non sono la causa | llmpod avvia questi Pod con **`NCCL_P2P_DISABLE=1`** (NCCL passa per la memoria dell'host: un po' più lento tra le GPU, ma stabile) e il piano lo segnala con un avviso `NCCL:`. Se l'errore compare lo stesso: controlla che il profilo non sia stato creato con `--no-nccl-safe` (campo `ncclSafe: false`), altrimenti rigenera piano e profilo; oppure scegli **una sola GPU più grande** o GPU **SXM con NVLink** (H100/H200/B200), per cui la variabile non serve. `NCCL_IB_DISABLE` non serve: InfiniBand si usa solo tra nodi diversi |
+| vLLM in `error` senza riavvii | il supervisore non riavvia vLLM se l'errore arriva **durante il caricamento dei pesi** o non è transitorio (NCCL, CUDA, OOM, errori di EngineCore): un riavvio ricaricherebbe tutti i pesi (anche 20 minuti a pagamento) per ripetere lo stesso errore. Riavvia una volta sola solo per errori di rete o di download prima del caricamento | `up` si ferma subito con la causa (`lastError`/`errorCause` del supervisore, visibili anche in `llmpod metrics`) e propone riparazione (consulente) o eliminazione del Pod |
 | `ZCODE_RUNNING` | ZCode è aperto e sovrascriverebbe la configurazione | chiudi ZCode e ripeti `llmpod run zcode` |
 | `CONFIG_PERMISSIONS` | `.env` leggibile da altri utenti | `chmod 600 ~/.config/llmpod/.env` |
 | Risposte interrotte dopo circa 100 s | limite del proxy di Runpod per le richieste **non** in streaming | usa client in streaming (Claude Code, OpenCode e pi lo sono) |
