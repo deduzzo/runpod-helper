@@ -68,6 +68,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 print('GPU KV cache size: 1,000 tokens, Maximum concurrency for 32,768 tokens per request: 0.03x', flush=True)
+for extra in json.loads(os.environ.get('FAKE_VLLM_LINES') or '[]'):
+    print(extra, flush=True)
 if os.environ.get('FAKE_VLLM_EXIT_AFTER'):
     threading.Timer(float(os.environ['FAKE_VLLM_EXIT_AFTER']), lambda: os._exit(3)).start()
 ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

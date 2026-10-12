@@ -122,6 +122,61 @@ class PureFunctions(unittest.TestCase):
         self.assertEqual(sv.valid_reload_args({'args': ['--max-model-len', '4096', '--enable-prefix-caching']}),
                          ['--max-model-len', '4096', '--enable-prefix-caching'])
 
+    def test_parse_load_progress(self):
+        line = '(Worker_TP0 pid=231) Loading safetensors checkpoint shards:  66% Completed | 135/206 [14:39<08:15, 6.98s/it]'
+        self.assertEqual(sv.parse_load_progress(line), {'done': 135, 'total': 206, 'percent': 66, 'elapsedSeconds': 879, 'remainingSeconds': 495})
+        self.assertEqual(sv.parse_load_progress('Loading safetensors checkpoint shards:   0% Completed | 0/206 [00:00<?, ?it/s]'),
+                         {'done': 0, 'total': 206, 'percent': 0, 'elapsedSeconds': 0, 'remainingSeconds': None})
+        self.assertEqual(sv.parse_load_progress('Loading safetensors checkpoint shards: 10% Completed | 20/206 [1:02:03<9:00:00, 7s/it]')['remainingSeconds'], 32400)
+        self.assertIsNone(sv.parse_load_progress('INFO Loading weights took 12.3 seconds'))
+
+    def test_classify_line(self):
+        self.assertEqual(sv.classify_line("RuntimeError: Worker failed with error 'NCCL error: unhandled cuda error'"), 'fatal')
+        self.assertEqual(sv.classify_line('torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB'), 'fatal')
+        self.assertEqual(sv.classify_line('RuntimeError: CUDA error: an illegal memory access was encountered'), 'fatal')
+        self.assertEqual(sv.classify_line("requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='cas-bridge.xethub.hf.co')"), 'transient')
+        self.assertEqual(sv.classify_line('huggingface_hub.errors.HfHubHTTPError: 503 Server Error: Service Unavailable'), 'transient')
+        self.assertEqual(sv.classify_line('OSError: [Errno -3] Temporary failure in name resolution'), 'transient')
+        self.assertIsNone(sv.classify_line('INFO Started server process'))
+        self.assertIsNone(sv.classify_line('  File "/x/requests/exceptions.py", line 3, in ConnectionError'))
+
+    def test_cause_line(self):
+        self.assertEqual(sv.cause_line('(EngineCore_DP0 pid=120) RuntimeError: boom'), 'RuntimeError: boom')
+        self.assertIsNone(sv.cause_line('  File "/x.py", line 1, in f'))
+        self.assertIsNone(sv.cause_line('INFO tutto bene'))
+
+    def test_restart_decision(self):
+        # (riavviare?, motivo): solo errori transitori prima del caricamento dei pesi, entro max_restarts
+        self.assertTrue(sv.restart_decision(loading_started=False, fatal=False, transient=True, restarts=0, max_restarts=1)[0])
+        self.assertFalse(sv.restart_decision(loading_started=False, fatal=False, transient=True, restarts=1, max_restarts=1)[0])
+        self.assertIn('dopo 1 riavvi', sv.restart_decision(loading_started=False, fatal=False, transient=True, restarts=1, max_restarts=1)[1])
+        self.assertFalse(sv.restart_decision(loading_started=True, fatal=False, transient=True, restarts=0, max_restarts=1)[0])
+        self.assertIn('caricamento dei pesi', sv.restart_decision(loading_started=True, fatal=False, transient=False, restarts=0, max_restarts=1)[1])
+        self.assertFalse(sv.restart_decision(loading_started=False, fatal=True, transient=True, restarts=0, max_restarts=1)[0])
+        self.assertFalse(sv.restart_decision(loading_started=False, fatal=False, transient=False, restarts=0, max_restarts=1)[0])
+
+    def test_max_restarts_predefinito_uno(self):
+        cfg = sv.env_config({'LLMPOD_MODEL': 'm', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k'})
+        self.assertEqual(cfg['max_restarts'], 1)
+
+    def test_model_cache_bytes_conta_solo_il_modello_e_non_i_link(self):
+        tmp = tempfile.mkdtemp()
+        hub = os.path.join(tmp, 'hub')
+        mine = os.path.join(hub, 'models--org--modello')
+        os.makedirs(os.path.join(mine, 'blobs'))
+        os.makedirs(os.path.join(mine, 'snapshots', 'abc'))
+        with open(os.path.join(mine, 'blobs', 'h1'), 'wb') as f:
+            f.write(b'x' * 100)
+        with open(os.path.join(mine, 'blobs', 'h2.incomplete'), 'wb') as f:
+            f.write(b'x' * 30)
+        os.symlink(os.path.join('..', '..', 'blobs', 'h1'), os.path.join(mine, 'snapshots', 'abc', 'model.safetensors'))
+        other = os.path.join(hub, 'models--altro--modello', 'blobs')
+        os.makedirs(other)
+        with open(os.path.join(other, 'h'), 'wb') as f:
+            f.write(b'x' * 1000)
+        self.assertEqual(sv.model_cache_bytes(tmp, 'org/modello'), 130)
+        self.assertEqual(sv.model_cache_bytes(tmp, 'org/assente'), 0)
+
     def test_emergency_terminate(self):
         runpod = FakeRunpod()
         try:
@@ -143,6 +198,7 @@ class SupervisorIntegration(unittest.TestCase):
         os.environ['FAKE_VLLM_STATE'] = self.state
         os.environ['VLLM_API_KEY'] = KEY
         os.environ.pop('FAKE_VLLM_EXIT_AFTER', None)
+        os.environ.pop('FAKE_VLLM_LINES', None)
         self.cfg = sv.env_config({
             'LLMPOD_MODEL': 'org/modello', 'LLMPOD_SERVED_NAME': 'modello', 'VLLM_API_KEY': KEY,
             'LLMPOD_VLLM_ARGS': '["--max-model-len","4096"]', 'LLMPOD_IDLE_MINUTES': '1', 'LLMPOD_MAX_HOURS': '1',
@@ -186,13 +242,61 @@ class SupervisorIntegration(unittest.TestCase):
         self.now[0] += 3600
         self.assertEqual(self.sup.step(), 'max-duration')
 
-    def test_crash_riavvio_poi_errore(self):
+    def test_crash_senza_errore_transitorio_nessun_riavvio(self):
         os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.5'
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
+        self.assertEqual(self.sup.restarts, 0)
+        self.assertIn('codice 3', self.sup.last_error)
+        self.assertIn('nessun riavvio automatico', self.sup.last_error)
+        self.assertIsNotNone(self.sup.tracker)  # l'inattività continua a contare anche in errore
+
+    def test_crash_transitorio_prima_del_caricamento_un_solo_riavvio(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.5'
+        os.environ['FAKE_VLLM_LINES'] = json.dumps([
+            "requests.exceptions.ConnectionError: HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded",
+        ])
         self.sup.start_vllm()
         self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.restarts)[1] == 1))
         self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
-        self.assertIn('codice 3', self.sup.last_error)
-        self.assertIsNotNone(self.sup.tracker)  # l'inattività continua a contare anche in errore
+        self.assertEqual(self.sup.restarts, 1)
+        self.assertIn('dopo 1 riavvi', self.sup.last_error)
+        self.assertIn('ConnectionError', self.sup.status()['errorCause'])
+
+    def test_errore_nccl_durante_il_caricamento_nessun_riavvio(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.5'
+        os.environ['FAKE_VLLM_LINES'] = json.dumps([
+            '(Worker_TP0 pid=231) Loading safetensors checkpoint shards:  66% Completed | 135/206 [14:39<08:15, 6.98s/it]',
+            '(EngineCore_DP0 pid=120) WARNING SymmMemCommunicator: Device capability 12.0 not supported',
+            "(EngineCore_DP0 pid=120) RuntimeError: Worker failed with error 'NCCL error: unhandled cuda error (run with NCCL_DEBUG=INFO for details)', please check the stack trace above for the root cause",
+            '  File "/usr/lib/python3/site-packages/vllm/v1/engine/core.py", line 12, in run',
+        ])
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
+        self.assertEqual(self.sup.restarts, 0)
+        st = self.sup.status()
+        self.assertIn('caricamento dei pesi', st['lastError'])
+        self.assertIn('NCCL error: unhandled cuda error', st['lastError'])
+        self.assertTrue(st['errorCause'].startswith('RuntimeError: Worker failed'))
+        self.assertEqual(st['restarts'], 0)
+        self.assertEqual(st['loadProgress']['done'], 135)
+
+    def test_avanzamento_del_caricamento_e_fase(self):
+        self.sup.phase = 'downloading'
+        self.sup.log('(Worker_TP0 pid=1) Loading safetensors checkpoint shards:  71% Completed | 147/206 [17:06<06:52, 6.99s/it]')
+        st = self.sup.status()
+        self.assertEqual(st['loadProgress'], {'done': 147, 'total': 206, 'percent': 71, 'elapsedSeconds': 1026, 'remainingSeconds': 412})
+        self.assertEqual(st['phase'], 'loading')  # vLLM sta leggendo i pesi: il download è finito
+        self.sup.log('[llmpod] Loading safetensors checkpoint shards: 1% Completed | 1/206 [00:01<00:10, 1s/it]')
+        self.assertEqual(self.sup.status()['loadProgress']['done'], 147)  # le righe del supervisore non contano
+
+    def test_variabili_nccl_nei_log_di_avvio(self):
+        os.environ['NCCL_P2P_DISABLE'] = '1'
+        try:
+            self.sup.start_vllm()
+        finally:
+            os.environ.pop('NCCL_P2P_DISABLE', None)
+        self.assertTrue(any('NCCL_P2P_DISABLE=1' in l['line'] for l in self.sup.logs_since(0)))
 
     def test_tick_sopravvive_a_eccezione_e_termina(self):
         def boom():
