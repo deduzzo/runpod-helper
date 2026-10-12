@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { sandbox, SECRETS } from './helpers.js';
 
@@ -96,6 +97,31 @@ describe('CLI: ciclo di vita del Pod', () => {
     expect(opts.stdio).toBe('inherit');
     expect(opts.env.ANTHROPIC_BASE_URL).toBe('https://pod1-8000.proxy.runpod.net');
     expect(await t.go(['claude'])).toBe(3);
+  });
+
+  it('run --cwd avvia il client nella cartella indicata; senza --cwd non imposta cwd', async () => {
+    const t = setup();
+    t.activate();
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-work-')));
+    expect(await t.go(['run', 'claude', '--cwd', dir])).toBe(3);
+    expect(t.spawn.mock.calls[0][2].cwd).toBe(dir);
+    expect(await t.go(['claude', '--cwd', dir])).toBe(3);
+    expect(t.spawn.mock.calls[1][2].cwd).toBe(dir);
+    expect(await t.go(['run', 'pi', '--cwd', dir])).toBe(3);
+    expect(t.spawn.mock.calls[2][2].cwd).toBe(dir);
+    expect(await t.go(['run', 'claude'])).toBe(3);
+    expect(t.spawn.mock.calls[3][2]).not.toHaveProperty('cwd');
+  });
+
+  it('run --cwd inesistente: INVALID_INPUT senza avviare il client; zcode accetta --cwd', async () => {
+    const t = setup();
+    t.activate();
+    const missing = path.join(os.tmpdir(), 'llmpod-non-esiste-xyz');
+    expect(await t.go(['run', 'claude', '--cwd', missing])).toBe(1);
+    expect(t.err()).toMatch(/non esiste/);
+    expect(t.spawn).not.toHaveBeenCalled();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-work-'));
+    expect(await t.go(['run', 'zcode', '--no-open', '--cwd', dir])).toBe(0);
   });
 
   it('run pi scrive models.json senza chiave e passa --provider/--model', async () => {

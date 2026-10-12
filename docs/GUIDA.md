@@ -393,6 +393,10 @@ llmpod run pi --profile prova          # pi
 llmpod run zcode --profile prova       # ZCode: scrive la configurazione (su macOS apre l'app; --no-open per non aprirla)
 ```
 
+Con `--cwd <cartella>` il client parte nella cartella del tuo progetto invece che in quella corrente
+(`llmpod run claude --profile prova --cwd ~/mio-progetto`). La cartella deve esistere; per ZCode, che si limita a
+scrivere la configurazione e ad aprire l'app, `--cwd` non ha effetto.
+
 Senza `--profile` llmpod usa il profilo con l'unico Pod avviato o l'unico profilo esistente; altrimenti chiede di
 indicarlo. Il client parte **nella cartella da cui lanci il comando**.
 
@@ -699,6 +703,40 @@ llmpod manage --profile prova    # parte dallo stato del profilo "prova"
 # oppure
 cd runpod-helper && claude
 ```
+
+### Lavorare nella cartella del proprio progetto (`--cwd`)
+
+```bash
+llmpod manage --cwd ~/mio-progetto                 # Claude Code parte nel tuo progetto, gestito da llmpod
+llmpod manage --cwd ~/mio-progetto --profile prova # (--dir è un alias di --cwd)
+```
+
+`--cwd` (la cartella deve esistere) avvia `claude` in quella cartella e gli passa tre flag, così la sessione ha
+comunque la configurazione gestita di llmpod:
+
+- `--mcp-config '{"mcpServers":{"llmpod":{...}}}'`: il server MCP `llmpod` con il percorso **assoluto** di
+  `src/mcp/server.js` (il `.mcp.json` del repository usa un percorso relativo e fuori dalla cartella di llmpod non
+  funzionerebbe). Una sola stringa JSON, nessun file temporaneo; contiene al massimo `LLMPOD_CONFIG_DIR`,
+  `ZCODE_DIR` e `PI_CODING_AGENT_DIR` se impostate, mai chiavi. Non usa `--strict-mcp-config`: i tuoi eventuali
+  altri server MCP restano disponibili;
+- `--settings <llmpod>/.claude/settings.json`: i permessi `allow`/`ask`/`deny` di llmpod (spese sempre con
+  conferma, `.env` protetti);
+- `--add-dir <llmpod>`: dà accesso al repository di llmpod. Poiché Claude Code non legge il `CLAUDE.md` delle
+  cartelle aggiuntive senza `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`, llmpod imposta questa variabile nella
+  sessione, così le regole di `CLAUDE.md` valgono anche nel tuo progetto.
+
+Limite: le skill `/llmpod-*` arrivano da `--add-dir` (Claude Code carica le `.claude/skills` delle cartelle
+aggiuntive); se nella tua versione non compaiono, restano comunque gli strumenti MCP e le regole di `CLAUDE.md`.
+Se `--cwd` coincide con la cartella di llmpod il comportamento è quello di `llmpod manage` senza opzioni. Il
+percorso è passato come argomento al processo (nessuna shell) e nei flag non c'è nessun segreto.
+
+Esempio di flusso:
+
+1. `llmpod manage --cwd ~/progetto`
+2. in Claude Code chiedi di avviare un modello: usa gli strumenti MCP, ti mostra GPU, prezzo e costo massimo e
+   attende la tua conferma prima di spendere;
+3. a Pod pronto chiedi i comandi per i client (`client_commands`) e lavori sul progetto, ad esempio con
+   `llmpod run claude --profile prova --cwd ~/progetto` in un altro terminale.
 
 Al primo avvio Claude Code chiede di approvare il server MCP `llmpod` del progetto. `manage` controlla che ci
 siano `CLAUDE.md`, `.claude/settings.json`, `.claude/skills` e `.mcp.json`.

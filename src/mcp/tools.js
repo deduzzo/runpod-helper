@@ -398,7 +398,7 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
         return {
           commands: { claude: cmd('claude'), opencode: cmd('opencode'), pi: cmd('pi'), zcode: cmd('zcode') },
           withoutGlobalCommand: `node ${PROJECT_DIR}/src/cli/index.js run <client> --profile ${profile}`,
-          note: 'Non mostrare né chiedere mai la chiave vLLM: i comandi la passano al client senza stamparla',
+          note: 'Non mostrare né chiedere mai la chiave vLLM: i comandi la passano al client senza stamparla. Per lavorare in un\'altra cartella aggiungi --cwd <cartella> al comando (es. llmpod run claude --profile NOME --cwd ~/mio-progetto)',
         };
       },
     },

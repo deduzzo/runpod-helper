@@ -162,6 +162,8 @@ describe('strumenti di sola lettura', () => {
     const r = await t.call('client_commands', { profile: 'p' });
     expect(r.data.commands.claude).toMatch(/llmpod run claude --profile p/);
     expect(r.data.commands.zcode).toMatch(/llmpod run zcode --profile p/);
+    expect(r.data.note).toMatch(/--cwd <cartella>/);
+    expect(r.data.withoutGlobalCommand).toMatch(/run <client> --profile p/);
     expect(JSON.stringify(r.data)).not.toMatch(/LLMPOD_API_KEY=|ANTHROPIC_AUTH_TOKEN=/);
   });
 });
