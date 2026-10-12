@@ -10,4 +10,5 @@ export function podState(status) {
   return { state: 'unknown', label: String(status ?? '?').toLowerCase() };
 }
 
-export const STOPPED_WARNING = (profile) => `Spento ma costa ancora lo spazio su disco: eliminalo con llmpod down ${profile}`;
+// diskGB: campo `disk` del Pod (GB). Nessuna cifra di costo: Runpod non la fornisce per i Pod spenti.
+export const STOPPED_WARNING = (profile, diskGB = null) => `Spento: occupa ancora ${diskGB != null ? `${diskGB} GB di disco` : 'disco'} e continua a costare — eliminalo con llmpod down ${profile}`;

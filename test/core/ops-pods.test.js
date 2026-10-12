@@ -21,12 +21,12 @@ const plan = {
 };
 const CATALOG = { 1: [gpu('GPU80', 80, 1.5, [['EU-A', 'HIGH']]), gpu('GPU96', 96, 2.5, [['EU-A', 'LOW']]), gpu('GPUX', 80, 2, [['EU-A', 'MEDIUM']])] };
 
-function setup({ catalog = CATALOG, pods = [], askAnswers = [], askChoice = null } = {}) {
+function setup({ catalog = CATALOG, pods = [], askAnswers = [], askChoice = null, planPatch = {} } = {}) {
   clearSecrets();
   const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-opspods-')), 'cfg');
   const store = createStore({ dir, platform: 'linux' });
   store.writeConfig({ dataCenterId: 'EU-A', volume: { id: 'vol1', name: 'llmpod-pesi', size: 150, dataCenterId: 'EU-A' } });
-  store.writeJson('last-plan.json', plan);
+  store.writeJson('last-plan.json', { ...plan, ...planPatch });
   const list = [...pods];
   let created = false;
   const runpod = {
@@ -134,6 +134,54 @@ describe('up: scelta della GPU', () => {
   });
 });
 
+describe('up: tutte le opzioni del piano', () => {
+  // GPUY entra in memoria ma NON è tra gpu + alternative del profilo (le alternative sono al massimo 4).
+  const wide = { 1: [...CATALOG[1], gpu('GPUY', 80, 1.8, [['EU-A', 'HIGH']]), gpu('GPUZ', 80, 1.7, [['EU-A', 'NONE']])] };
+  const options = [opt('GPU80', 1, 1.5, 'HIGH'), opt('GPUZ', 1, 1.7, 'NONE'), opt('GPUY', 1, 1.8, 'HIGH'), opt('GPUX', 1, 2, 'LOW'), opt('GPU96', 1, 2.5, 'LOW')];
+
+  it('il profilo conserva tutte le opzioni del piano', () => {
+    const t = setup({ catalog: wide, planPatch: { options } });
+    expect(t.store.readProfile('p').options.map((o) => o.id)).toEqual(['GPU80', 'GPUZ', 'GPUY', 'GPUX', 'GPU96']);
+  });
+
+  it('propone tutte le opzioni disponibili ora (dal catalogo attuale), per costo; predefinita quella del profilo', async () => {
+    const t = setup({ catalog: wide, planPatch: { options }, askChoice: async (_t, _o, def) => def });
+    await t.ops.up('p');
+    const [, opts, def] = t.choose.mock.calls[0];
+    expect(opts.map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPUY|1|EU-A', 'GPUX|1|EU-A', 'GPU96|1|EU-A']);
+    expect(def).toBe('GPU80|1|EU-A');
+  });
+
+  it('una GPU che non era tra le alternative si può scegliere e si usa solo quella (niente ripieghi dopo una scelta esplicita)', async () => {
+    const t = setup({ catalog: wide, planPatch: { options }, askChoice: async () => 'GPUY|1|EU-A' });
+    await t.ops.up('p');
+    expect(t.runpod.createPod).toHaveBeenCalledTimes(1);
+    expect(t.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPUY');
+  });
+
+  it('la disponibilità è quella attuale: se la GPU del profilo non è più disponibile la predefinita è la più economica disponibile', async () => {
+    const catalog = { 1: [gpu('GPU80', 80, 1.5, [['EU-A', 'NONE']]), ...wide[1].slice(1)] };
+    const t = setup({ catalog, planPatch: { options }, askChoice: async (_t, _o, def) => def });
+    await t.ops.up('p');
+    expect(t.choose.mock.calls[0][2]).toBe('GPUY|1|EU-A');
+    expect(t.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPUY');
+  });
+
+  it('con yes si usano solo GPU e alternative del profilo, con ripieghi (come prima)', async () => {
+    const t = setup({ catalog: wide, planPatch: { options }, askChoice: async () => 'GPUY|1|EU-A' });
+    await t.ops.up('p', { yes: true });
+    expect(t.choose).not.toHaveBeenCalled();
+    expect(t.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPU80');
+  });
+
+  it('profili vecchi senza options: solo GPU del profilo e alternative (comportamento attuale)', async () => {
+    const t = setup({ catalog: wide, planPatch: { options: undefined }, askChoice: async (_t, _o, def) => def });
+    expect(t.store.readProfile('p').options ?? null).toBeNull();
+    await t.ops.up('p');
+    expect(t.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPUX|1|EU-A', 'GPU96|1|EU-A']);
+  });
+});
+
 describe('saveProfile con la GPU scelta', () => {
   it('applica la scelta alla copia del piano: profilo con la GPU scelta, last-plan.json invariato', () => {
     const t = setup();
@@ -153,20 +201,21 @@ describe('saveProfile con la GPU scelta', () => {
 describe('Pod spenti: status, down, up', () => {
   const running = { id: 'r1', name: 'llmpod-p', status: 'RUNNING', cost: 1.5, runtime: { uptime: 3600 } };
   const starting = { id: 's1', name: 'llmpod-q', status: 'CREATED', cost: 1.5 };
-  const stopped = { id: 'e1', name: 'llmpod-z', status: 'EXITED', cost: 1.5, storageCostPerHr: 0.014 };
+  const stopped = { id: 'e1', name: 'llmpod-z', status: 'EXITED', cost: 1.5, disk: 44 };
   const dead = { id: 't1', name: 'llmpod-old', status: 'TERMINATED' };
 
   it('status elenca avviati, in avvio e spenti con uno stato chiaro; i terminati no', async () => {
     const t = setup({ pods: [running, starting, stopped, dead, { id: 'x', name: 'altro-pod', status: 'EXITED' }] });
     const s = await t.ops.status();
     expect(s.pods.map((p) => [p.profile, p.state, p.stateLabel])).toEqual([['p', 'running', 'avviato'], ['q', 'starting', 'in avvio'], ['z', 'stopped', 'spento']]);
-    expect(s.pods[2]).toMatchObject({ podId: 'e1', status: 'EXITED', hourlyUSD: 0, sessionUSD: 0, uptimeSeconds: 0, storageUSD: 0.014 });
-    expect(s.pods[0]).toMatchObject({ hourlyUSD: 1.5, storageUSD: null });
+    expect(s.pods[2]).toMatchObject({ podId: 'e1', status: 'EXITED', hourlyUSD: 0, sessionUSD: 0, uptimeSeconds: 0, diskGB: 44 });
+    expect(s.pods[0]).toMatchObject({ hourlyUSD: 1.5, diskGB: null });
+    expect(s.pods[2]).not.toHaveProperty('storageUSD');
   });
 
-  it('un Pod spento senza costo di storage noto ha storageUSD null', async () => {
-    const t = setup({ pods: [{ ...stopped, storageCostPerHr: undefined }] });
-    expect((await t.ops.status()).pods[0]).toMatchObject({ state: 'stopped', storageUSD: null });
+  it('un Pod spento senza disco noto ha diskGB null (nessuna cifra inventata)', async () => {
+    const t = setup({ pods: [{ ...stopped, disk: undefined }] });
+    expect((await t.ops.status()).pods[0]).toMatchObject({ state: 'stopped', diskGB: null });
   });
 
   it('down elimina (DELETE) anche un Pod spento', async () => {

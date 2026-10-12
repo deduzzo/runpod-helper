@@ -59,6 +59,8 @@ export function profileFromPlan(plan, { name, volume, watchdog }) {
     parsers: plan.parsers,
     gpu,
     alternatives,
+    // tutte le configurazioni compatibili con la stima: `up` le ripropone in base alla disponibilità attuale
+    options: plan.options ?? null,
     cloud: plan.cloud,
     dataCenterId: plan.dataCenterId,
     volume: volume ? { id: volume.id, mountPath: '/workspace' } : null,
@@ -261,10 +263,18 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     }
     const { balance } = await runpod.getBalance();
 
-    const counts = [...new Set([profile.gpu, ...profile.alternatives].filter(Boolean).map((g) => g.count))];
+    // Con la scelta dell'utente (terminale interattivo o web) si considerano TUTTE le opzioni salvate nel profilo; altrimenti
+    // (o per profili vecchi senza `options`) solo la GPU del profilo e le sue alternative, con ripieghi.
+    const choiceMode = Boolean(askChoice) && !yes && !dryRun;
+    const wantedAlternatives = choiceMode && profile.options?.length
+      ? profile.options.map((o) => ({ id: o.id, count: o.count }))
+      : (profile.alternatives ?? []);
+    const wanted = [];
+    for (const g of [profile.gpu, ...wantedAlternatives].filter(Boolean)) if (!wanted.some((w) => w.id === g.id && w.count === g.count)) wanted.push({ id: g.id, count: g.count });
+    const counts = [...new Set(wanted.map((g) => g.count))];
     const catalogs = {};
     for (const count of counts) catalogs[count] = await runpod.listGpus({ count, cloud: profile.cloud, minCudaVersion: cfg.minCudaVersion });
-    const { inVolumeDc, otherDcs } = rankCandidates({ profile, catalogs, cloud: profile.cloud });
+    const { inVolumeDc, otherDcs } = rankCandidates({ profile: { ...profile, gpu: wanted[0], alternatives: wanted.slice(1) }, catalogs, cloud: profile.cloud });
     let candidates = inVolumeDc.filter((c) => c.hourly > 0);
     if (!candidates.some((c) => c.availability !== 'NONE') && otherDcs.length) {
       const policy = profile.allowFallbackWithoutVolume ?? 'ask';
@@ -276,7 +286,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
 
     // Scelta della GPU (terminale interattivo o interfaccia web, mai con --yes): tra le configurazioni disponibili ORA,
     // predefinita quella del profilo se disponibile, altrimenti la più economica. Si usa solo la scelta (niente ripieghi silenziosi).
-    if (askChoice && !yes && !dryRun) {
+    if (choiceMode) {
       const avail = candidates.filter((c) => c.availability !== 'NONE').sort((a, b) => a.hourly - b.hourly);
       if (avail.length > 1) {
         const key = (c) => `${c.id}|${c.count}|${c.dataCenterId}`;
@@ -442,7 +452,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       // Un Pod spento non ha uptime né costo orario della GPU; costa lo spazio su disco (se Runpod ne indica il costo).
       return {
         profile, podId: p.id, status: p.status, state: podStateName, stateLabel: label, gpu: p.gpu ?? null,
-        hourlyUSD: stopped ? 0 : (p.cost ?? 0), storageUSD: stopped ? (p.storageCostPerHr ?? p.storageCost ?? null) : null,
+        hourlyUSD: stopped ? 0 : (p.cost ?? 0), diskGB: p.disk ?? null,
         uptimeSeconds: stopped ? 0 : uptimeSeconds,
         sessionUSD: stopped ? 0 : ((p.cost ?? 0) * uptimeSeconds) / 3600, orphan: state.pods[profile]?.podId !== p.id,
         supervisor: sup ? { phase: sup.phase, idleSeconds: sup.idleSeconds, idleLimitSeconds: sup.idleLimitSeconds, uptimeSeconds: sup.uptimeSeconds, maxSeconds: sup.maxSeconds } : null,

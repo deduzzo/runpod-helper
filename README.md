@@ -149,8 +149,10 @@ Scelta della GPU: il piano elenca tutte le configurazioni che entrano in memoria
 VRAM, margine, costo e disponibilità (nel datacenter del volume e altrove; quelle non disponibili ovunque
 sono marcate "non disponibile ora"). In un terminale interattivo `llmpod plan` chiede "Quale GPU usare?"
 (predefinita: la più economica disponibile); `--gpu "NVIDIA A100 80GB PCIe"` o `--gpu "…x2"` la imposta senza
-domanda, e `--yes` o `--json` non chiedono nulla. Anche `llmpod up` rilegge la disponibilità e propone le GPU
-disponibili ora (predefinita quella del profilo, se disponibile); la conferma del costo resta. Nell'interfaccia
+domanda, e `--yes` o `--json` non chiedono nulla. Il profilo salvato conserva tutte le configurazioni compatibili: `llmpod up` rilegge la disponibilità dal catalogo e propone
+quelle disponibili ora, per costo (predefinita quella del profilo, se disponibile); dopo la scelta usa solo quella, senza ripieghi
+silenziosi (con `--yes` vale la GPU del profilo con le sue alternative); i profili vecchi, senza elenco, usano GPU e alternative.
+La conferma del costo resta. Nell'interfaccia
 web la tabella del piano è selezionabile (la scelta viene salvata nel profilo) e l'avvio dalla scheda Profili
 mostra la domanda come scelta tra opzioni; senza risposta il job si annulla e non spende nulla.
 

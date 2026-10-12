@@ -11,9 +11,9 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const base = { gpu: { id: 'A100', count: 1 }, orphan: false, supervisor: null };
 const statusBody = {
   pods: [
-    { ...base, profile: 'acceso', podId: 'p1', status: 'RUNNING', state: 'running', stateLabel: 'avviato', hourlyUSD: 1.79, uptimeSeconds: 3900, sessionUSD: 1.94, storageUSD: null },
-    { ...base, profile: 'nuovo', podId: 'p2', status: 'CREATED', state: 'starting', stateLabel: 'in avvio', hourlyUSD: 1.79, uptimeSeconds: 10, sessionUSD: 0, storageUSD: null },
-    { ...base, profile: 'spento', podId: 'p3', status: 'EXITED', state: 'stopped', stateLabel: 'spento', hourlyUSD: 0, uptimeSeconds: 0, sessionUSD: 0, storageUSD: 0.0123 },
+    { ...base, profile: 'acceso', podId: 'p1', status: 'RUNNING', state: 'running', stateLabel: 'avviato', hourlyUSD: 1.79, uptimeSeconds: 3900, sessionUSD: 1.94, diskGB: 44 },
+    { ...base, profile: 'nuovo', podId: 'p2', status: 'CREATED', state: 'starting', stateLabel: 'in avvio', hourlyUSD: 1.79, uptimeSeconds: 10, sessionUSD: 0, diskGB: 20 },
+    { ...base, profile: 'spento', podId: 'p3', status: 'EXITED', state: 'stopped', stateLabel: 'spento', hourlyUSD: 0, uptimeSeconds: 0, sessionUSD: 0, diskGB: 44 },
   ],
   balance: { balance: 42.5 }, volume: null,
 };
@@ -35,8 +35,7 @@ describe('Stato e costi: Pod avviati e spenti', () => {
     mockApi({ 'GET /api/status': statusBody });
     mount();
     await screen.findByText('p3');
-    expect(screen.getByText(/Spento ma costa ancora lo spazio su disco: eliminalo con llmpod down spento/)).toBeTruthy();
-    expect(screen.getByText(/0,01 \$\/h di spazio su disco/)).toBeTruthy();
+    expect(screen.getByText('Spento: occupa ancora 44 GB di disco e continua a costare — eliminalo con llmpod down spento')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: /^Elimina/ })).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Elimina il Pod spento p3' })).toBeTruthy();
   });

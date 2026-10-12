@@ -26,8 +26,7 @@ export function register(program, getCtx) {
             : p.supervisor?.phase ?? '—') },
         ]));
         for (const p of s.pods.filter((x) => x.state === 'stopped')) {
-          const cost = p.storageUSD != null ? ` (${fmtUSD(p.storageUSD)}/h di spazio su disco)` : '';
-          io.out(`⚠ ${p.profile} (${p.podId}): ${STOPPED_WARNING(p.profile)}${cost}`);
+          io.out(`⚠ ${p.profile} (${p.podId}): ${STOPPED_WARNING(p.profile, p.diskGB)}`);
         }
         if (s.pods.some((p) => p.orphan)) io.out('⚠ Pod "orfani": non risultano avviati da questo computer. Terminali con: llmpod down <profilo>');
       }

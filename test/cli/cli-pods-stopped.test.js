@@ -30,7 +30,7 @@ function setup(pods, opts = {}) {
 }
 
 const RUNNING = { id: 'pod1', name: 'llmpod-qwen3-coder', status: 'RUNNING', cost: 1.49, runtime: { uptime: 7200 } };
-const EXITED = { id: 'pod2', name: 'llmpod-altro', status: 'EXITED', cost: 1.5, storageCostPerHr: 0.0123 };
+const EXITED = { id: 'pod2', name: 'llmpod-altro', status: 'EXITED', cost: 1.5, disk: 44 };
 
 describe('CLI status: Pod avviati e spenti', () => {
   it('mostra "avviato" e "spento" e avvisa che il Pod spento costa ancora e va eliminato', async () => {
@@ -39,24 +39,23 @@ describe('CLI status: Pod avviati e spenti', () => {
     const out = t.out();
     expect(out).toMatch(/qwen3-coder \(orfano\)\s+pod1\s+avviato/);
     expect(out).toMatch(/altro \(orfano\)\s+pod2\s+spento/);
-    expect(out).toContain('⚠ altro (pod2): Spento ma costa ancora lo spazio su disco: eliminalo con llmpod down altro');
-    expect(out).toContain('0,01 $/h di spazio su disco');
+    expect(out).toContain('⚠ altro (pod2): Spento: occupa ancora 44 GB di disco e continua a costare — eliminalo con llmpod down altro');
     expect(out).not.toContain('RUNNING');
   });
 
-  it('senza costo di storage noto l\'avviso resta, senza cifra', async () => {
-    const t = setup([{ ...EXITED, storageCostPerHr: undefined }]);
+  it('senza disco noto l\'avviso resta, senza cifre', async () => {
+    const t = setup([{ ...EXITED, disk: undefined }]);
     await t.go(['status']);
-    expect(t.out()).toContain('eliminalo con llmpod down altro');
-    expect(t.out()).not.toContain('di spazio su disco');
+    expect(t.out()).toContain('Spento: occupa ancora disco e continua a costare — eliminalo con llmpod down altro');
+    expect(t.out()).not.toMatch(/\d GB di disco/);
   });
 
-  it('--json espone state, stateLabel e storageUSD', async () => {
+  it('--json espone state, stateLabel e diskGB', async () => {
     const t = setup([RUNNING, EXITED]);
     await t.go(['status', '--json']);
     const s = JSON.parse(t.out());
     expect(s.pods.map((p) => [p.podId, p.state, p.stateLabel])).toEqual([['pod1', 'running', 'avviato'], ['pod2', 'stopped', 'spento']]);
-    expect(s.pods[1].storageUSD).toBe(0.0123);
+    expect(s.pods[1].diskGB).toBe(44);
     // l'ordine delle chiavi serve agli script Docker (stop.sh): profile, podId, status, state
     expect(Object.keys(s.pods[1]).slice(0, 4)).toEqual(['profile', 'podId', 'status', 'state']);
   });

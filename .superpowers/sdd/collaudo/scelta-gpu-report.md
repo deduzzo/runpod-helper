@@ -11,7 +11,7 @@ Branch `feat/scelta-gpu` (da `origin/main` c25a1ed). `npm test` e `npm run build
 - Web `PlanView`: tabella con radio accessibili da tastiera, badge di disponibilità (HIGH/LOW, "solo altrove (dc)", "non disponibile ora"), comando e costo che seguono la scelta; la GPU viene inviata al salvataggio solo se diversa da quella del piano.
 
 ## Pod spenti (aggiunta 6)
-- `status` (CLI, `--json`, `/api/status`, pagina Stato e costi): elenca tutti i Pod `llmpod-*` non TERMINATED con `state` (running/starting/stopped/unknown) e `stateLabel` (avviato / in avvio / spento); per gli spenti hourlyUSD 0, `storageUSD` (da `storageCostPerHr`/`storageCost` se Runpod lo fornisce, altrimenti null), avviso "Spento ma costa ancora lo spazio su disco: eliminalo con llmpod down <profilo>". Web: badge verde/ambra/arancio e pulsante "Elimina" (job `down` con conferma, JobPanel inline).
+- `status` (CLI, `--json`, `/api/status`, pagina Stato e costi): elenca tutti i Pod `llmpod-*` non TERMINATED con `state` (running/starting/stopped/unknown) e `stateLabel` (avviato / in avvio / spento); per gli spenti hourlyUSD 0, `diskGB` (campo `disk` del Pod) e avviso "Spento: occupa ancora <disk> GB di disco e continua a costare — eliminalo con llmpod down <profilo>" (nessuna cifra di costo inventata). Web: badge verde/ambra/arancio e pulsante "Elimina" (job `down` con conferma, JobPanel inline).
 - `down`: elimina (DELETE) tutti i Pod del profilo, anche EXITED, accesi per primi.
 - `up`: con un Pod EXITED del profilo propone di eliminarlo prima (con `--yes` lo elimina; con `--dry-run` solo avviso; se rifiutato resta con avviso).
 - `destroy-volume`: ora si ferma anche per Pod spenti.
@@ -23,8 +23,8 @@ Branch `feat/scelta-gpu` (da `origin/main` c25a1ed). `npm test` e `npm run build
 test/core/gpu-choice.test.js, plan.test.js (options), ops-pods.test.js (up scelta, saveProfile, status/down/up con Pod spenti), no-stop.test.js, test/server/jobs-choice.test.js, api-choice.test.js, test/cli/cli-gpu-choice.test.js (plan), cli-up-choice.test.js, cli-pods-stopped.test.js, test/scripts/start.test.js (Pod spenti), test/web/gpu-choice.test.jsx (QuestionModal, JobPanel, PlanView), pods-stopped.test.jsx. Test esistenti modificati solo dove cambia il comportamento voluto: testo di Stato senza Pod, messaggi di stop ("eliminalo"), dati di PlanView con `options: []`.
 
 ## Dubbi
-- `storageCostPerHr` / `storageCost` sono nomi di campo ipotizzati per il costo di storage del Pod Runpod: non verificati senza credenziali; se assenti il costo non compare (resta l'avviso).
-- `up` propone solo gpu + alternative salvate nel profilo (max 5), non tutte le opzioni del piano. Dopo la scelta si usa solo quella (nessun ripiego silenzioso su altre GPU); se non è più disponibile fallisce con NO_GPU_AVAILABLE.
+- (risolto) Il costo di storage non esiste nell'API: i Pod spenti mostrano `disk` in GB.
+- (risolto) Il profilo salva `options` (tutte le configurazioni compatibili); `up` in modalità scelta le rilegge dal catalogo e propone quelle disponibili ora. Dopo la scelta si usa solo quella (nessun ripiego silenzioso); se non è più disponibile fallisce con NO_GPU_AVAILABLE. Con `--yes` e per profili vecchi senza `options` vale GPU + alternative con ripieghi.
 - In `up` la domanda non compare con una sola GPU disponibile.
 - `test/windows/wrappers.test.ps1` aggiornato ma non eseguibile qui (niente PowerShell).
 - Lo `Scheda Profili` mostra ancora solo i profili; i Pod spenti senza profilo locale si eliminano dalla pagina Stato (down per nome profilo).

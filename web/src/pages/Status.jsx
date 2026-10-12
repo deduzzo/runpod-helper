@@ -96,8 +96,7 @@ export default function Status() {
                       {st.state === 'stopped' ? (
                         <div className="space-y-1">
                           <p className="text-orange-300">
-                            Spento ma costa ancora lo spazio su disco: eliminalo con llmpod down {p.profile}
-                            {p.storageUSD != null ? ` (${fmtUSD(p.storageUSD)}/h di spazio su disco)` : ''}
+                            {`Spento: occupa ancora ${p.diskGB != null ? `${p.diskGB} GB di disco` : 'disco'} e continua a costare — eliminalo con llmpod down ${p.profile}`}
                           </p>
                           <Button variant="danger" aria-label={`Elimina il Pod spento ${p.podId}`} onClick={() => remove(p.profile)} disabled={Boolean(deleting[p.profile])}>Elimina</Button>
                           {deleteErrors[p.profile] && <div role="alert"><ErrorBox error={deleteErrors[p.profile]} /></div>}
