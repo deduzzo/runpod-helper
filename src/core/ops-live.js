@@ -11,7 +11,7 @@ import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
 import { argsForCount } from './pod/body.js';
 import { profileDownloadBytes } from './planner/vram.js';
-import { createSupervisorClient, waitForReady, waitReloadStarted, readyTimeoutMs } from './pod/launcher.js';
+import { createSupervisorClient, waitForReady, waitReloadStarted, readyTimeoutMs, progressOf } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 
 export const RELOAD_NOTE = 'vLLM verrà ricaricato: interruzione di alcuni minuti; il Pod resta acceso';
@@ -40,6 +40,7 @@ export function createLiveOps({ store, runpod, http, events, ask, now, sleep, fi
   const supervisorView = (st) => st && {
     phase: st.phase, idleSeconds: st.idleSeconds, idleLimitSeconds: st.idleLimitSeconds, uptimeSeconds: st.uptimeSeconds,
     maxSeconds: st.maxSeconds, restarts: st.restarts, lastError: st.lastError ? redact(st.lastError) : null, kvCacheTokens: st.kvCacheTokens ?? null,
+    errorCause: st.errorCause ? redact(st.errorCause) : null, loadProgress: st.loadProgress ?? null,
   };
 
   async function metrics(name, { window = 10 } = {}) {
@@ -135,7 +136,7 @@ export function createLiveOps({ store, runpod, http, events, ask, now, sleep, fi
     if (!(await waitReloadStarted({ sup, args, sleep, now }))) throw new LlmpodError(Codes.VLLM_ERROR, 'Il supervisore non ha confermato la ricarica di vLLM entro 60 secondi');
     const st = await waitForReady({
       sup, since: cursor, sleep, now, timeoutMs: readyTimeoutMs(profileDownloadBytes(profile)),
-      onStatus: (s) => events.emit('progress', { message: s.phase === 'ready' ? 'vLLM pronto' : `Fase: ${s.phase}` }),
+      onStatus: (s) => events.emit('progress', progressOf(s)),
       onLog: (line) => events.emit('log', { line }),
     });
     events.emit('phase', { message: 'Smoke test con chiamata a strumento' });

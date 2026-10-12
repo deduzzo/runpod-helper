@@ -111,7 +111,32 @@ export async function waitReloadStarted({ sup, args, timeoutMs = 60_000, sleep =
   }
 }
 
-export const readyTimeoutMs = (weightsBytes) => Math.round((weightsBytes / 50e6) * 1000) + 600_000;
+const GiB = 1024 ** 3;
+// Avanzamento dell'avvio dallo stato del supervisore. Il download misura i byte del modello nella cache di Hugging Face; il
+// caricamento usa la barra di vLLM ("Loading safetensors checkpoint shards", in loadProgress), che sui modelli grandi e
+// multi-GPU può durare più del download.
+export function progressOf(st) {
+  if (st.phase === 'downloading' && st.totalBytes) {
+    const ratio = Math.min(1, st.downloadedBytes / st.totalBytes);
+    // In fase di download non si dichiara mai il 100%: il passaggio al caricamento lo segnala il supervisore.
+    const pct = Math.min(99, Math.round(ratio * 100));
+    return { message: `Download dei pesi: ${pct}% (${Math.round(st.downloadedBytes / GiB)} di ${Math.round(st.totalBytes / GiB)} GiB)`, ratio };
+  }
+  const lp = st.loadProgress;
+  if (st.phase === 'loading' && lp?.total) {
+    if (lp.done >= lp.total) return { message: 'Pesi caricati: inizializzazione di vLLM (KV cache, compilazione, CUDA graph)' };
+    let eta = '';
+    if (Number.isFinite(lp.remainingSeconds)) eta = lp.remainingSeconds < 60 ? ', meno di un minuto rimanente' : `, circa ${Math.round(lp.remainingSeconds / 60)} min rimanenti`;
+    return { message: `Caricamento dei pesi: ${lp.done}/${lp.total} file${eta}`, ratio: lp.done / lp.total };
+  }
+  return { message: { loading: 'Caricamento del modello in GPU', ready: 'vLLM pronto' }[st.phase] ?? `Fase: ${st.phase}` };
+}
+
+const NCCL_RE = /NCCL error|NCCL WARN|ncclUnhandledCudaError|ncclSystemError/i;
+const NCCL_HINT = 'Errore NCCL tra le GPU: su GPU PCIe senza NVLink (RTX, RTX PRO, L40S, A40…) llmpod avvia il Pod con NCCL_P2P_DISABLE=1, '
+  + 'salvo profili creati con --no-nccl-safe (rigenera il piano senza). Se succede comunque, scegli una sola GPU più grande o GPU SXM con NVLink (H100/H200/B200)';
+
+export const readyTimeoutMs =(weightsBytes) => Math.round((weightsBytes / 50e6) * 1000) + 600_000;
 
 // `since`: cursore dei log da cui ripartire (dopo un riavvio di vLLM). Il cursore raggiunto è in `logCursor`
 // sul valore restituito e in `details.logCursor` degli errori.
@@ -136,9 +161,14 @@ export async function waitForReady({ sup, timeoutMs, since: sinceOpt = 0, sleep 
       if (st.phase === 'error' || st.phase === 'terminating') {
         const oom = recent.some((l) => OOM_RE.test(l)) || causes.some((l) => OOM_RE.test(l));
         const rootCause = causeLines(causes);
-        const cause = rootCause.at(-1);
-        throw new LlmpodError(oom ? Codes.OOM : Codes.VLLM_ERROR, `vLLM non è partito: ${st.lastError ?? st.terminateReason ?? st.phase}${cause ? ` — causa: ${cause.slice(0, 300)}` : ''}`, {
-          hint: oom ? 'Memoria GPU insufficiente: riduci --context, usa --set kv-cache-dtype=fp8 o scegli una GPU più grande' : 'Controlla i log mostrati sopra',
+        // La causa scelta dal supervisore (errore non transitorio) vale più dell'ultima riga di causa vista nei log.
+        if (st.errorCause && !rootCause.includes(st.errorCause)) rootCause.push(st.errorCause);
+        const cause = st.errorCause ?? rootCause.at(-1);
+        const what = st.lastError ?? st.terminateReason ?? st.phase;
+        const withCause = cause && !String(what).includes(cause.slice(0, 120)) ? ` — causa: ${cause.slice(0, 300)}` : '';
+        const nccl = NCCL_RE.test(cause ?? '') || NCCL_RE.test(String(st.lastError ?? ''));
+        throw new LlmpodError(oom ? Codes.OOM : Codes.VLLM_ERROR, `vLLM non è partito: ${what}${withCause}`, {
+          hint: oom ? 'Memoria GPU insufficiente: riduci --context, usa --set kv-cache-dtype=fp8 o scegli una GPU più grande' : nccl ? NCCL_HINT : 'Controlla i log mostrati sopra',
           details: { lastLines: rootCause.length ? [...rootCause, '…', ...recent.slice(-22)] : recent.slice(-30), rootCause, logCursor: since, ...(st.phase === 'terminating' ? { terminating: true } : {}) },
         });
       }

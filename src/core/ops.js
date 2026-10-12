@@ -13,7 +13,7 @@ import { diffArgs, fitsForOption } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
 import { profileDownloadBytes } from './planner/vram.js';
-import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs, waitReloadStarted } from './pod/launcher.js';
+import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs, waitReloadStarted, progressOf } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
 import { applyGpuChoice, vramLabel } from './planner/gpu-choice.js';
@@ -80,14 +80,6 @@ export function profileFromPlan(plan, { name, volume, watchdog }) {
     advisor: plan.advisor ?? null,
     createdAt: new Date().toISOString(),
   };
-}
-
-function progressOf(st) {
-  if (st.phase === 'downloading' && st.totalBytes) {
-    const ratio = Math.min(1, st.downloadedBytes / st.totalBytes);
-    return { message: `Download dei pesi: ${Math.round(ratio * 100)}%`, ratio };
-  }
-  return { message: { loading: 'Caricamento del modello in GPU', ready: 'vLLM pronto' }[st.phase] ?? `Fase: ${st.phase}` };
 }
 
 function suggestContext(kvTokens, profile) {
