@@ -195,5 +195,9 @@ export function markFits(plan) {
     if (!o.memoryGiB || !Number.isFinite(o.perGpuGiB)) { o.fits = true; continue; }
     o.fits = fitsForOption(plan, o)(plan.vllm.args);
   }
+  // Anche le alternative salvate nel profilo: senza questo `up --yes` ripiegherebbe su GPU dove il modello non entra più.
+  if (Array.isArray(plan.alternatives)) {
+    plan.alternatives = plan.alternatives.filter((a) => !(plan.options ?? []).some((o) => o.id === a.id && o.count === a.count && o.fits === false));
+  }
   return plan;
 }

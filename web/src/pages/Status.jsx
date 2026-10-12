@@ -2,15 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { api, fmtUSD, fmtDuration } from '../lib/api.js';
 import { Card, Button, Badge, ErrorBox, Spinner } from '../components/ui.jsx';
 import { JobPanel } from '../components/JobPanel.jsx';
+import { ExtendModal } from '../components/ExtendModal.jsx';
 
 const REFRESH_MS = 15_000;
 const TIMEOUT_MS = 20_000;
 
+// Limiti correnti letti dal supervisore del Pod (si cambiano con "Prolunga" o con llmpod keep).
 function shutdown(p) {
   const s = p.supervisor;
-  if (s?.idleSeconds == null) return s?.phase ?? '—';
+  if (!s) return '—';
+  const idle = s.idleLimitSeconds === 0 ? 'inattività: mai'
+    : s.idleSeconds != null ? `inattivo da ${fmtDuration(s.idleSeconds)} su ${fmtDuration(s.idleLimitSeconds)}` : (s.phase ?? '—');
   const max = s.maxSeconds != null && s.uptimeSeconds != null ? `; massimo tra ${fmtDuration(s.maxSeconds - s.uptimeSeconds)}` : '';
-  return `inattivo da ${fmtDuration(s.idleSeconds)} su ${fmtDuration(s.idleLimitSeconds)}${max}`;
+  return `${idle}${max}`;
 }
 
 // Stato leggibile del Pod: avviato / in avvio / spento. Un Pod spento costa ancora lo spazio su disco finché non viene eliminato.
@@ -31,6 +35,8 @@ export default function Status() {
   const [deleteErrors, setDeleteErrors] = useState({});
   const deleteLock = useRef(false);
   const [jobStatus, setJobStatus] = useState({}); // jobId -> running | done | failed
+  const [extending, setExtending] = useState(null); // Pod per cui è aperta la finestra "Prolunga"
+  const [notice, setNotice] = useState(null);
 
   // L'eliminazione passa dal job "down" (con la conferma come domanda), come "Spegni" nella scheda Profili.
   async function remove(profile) {
@@ -102,7 +108,14 @@ export default function Status() {
                           <Button variant="danger" aria-label={`Elimina il Pod spento ${p.podId}`} onClick={() => remove(p.profile)} disabled={Boolean(deleting[p.profile]) && !['done', 'failed'].includes(jobStatus[deleting[p.profile]])}>Elimina</Button>
                           {deleteErrors[p.profile] && <div role="alert"><ErrorBox error={deleteErrors[p.profile]} /></div>}
                         </div>
-                      ) : shutdown(p)}
+                      ) : (
+                        <div className="space-y-1">
+                          <p>{shutdown(p)}</p>
+                          {st.state === 'running' && p.supervisor?.maxSeconds != null && p.supervisor?.idleLimitSeconds != null && (
+                            <Button variant="ghost" aria-label={`Prolunga il Pod ${p.podId}`} onClick={() => setExtending(p)}>Prolunga</Button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                   );
@@ -112,6 +125,14 @@ export default function Status() {
           </div>
         )}
       </Card>
+      {notice && <p role="status" className="fade-up rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{notice}</p>}
+      {extending && (
+        <ExtendModal
+          pod={extending}
+          onClose={() => setExtending(null)}
+          onDone={(p) => { setExtending(null); setNotice(`Limiti aggiornati per ${p.profile}`); load(); }}
+        />
+      )}
       {Object.entries(deleting).map(([profile, jobId]) => (
         <Card key={jobId} title={`Eliminazione di ${profile}`}>
           <JobPanel

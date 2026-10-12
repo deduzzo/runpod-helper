@@ -241,6 +241,20 @@ describe('up in modalità scelta: disponibilità, altri datacenter, memoria', ()
     expect(t.runpod.createPod).toHaveBeenCalledTimes(1);
   });
 
+  it('con allowFallbackWithoutVolume "never" non propone opzioni di altri datacenter', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE'], ['US-1', 'MEDIUM']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async (_t, _o, def) => def });
+    t.store.writeProfile({ ...t.store.readProfile('p'), allowFallbackWithoutVolume: 'never' });
+    await t.ops.up('p');
+    expect(t.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPU96|1|EU-A']);
+  });
+
+  it('con "never" e nessuna GPU nel datacenter del volume: NO_GPU_AVAILABLE, niente altri datacenter', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE'], ['US-1', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+    t.store.writeProfile({ ...t.store.readProfile('p'), allowFallbackWithoutVolume: 'never' });
+    await expect(t.ops.up('p')).rejects.toMatchObject({ code: 'NO_GPU_AVAILABLE' });
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+  });
+
   it('con yes: comportamento precedente (volume, ripieghi, nessuna domanda)', async () => {
     const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE'], ['US-1', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async () => 'x' });
     await t.ops.up('p', { yes: true });
@@ -363,5 +377,33 @@ describe('Pod spenti: status, down, up', () => {
   it('up con un Pod acceso dello stesso profilo resta un errore', async () => {
     const t = setup({ pods: [{ id: 'r1', name: 'llmpod-p', status: 'RUNNING' }] });
     await expect(t.ops.up('p')).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+});
+
+describe('up: conferma con i limiti di spegnimento fuori dal predefinito', () => {
+  const withWatchdog = (watchdog) => {
+    const t = setup();
+    t.store.writeProfile({ ...t.store.readProfile('p'), watchdog });
+    return t;
+  };
+
+  it('inattività mai e/o più di 8 ore: la conferma lo dice con il costo massimo', async () => {
+    const never = withWatchdog({ idleMinutes: 0, maxHours: 24 });
+    await never.ops.up('p');
+    // 24 h x 1,50 $/h = 36,00 $
+    expect(never.ask.mock.calls[0][0]).toMatch(/inattività: mai, massimo 24 h → costo massimo 36,00 \$/);
+    const long = withWatchdog({ idleMinutes: 30, maxHours: 12 });
+    await long.ops.up('p');
+    expect(long.ask.mock.calls[0][0]).toMatch(/inattività: 30 min, massimo 12 h → costo massimo 18,00 \$/);
+    const idle = withWatchdog({ idleMinutes: 0, maxHours: 8 });
+    await idle.ops.up('p');
+    expect(idle.ask.mock.calls[0][0]).toMatch(/inattività: mai, massimo 8 h → costo massimo 12,00 \$/);
+  });
+
+  it('con i limiti predefiniti la conferma non cambia', async () => {
+    const t = setup();
+    await t.ops.up('p');
+    expect(t.ask.mock.calls[0][0]).not.toMatch(/inattività/);
+    expect(t.ask.mock.calls[0][0]).not.toMatch(/costo massimo/);
   });
 });

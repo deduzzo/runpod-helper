@@ -74,4 +74,21 @@ describe('config', () => {
     const normal = createStore({ dir, platform: 'linux', env: {} });
     expect(() => normal.checkPermissions()).toThrow(expect.objectContaining({ code: 'CONFIG_PERMISSIONS' }));
   });
+
+  it('valida la sezione watchdog di profili e configurazione (intero 0 o 5..1440 minuti, 0,25..168 ore); 0 = inattività mai', () => {
+    const s = createStore({ dir, platform: 'linux' });
+    const prof = (watchdog) => ({ name: 'p', model: { id: 'x' }, watchdog });
+    for (const ok of [{ idleMinutes: 0, maxHours: 8 }, { idleMinutes: 5, maxHours: 0.25 }, { idleMinutes: 1440, maxHours: 168 }]) {
+      s.writeProfile(prof(ok));
+      expect(s.readProfile('p').watchdog).toEqual(ok);
+    }
+    s.writeProfile({ name: 'senza', model: { id: 'x' } }); // profili vecchi senza sezione: nessun errore
+    for (const bad of [{ idleMinutes: 1, maxHours: 8 }, { idleMinutes: 2.5, maxHours: 8 }, { idleMinutes: '30', maxHours: 8 }, { idleMinutes: 30, maxHours: 0 }, { idleMinutes: 30, maxHours: 500 }, { idleMinutes: 30, maxHours: 'x' }, { idleMinutes: -1, maxHours: 8 }]) {
+      expect(() => s.writeProfile(prof(bad)), JSON.stringify(bad)).toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
+      fs.writeFileSync(path.join(dir, 'profiles', 'p.json'), JSON.stringify(prof(bad)));
+      expect(() => s.readProfile('p'), JSON.stringify(bad)).toThrow(expect.objectContaining({ code: 'INVALID_INPUT', message: expect.stringMatching(/watchdog/) }));
+      s.writeJson('config.json', { watchdog: bad });
+      expect(() => s.readConfig(), JSON.stringify(bad)).toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
+    }
+  });
 });

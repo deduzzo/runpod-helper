@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { LlmpodError, Codes } from './errors.js';
 import { registerSecret } from './secrets.js';
+import { assertWatchdogSettings } from './watchdog.js';
 
 export const PROFILE_NAME = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const SECRET_VAR = /KEY|TOKEN|SECRET/;
@@ -104,6 +105,7 @@ export function createStore({ dir = configDir(), platform = process.platform, en
 
   const readConfig = () => {
     const c = readJson('config.json', {});
+    assertWatchdogSettings(c.watchdog, p('config.json'));
     return { ...DEFAULT_CONFIG, ...c, watchdog: { ...DEFAULT_CONFIG.watchdog, ...c.watchdog } };
   };
   const writeConfig = (patch) => writeJson('config.json', { ...readJson('config.json', {}), ...patch });
@@ -112,11 +114,13 @@ export function createStore({ dir = configDir(), platform = process.platform, en
     assertProfileName(name);
     const prof = readJson(path.join('profiles', `${name}.json`), null);
     if (!prof) throw new LlmpodError(Codes.NOT_FOUND, `Profilo "${name}" non trovato`, { hint: 'Elenca i profili con: llmpod status' });
+    assertWatchdogSettings(prof.watchdog, p('profiles', `${name}.json`));
     return prof;
   }
 
   function writeProfile(profile) {
     assertProfileName(profile.name);
+    assertWatchdogSettings(profile.watchdog, `il profilo ${profile.name}`);
     writeJson(path.join('profiles', `${profile.name}.json`), profile);
   }
 

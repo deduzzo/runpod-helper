@@ -90,6 +90,25 @@ class PureFunctions(unittest.TestCase):
         self.assertIsNone(sv.termination_reason(50, 0, 100, 10, 1800))
         self.assertIsNone(sv.termination_reason(50, 0, 100, None, 1800))
 
+    def test_termination_reason_inattivita_disattivata(self):
+        # limite 0 = inattività disattivata: resta solo la durata massima
+        self.assertIsNone(sv.termination_reason(50, 0, 100, 99999, 0))
+        self.assertEqual(sv.termination_reason(100, 0, 100, 99999, 0), 'max-duration')
+
+    def test_valid_watchdog(self):
+        self.assertEqual(sv.valid_watchdog({'idleMinutes': 90, 'maxHours': 12}), (90.0, 12.0))
+        self.assertEqual(sv.valid_watchdog({'idleMinutes': 0, 'maxHours': None}), (0.0, None))
+        self.assertEqual(sv.valid_watchdog({'idleMinutes': None, 'maxHours': 0.25}), (None, 0.25))
+        self.assertEqual(sv.valid_watchdog({'idleMinutes': 1440, 'maxHours': 168}), (1440.0, 168.0))
+        self.assertEqual(sv.valid_watchdog({'idleMinutes': 5}), (5.0, None))
+        self.assertEqual(sv.valid_watchdog({'idleMinutes': 90.0}), (90.0, None))
+        for bad in (None, [], 'x', {}, {'idleMinutes': None, 'maxHours': None}, {'idleMinutes': 1}, {'idleMinutes': 4}, {'idleMinutes': 5.5},
+                    {'idleMinutes': 10 ** 400}, {'maxHours': 10 ** 400}, {'maxHours': -10 ** 400}, {'idleMinutes': -1}, {'idleMinutes': 1441}, {'idleMinutes': '30'}, {'idleMinutes': True},
+                    {'idleMinutes': float('nan')}, {'maxHours': 0.1}, {'maxHours': 169}, {'maxHours': 0}, {'maxHours': '8'},
+                    {'maxHours': False}, {'maxHours': float('inf')}):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                sv.valid_watchdog(bad)
+
     def test_valid_reload_args(self):
         self.assertEqual(sv.valid_reload_args({'args': ['--max-model-len', '4096']}), ['--max-model-len', '4096'])
         for bad in [{}, {'args': []}, {'args': 'x'}, {'args': [1]}, {'args': ['--api-key', 'x']},
@@ -348,6 +367,110 @@ class SupervisorIntegration(unittest.TestCase):
         self.sup.step()
         self.assertEqual(self.sup.phase, 'loading')
         self.assertIsNone(self.sup.tracker)
+
+    def test_watchdog_aggiorna_i_limiti_e_la_durata_si_misura_dall_avvio(self):
+        self.assertEqual((self.sup.idle_seconds, self.sup.max_seconds), (60, 3600))
+        self.now[0] += 3000
+        self.assertEqual(self.sup.set_watchdog(None, 2)['maxSeconds'], 7200)
+        self.assertEqual(self.sup.status()['maxSeconds'], 7200)
+        self.assertEqual(self.sup.status()['idleLimitSeconds'], 60)   # None = invariato
+        self.now[0] += 1000                                           # 4000 s dall'avvio: oltre la vecchia durata
+        self.assertIsNone(self.sup.step())
+        self.now[0] += 3200                                           # 7200 s dall'avvio
+        self.assertEqual(self.sup.step(), 'max-duration')
+
+    def test_watchdog_rifiuta_ore_massime_che_spegnerebbero_subito(self):
+        self.now[0] += 3600                                           # 1 h dall'avvio
+        before = (self.sup.idle_seconds, self.sup.max_seconds)
+        with self.assertRaises(ValueError):
+            self.sup.set_watchdog(None, 0.25)                         # 900 s <= 3600 + 300
+        self.assertEqual((self.sup.idle_seconds, self.sup.max_seconds), before)
+        self.now[0] = 1000.0 + 600
+        with self.assertRaises(ValueError):
+            self.sup.set_watchdog(None, 0.25)                         # 900 s <= 600 + 300: margine di 5 minuti
+        self.now[0] = 1000.0 + 599
+        self.assertEqual(self.sup.set_watchdog(None, 0.25)['maxSeconds'], 900)
+
+    def test_watchdog_inattivita_disattivata_e_tolleranza_alla_riattivazione(self):
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: self.sup.step() is None and self.sup.phase == 'ready'))
+        self.sup.set_watchdog(0, None)
+        self.assertEqual(self.sup.status()['idleLimitSeconds'], 0)
+        self.now[0] += 1800
+        self.assertIsNone(self.sup.step())                            # inattivo da 30 min ma il controllo è spento
+        self.sup.set_watchdog(5, None)                                # riattivato: si riparte da adesso, non si spegne subito
+        self.assertIsNone(self.sup.step())
+        self.now[0] += 301
+        self.assertEqual(self.sup.step(), 'idle')
+
+    def test_watchdog_persistito_per_pod_e_riletto_al_riavvio(self):
+        self.sup.set_watchdog(120, 24)
+        second = sv.Supervisor(self.cfg, clock=lambda: 9999.0)
+        self.assertEqual((second.idle_seconds, second.max_seconds), (7200, 86400))
+        other = sv.Supervisor(dict(self.cfg, pod_id='ALTRO'), clock=lambda: 9999.0)
+        self.assertEqual((other.idle_seconds, other.max_seconds), (60, 3600))
+        # file corrotto: si ignora e valgono i valori dell'ambiente
+        with open(os.path.join(self.tmp, '.llmpod-watchdog-POD123'), 'w') as f:
+            f.write('{non json')
+        third = sv.Supervisor(self.cfg, clock=lambda: 9999.0)
+        self.assertEqual((third.idle_seconds, third.max_seconds), (60, 3600))
+        # un solo valore non valido: l'altro si usa
+        with open(os.path.join(self.tmp, '.llmpod-watchdog-POD123'), 'w') as f:
+            json.dump({'idleMinutes': 2, 'maxHours': 24}, f)
+        partial = sv.Supervisor(self.cfg, clock=lambda: 9999.0)
+        self.assertEqual((partial.idle_seconds, partial.max_seconds), (60, 86400))
+        # valori fuori intervallo nel file: ignorati
+        with open(os.path.join(self.tmp, '.llmpod-watchdog-POD123'), 'w') as f:
+            json.dump({'idleMinutes': -5, 'maxHours': 99999}, f)
+        fourth = sv.Supervisor(self.cfg, clock=lambda: 9999.0)
+        self.assertEqual((fourth.idle_seconds, fourth.max_seconds), (60, 3600))
+
+    def test_watchdog_errore_io_applica_comunque_e_lo_dice(self):
+        sup = sv.Supervisor(dict(self.cfg, state_dir=os.path.join(self.tmp, 'non', 'esiste')), clock=lambda: 42.0)
+        r = sup.set_watchdog(10, 2)
+        self.assertEqual((sup.idle_seconds, sup.max_seconds, r['persisted']), (600, 7200, False))
+
+    def test_server_watchdog(self):
+        server = sv.make_server(self.sup)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f'http://127.0.0.1:{self.cfg["status_port"]}'
+        try:
+            def req(path, method='GET', body=None, auth=True, raw=None):
+                headers = {'Authorization': 'Bearer ' + KEY} if auth else {}
+                data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+                r = urllib.request.Request(base + path, data=data, method=method, headers=headers)
+                try:
+                    with urllib.request.urlopen(r, timeout=5) as resp:
+                        return resp.status, json.loads(resp.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, None
+
+            self.assertEqual(req('/watchdog', 'POST', {'maxHours': 12}, auth=False)[0], 401)
+            self.assertEqual(self.sup.max_seconds, 3600)
+            for bad in ({'maxHours': 500}, {'idleMinutes': 'tanti'}, {'idleMinutes': -1}, {'maxHours': True}, [1]):
+                self.assertEqual(req('/watchdog', 'POST', bad)[0], 400, bad)
+            self.assertEqual(req('/watchdog', 'POST', raw=b'{non json')[0], 400)
+            self.assertEqual((self.sup.idle_seconds, self.sup.max_seconds), (60, 3600))   # nulla è cambiato
+            code, body = req('/watchdog', 'POST', {'idleMinutes': 0, 'maxHours': 12})
+            self.assertEqual(code, 200)
+            self.assertEqual((body['idleLimitSeconds'], body['maxSeconds']), (0, 43200))
+            code, status = req('/status')
+            self.assertEqual((status['idleLimitSeconds'], status['maxSeconds']), (0, 43200))
+            self.assertEqual(req('/watchdog', 'POST', {'idleMinutes': 45})[0], 200)
+            self.assertEqual((self.sup.idle_seconds, self.sup.max_seconds), (2700, 43200))   # maxHours null/assente = invariato
+            self.assertEqual(req('/watchdog')[0], 404)                                        # solo POST
+            self.assertEqual(req('/watchdog', 'POST', {})[0], 400)                            # nessun valore
+            self.assertEqual(req('/watchdog', 'POST', {'idleMinutes': None, 'maxHours': None})[0], 400)
+            self.assertEqual(req('/watchdog', 'POST', {'idleMinutes': 3})[0], 400)            # intero 0 o 5..1440
+            self.assertEqual(req('/watchdog', 'POST', {'maxHours': 10 ** 400})[0], 400)       # intero enorme: niente 500
+            self.now[0] += 7200
+            self.assertEqual(req('/watchdog', 'POST', {'maxHours': 2})[0], 400)               # spegnerebbe subito il Pod
+            self.assertEqual((self.sup.idle_seconds, self.sup.max_seconds), (2700, 43200))
+            self.sup.phase = 'terminating'
+            self.assertEqual(req('/watchdog', 'POST', {'maxHours': 24})[0], 409)              # già in terminazione
+            self.assertEqual(self.sup.max_seconds, 43200)
+        finally:
+            server.shutdown()
 
     def test_server_di_stato_autenticato(self):
         server = sv.make_server(self.sup)

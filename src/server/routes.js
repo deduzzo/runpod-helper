@@ -49,6 +49,15 @@ export function createRoutes({ ctx, jobs, sse, state }) {
 
   add('GET', '/api/status', json(() => ctx.ops.status()));
 
+  // Prolunga (o accorcia) i limiti di spegnimento di un Pod avviato. Il costo massimo è già stato confermato
+  // dall'utente nell'interfaccia (finestra "Prolunga"): qui non ci sono domande, quindi yes. Il profilo non si tocca.
+  add('POST', '/api/pods/:profile/watchdog', json(async ({ req, params }) => {
+    const b = await readJson(req);
+    assertProfileName(params.profile);
+    assertNotBusy(params.profile);
+    return ctx.ops.keep(params.profile, { idleMinutes: b.idleMinutes, maxHours: b.maxHours, yes: true });
+  }));
+
   add('GET', '/api/search', json(async ({ url }) => ({
     rows: await searchRows(ctx.hf, url.searchParams.get('q') ?? '', { limit: intParam(url.searchParams.get('limit'), 20, 1, 100, 'limit'), all: url.searchParams.get('all') === '1' }),
   })));

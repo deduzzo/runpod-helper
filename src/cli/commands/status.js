@@ -2,6 +2,15 @@ import { fmtUSD } from '../../core/confirm.js';
 import { table, fmtDuration } from '../render.js';
 import { STOPPED_WARNING } from '../../core/pod-state.js';
 
+// Limiti correnti letti dal supervisore del Pod (cambiabili con "llmpod keep").
+function shutdownLabel(s) {
+  if (!s) return '—';
+  const idle = s.idleLimitSeconds === 0 ? 'inattività: mai'
+    : s.idleSeconds != null ? `inattivo da ${fmtDuration(s.idleSeconds)} su ${fmtDuration(s.idleLimitSeconds)}` : s.phase;
+  const max = s.maxSeconds != null && s.uptimeSeconds != null ? `; massimo tra ${fmtDuration(s.maxSeconds - s.uptimeSeconds)}` : '';
+  return `${idle}${max}`;
+}
+
 export function register(program, getCtx) {
   program.command('status')
     .description('Pod (avviati e spenti), costi, credito residuo, volume')
@@ -21,9 +30,7 @@ export function register(program, getCtx) {
           { label: 'Costo', align: 'right', value: (p) => (p.hourlyUSD == null ? '—' : `${fmtUSD(p.hourlyUSD)}/h`) },
           { label: 'Uptime', align: 'right', value: (p) => (p.state === 'stopped' ? '—' : fmtDuration(p.uptimeSeconds)) },
           { label: 'Sessione', align: 'right', value: (p) => (p.sessionUSD == null ? '—' : fmtUSD(p.sessionUSD)) },
-          { label: 'Spegnimento', value: (p) => (p.supervisor?.idleSeconds != null
-            ? `inattivo da ${fmtDuration(p.supervisor.idleSeconds)} su ${fmtDuration(p.supervisor.idleLimitSeconds)}; massimo tra ${fmtDuration(p.supervisor.maxSeconds - p.supervisor.uptimeSeconds)}`
-            : p.supervisor?.phase ?? '—') },
+          { label: 'Spegnimento', value: (p) => shutdownLabel(p.supervisor) },
         ]));
         for (const p of s.pods.filter((x) => x.state === 'stopped')) {
           io.out(`⚠ ${p.profile} (${p.podId}): ${STOPPED_WARNING(p.profile, p.diskGB)}`);
