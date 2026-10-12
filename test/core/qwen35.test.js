@@ -180,7 +180,7 @@ describe('4-7. piano con GPTQ + MTP (Qwen3.8-27B)', () => {
     const i = plan.vllm.args.indexOf('--speculative-config');
     expect(i).toBeGreaterThanOrEqual(0);
     expect(plan.vllm.args[i + 1]).toBe(SPEC);
-    expect(plan.mtp).toEqual({ present: true, enabled: true });
+    expect(plan.mtp).toMatchObject({ present: true, enabled: true });
     // 18,22 pesi + 8 KV (64 KiB × 65536 × 2) + 0,28 stato lineare (2 seq) + 2 overhead + 1 riserva MTP
     expect(plan.estimate.perGpuGiB).toBeCloseTo(18.22 + 8 + 0.28125 + 2 + 1, 1);
     expect(plan.estimate.kvGiB).toBeCloseTo(8, 3);
@@ -191,7 +191,7 @@ describe('4-7. piano con GPTQ + MTP (Qwen3.8-27B)', () => {
     const wm = Object.fromEntries(Object.entries(fx('index-qwen38-27b-gptq-mtp.json').weight_map).filter(([k]) => !k.startsWith('mtp.')));
     const { hf, runpod } = fakesMtp({ index: wm });
     const plan = await makePlan({ hf, runpod, ...base, modelRef: ref });
-    expect(plan.mtp).toEqual({ present: false, enabled: false });
+    expect(plan.mtp).toMatchObject({ present: false, enabled: false });
     expect(plan.vllm.args).not.toContain('--speculative-config');
     expect(plan.estimate.perGpuGiB).toBeCloseTo(18.22 + 8 + 0.28125 + 2, 1);
   });
@@ -199,14 +199,14 @@ describe('4-7. piano con GPTQ + MTP (Qwen3.8-27B)', () => {
   it('senza indice dei pesi si ricorre alla config (mtp_num_hidden_layers > 0)', async () => {
     const { hf, runpod } = fakesMtp({ index: null });
     const plan = await makePlan({ hf, runpod, ...base, modelRef: ref });
-    expect(plan.mtp).toEqual({ present: true, enabled: true });
+    expect(plan.mtp).toMatchObject({ present: true, enabled: true });
     expect(plan.vllm.args).toContain('--speculative-config');
     const { hf: hf2, runpod: runpod2 } = fakesMtp({ index: null });
     const cfg = fx('config-qwen38-27b-gptq-mtp.json');
     delete cfg.text_config.mtp_num_hidden_layers;
     hf2.getConfig.mockResolvedValue(cfg);
     const p2 = await makePlan({ hf: hf2, runpod: runpod2, ...base, modelRef: ref });
-    expect(p2.mtp).toEqual({ present: false, enabled: false });
+    expect(p2.mtp).toMatchObject({ present: false, enabled: false });
   });
 
   it('--set speculative-config=false lo rimuove e aggiorna lo stato; --set con altro valore lo sostituisce', async () => {
@@ -214,7 +214,7 @@ describe('4-7. piano con GPTQ + MTP (Qwen3.8-27B)', () => {
     const plan = await makePlan({ hf, runpod, ...base, modelRef: ref, set: ['speculative-config=false'] });
     expect(plan.vllm.args).not.toContain('--speculative-config');
     expect(plan.vllm.args).not.toContain(SPEC);
-    expect(plan.mtp).toEqual({ present: true, enabled: false });
+    expect(plan.mtp).toMatchObject({ present: true, enabled: false });
     expect(plan.estimate.perGpuGiB).toBeCloseTo(18.22 + 8 + 0.28125 + 2, 1);
     const { hf: h2, runpod: r2 } = fakesMtp();
     const p2 = await makePlan({ hf: h2, runpod: r2, ...base, modelRef: ref, set: ['speculative-config={"method":"mtp","num_speculative_tokens":3}'] });
@@ -228,9 +228,9 @@ describe('4-7. piano con GPTQ + MTP (Qwen3.8-27B)', () => {
 
   it('syncDerivedFields aggiorna mtp.enabled dagli argomenti (profili modificati a mano)', () => {
     const on = syncDerivedFields({ vllm: { args: ['--speculative-config', SPEC] }, mtp: { present: true, enabled: false } });
-    expect(on.mtp).toEqual({ present: true, enabled: true });
+    expect(on.mtp).toMatchObject({ present: true, enabled: true });
     const off = syncDerivedFields({ vllm: { args: [] }, mtp: { present: true, enabled: true } });
-    expect(off.mtp).toEqual({ present: true, enabled: false });
+    expect(off.mtp).toMatchObject({ present: true, enabled: false });
     expect(syncDerivedFields({ vllm: { args: [] } }).mtp).toBeUndefined();
   });
 

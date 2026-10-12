@@ -31,7 +31,11 @@ export function syncDerivedFields(target) {
     for (let i = args.length - 1; i >= 0; i--) if (args[i] === '--enable-auto-tool-choice') args.splice(i, 1);
   }
   target.parsers = { tool: argValue(args, '--tool-call-parser'), reasoning: argValue(args, '--reasoning-parser') };
-  if (target.mtp) target.mtp = { ...target.mtp, enabled: hasFlag(args, '--speculative-config') };
+  if (target.mtp) {
+    let tokens = null;
+    try { tokens = JSON.parse(argValue(args, '--speculative-config') ?? 'null')?.num_speculative_tokens ?? null; } catch { tokens = null; }
+    target.mtp = { ...target.mtp, enabled: hasFlag(args, '--speculative-config'), tokens };
+  }
   target.kvCacheDtype = /fp8/i.test(argValue(args, '--kv-cache-dtype') ?? '') ? 'fp8' : null;
   if (Array.isArray(target.warnings) && !target.kvCacheDtype) {
     target.warnings = target.warnings.filter((w) => !w.startsWith('KV cache in FP8'));

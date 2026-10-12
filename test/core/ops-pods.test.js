@@ -309,6 +309,22 @@ describe('Pod spenti: status, down, up', () => {
     expect(s.pods[2]).not.toHaveProperty('storageUSD');
   });
 
+  it('uptime da startedAt (preciso), non dal campo runtime.uptime aggiornato a intervalli', async () => {
+    const t = setup({ pods: [{ ...running, startedAt: new Date(-7_200_000).toISOString() }] });
+    const pod = (await t.ops.status()).pods[0];
+    expect(pod.uptimeSeconds).toBeGreaterThan(7200);
+    expect(pod.uptimeSeconds).not.toBe(3600);
+  });
+
+  it('un Pod appena eliminato che Runpod elenca ancora come RUNNING è "in eliminazione", non orfano', async () => {
+    const t = setup({ pods: [{ ...running, id: 'r9' }] });
+    const state = t.store.readState();
+    state.terminated = { r9: 0 };
+    t.store.writeState(state);
+    const pod = (await t.ops.status()).pods[0];
+    expect(pod).toMatchObject({ state: 'terminating', stateLabel: 'in eliminazione', orphan: false });
+  });
+
   it('un Pod spento senza disco noto ha diskGB null (nessuna cifra inventata)', async () => {
     const t = setup({ pods: [{ ...stopped, disk: undefined }] });
     expect((await t.ops.status()).pods[0]).toMatchObject({ state: 'stopped', diskGB: null });

@@ -46,7 +46,7 @@ export function maxCostUSD({ hourlyUSD, maxSeconds, uptimeSeconds }) {
   return Math.max(0, ((maxSeconds - uptimeSeconds) / 3600) * hourlyUSD);
 }
 
-export const fmtHours = (seconds) => `${String(Number((seconds / 3600).toFixed(1))).replace('.', ',')} h`;
+export const fmtHours = (seconds) => `${String(Number((seconds / 3600).toFixed(2))).replace('.', ',')} h`;
 export const idleText = (idleMinutes) => (idleMinutes === 0 ? 'inattività: mai' : `inattività: ${idleMinutes} min`);
 
 // Il profilo mantiene il Pod acceso più a lungo del predefinito (inattività mai o più ore massime)?

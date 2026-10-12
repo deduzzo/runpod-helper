@@ -21,6 +21,7 @@ import { podState, STOPPED_STATUSES } from './pod-state.js';
 
 // ACTIVE: Pod acceso (o in avvio). Un Pod EXITED (spento) non è attivo ma ESISTE ancora e costa lo spazio su disco:
 // llmpod lo elimina sempre (DELETE), non lo "ferma" mai.
+const RECENTLY_TERMINATED_MS = 5 * 60_000;
 const ACTIVE = (p) => p.status !== 'TERMINATED' && !STOPPED_STATUSES.includes(p.status);
 const EXISTS = (p) => p.status !== 'TERMINATED';
 const podName = (profile) => `llmpod-${profile}`;
@@ -141,9 +142,15 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     return mine.sort((a, b) => Number(ACTIVE(b)) - Number(ACTIVE(a)));
   }
 
-  function forget(name) {
+  function forget(name, podId = null) {
     const state = store.readState();
     delete state.pods[name];
+    // Ricorda per qualche minuto i Pod appena eliminati: l'elenco di Runpod può mostrarli ancora come RUNNING.
+    if (podId) {
+      const cutoff = now() - RECENTLY_TERMINATED_MS;
+      state.terminated = Object.fromEntries(Object.entries(state.terminated ?? {}).filter(([, t]) => t > cutoff));
+      state.terminated[podId] = now();
+    }
     store.writeState(state);
   }
 
@@ -153,7 +160,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     for (let i = 0; i < 12; i++) {
       const pod = await runpod.getPod(podId);
       if (!pod || pod.status === 'TERMINATED') {
-        forget(name);
+        forget(name, podId);
         return;
       }
       await sleep(5000);
@@ -533,17 +540,20 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const ours = pods.filter((p) => p.name?.startsWith('llmpod-') && EXISTS(p));
     const rows = await Promise.all(ours.map(async (p) => {
       const profile = p.name.slice('llmpod-'.length);
-      const uptimeSeconds = p.runtime?.uptime ?? (p.startedAt ? Math.round((now() - Date.parse(p.startedAt)) / 1000) : 0);
+      // startedAt dà un valore preciso; runtime.uptime di Runpod si aggiorna solo a intervalli.
+      const uptimeSeconds = p.startedAt && !Number.isNaN(Date.parse(p.startedAt)) ? Math.max(0, Math.round((now() - Date.parse(p.startedAt)) / 1000)) : (p.runtime?.uptime ?? 0);
       const key = env[profileKeyVar(profile)];
       const sup = key && p.status === 'RUNNING' ? await createSupervisorClient({ http, podId: p.id, apiKey: key }).status() : null;
-      const { state: podStateName, label } = podState(p.status);
+      const terminatedAt = state.terminated?.[p.id];
+      const terminating = terminatedAt != null && now() - terminatedAt < RECENTLY_TERMINATED_MS;
+      const { state: podStateName, label } = terminating ? { state: 'terminating', label: 'in eliminazione' } : podState(p.status);
       const stopped = podStateName === 'stopped';
       // Un Pod spento non ha uptime né costo orario della GPU; costa lo spazio su disco (se Runpod ne indica il costo).
       return {
         profile, podId: p.id, status: p.status, state: podStateName, stateLabel: label, gpu: p.gpu ?? null,
         hourlyUSD: stopped ? null : (p.cost ?? 0), diskGB: p.disk ?? null,
         uptimeSeconds: stopped ? 0 : uptimeSeconds,
-        sessionUSD: stopped ? null : ((p.cost ?? 0) * uptimeSeconds) / 3600, orphan: state.pods[profile]?.podId !== p.id,
+        sessionUSD: stopped ? null : ((p.cost ?? 0) * uptimeSeconds) / 3600, orphan: !terminating && state.pods[profile]?.podId !== p.id,
         supervisor: sup ? { phase: sup.phase, idleSeconds: sup.idleSeconds, idleLimitSeconds: sup.idleLimitSeconds, uptimeSeconds: sup.uptimeSeconds, maxSeconds: sup.maxSeconds } : null,
       };
     }));
