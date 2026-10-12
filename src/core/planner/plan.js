@@ -3,6 +3,7 @@ import { parseModelRef, summarizeModel } from '../hf.js';
 import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes, hasMtp, GiB } from './vram.js';
 import { detectParsers, buildArgs, applyOverrides, validateArgs, MTP_SPEC } from './vllm-args.js';
 import { selectGpus } from './gpu-select.js';
+import { optionOf } from './gpu-choice.js';
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 // Riserva per lo stato del draft MTP (KV del suo strato e buffer): approssimazione per eccesso, i pesi MTP sono già nei file.
@@ -136,6 +137,7 @@ export async function makePlan({
     gpu: sel.choice ? { id: sel.choice.gpuId, count: sel.choice.count } : null,
     hourlyUSD: sel.choice?.hourly ?? null,
     alternatives: sel.alternatives.map((c) => ({ id: c.gpuId, count: c.count, hourly: c.hourly })),
+    options: sel.all.map(optionOf),
     elsewhere: sel.elsewhere,
     candidates: sel.all.slice(0, 10),
     dataCenterId,

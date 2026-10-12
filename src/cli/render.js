@@ -2,10 +2,26 @@ import { redact } from '../core/secrets.js';
 import { stripControl } from '../core/advisor/advice.js';
 
 export function createIo({ stdout = process.stdout, stderr = process.stderr, prompt }) {
+  const err = (t) => stderr.write(`${redact(t)}\n`);
+  // Domanda a scelta numerata: invio = predefinita (defId). Le opzioni sono { id, label }; restituisce l'id scelto.
+  async function askChoice(text, options, defId) {
+    const found = options.findIndex((o) => o.id === defId);
+    const def = found >= 0 ? found : 0;
+    err(text);
+    options.forEach((o, i) => err(`  ${i + 1}) ${stripControl(o.label)}${i === def ? '  (predefinita)' : ''}`));
+    for (;;) {
+      const a = String(await prompt.askText('Scelta:', String(def + 1))).trim();
+      const n = /^\d+$/.test(a) ? Number(a) : 0;
+      if (n >= 1 && n <= options.length) return options[n - 1].id;
+      err(`Scelta non valida: indica un numero da 1 a ${options.length}`);
+    }
+  }
   return {
+    interactive: Boolean(prompt.isTty),
+    askChoice,
     out: (t) => stdout.write(`${redact(t)}\n`),
     raw: (t) => stdout.write(`${t}\n`),
-    err: (t) => stderr.write(`${redact(t)}\n`),
+    err,
     ask: prompt.ask,
     askText: prompt.askText,
     askSecret: prompt.askSecret,

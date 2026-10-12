@@ -77,6 +77,7 @@ export function createPrompt({ input = process.stdin, output = process.stderr } 
   }
 
   return {
+    isTty,
     async ask(q, defYes = false) {
       const a = await question(`${q} ${defYes ? '[S/n]' : '[s/N]'} `);
       if (!a) return defYes;
