@@ -90,12 +90,21 @@ export function createLiveOps({ store, runpod, http, events, ask, now, sleep, fi
     return { gpu: id, count, memoryGiB, ...m };
   }
 
-  async function prepareTune(name, { set = [], extra = [] }) {
+  // expectedArgs (server MCP): argomenti attivi visti nell'anteprima; se sul Pod sono cambiati nel frattempo si rifiuta.
+  async function prepareTune(name, { set = [], extra = [], expectedArgs = null }) {
     const live = await livePod(name);
     const st = await live.sup.status();
     if (!st) throw new LlmpodError(Codes.HTTP, `Il supervisore del Pod ${live.pod.id} non risponde`, { hint: 'Riprova tra poco, oppure controlla con: llmpod status' });
     if (!Array.isArray(st.args) || !st.args.length) throw new LlmpodError(Codes.INVALID_INPUT, `Il supervisore del Pod ${live.pod.id} non riporta gli argomenti attivi`);
-    if (!['ready', 'error'].includes(st.phase)) throw new LlmpodError(Codes.INVALID_INPUT, `vLLM è in fase "${st.phase}": attendi che sia pronto prima di cambiare gli argomenti`);
+    // Solo da 'ready': da 'error' gli argomenti attivi sono quelli rotti e il ritorno indietro tornerebbe a quelli.
+    if (st.phase !== 'ready') {
+      throw new LlmpodError(Codes.INVALID_INPUT, `vLLM è in fase "${st.phase}": tune parte solo da un vLLM pronto`, {
+        hint: st.phase === 'error' ? `Guarda i log (llmpod logs ${name}); per ripartire da capo: llmpod down ${name} e llmpod up ${name}` : 'Attendi che vLLM sia pronto (llmpod status)',
+      });
+    }
+    if (expectedArgs && JSON.stringify(expectedArgs) !== JSON.stringify(st.args)) {
+      throw new LlmpodError(Codes.INVALID_INPUT, 'Gli argomenti attivi sul Pod sono cambiati dall\'anteprima', { hint: 'Rifai tune_preview e mostra di nuovo il diff all\'utente' });
+    }
     const t = computeTune({ currentArgs: st.args, set, extra, flags: loadFlags(), maxContext: live.profile.model.maxContext });
     const memory = await memoryFor(live.profile, live.pod, t.args);
     if (memory.fits === false) {
@@ -140,8 +149,8 @@ export function createLiveOps({ store, runpod, http, events, ask, now, sleep, fi
 
   // confirmed: la conferma della ricarica è già stata data (server MCP, confirm: true); a differenza di yes, il ritorno agli
   // argomenti precedenti in caso di errore resta una domanda.
-  async function tune(name, { set = [], extra = [], yes = false, confirmed = false, dryRun = false, save = false } = {}) {
-    const p = await prepareTune(name, { set, extra });
+  async function tune(name, { set = [], extra = [], yes = false, confirmed = false, dryRun = false, save = false, expectedArgs = null } = {}) {
+    const p = await prepareTune(name, { set, extra, expectedArgs });
     const preview = previewOf(name, p);
     if (dryRun) return { dryRun: true, ...preview };
     await confirmAction({
@@ -167,6 +176,9 @@ export function createLiveOps({ store, runpod, http, events, ask, now, sleep, fi
         }
       }
       err.details = { ...(err.details ?? {}), reverted };
+      err.hint = reverted
+        ? `vLLM è di nuovo attivo con gli argomenti precedenti (verifica con llmpod metrics ${name}); se non risponde, elimina il Pod con llmpod down ${name}`
+        : `vLLM potrebbe non rispondere e il Pod continua a costare: controlla con llmpod logs ${name} e, se non riparte, eliminalo con llmpod down ${name}`;
       throw err;
     }
     let saved = false;

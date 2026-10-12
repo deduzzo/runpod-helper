@@ -28,26 +28,62 @@ function checkValues(m, maxContext) {
   }
 }
 
-// Nuovi argomenti di vLLM a partire da quelli ATTIVI sul Pod. Lancia INVALID_INPUT per flag vietati o bloccati, valori non
-// validi o nessuna modifica. `unknown`: flag non presenti nell'elenco di questa versione di vLLM (avviso, come in plan).
+const SHORT_FLAG = /^-[^-\d.]/; // "-tp": forma breve, non controllabile con i nomi lunghi
+const shortError = (t) => invalid(`Argomento con un solo trattino non ammesso: ${t}`, 'Usa la forma lunga, es. --tensor-parallel-size (ma il numero di GPU non si cambia con tune)');
+const normalName = (name) => name.toLowerCase().replace(/_/g, '-');
+
+// Porta ogni flag nella forma canonica di vLLM: --nome-con-trattini (minuscole, "_" → "-") e "--k=v" in due token, così
+// i controlli (bloccati, valori, duplicati) vedono gli stessi nomi che vedrà argparse.
+export function normalizeArgTokens(tokens) {
+  const out = [];
+  for (const raw of tokens) {
+    const t = String(raw);
+    if (SHORT_FLAG.test(t)) throw shortError(t);
+    if (!t.startsWith('--')) { out.push(t); continue; }
+    const i = t.indexOf('=');
+    out.push(normalName(i < 0 ? t : t.slice(0, i)));
+    if (i >= 0) out.push(t.slice(i + 1));
+  }
+  return out;
+}
+
+function normalizeSet(item) {
+  const s = String(item).trim();
+  if (SHORT_FLAG.test(s)) throw shortError(s);
+  const i = s.indexOf('=');
+  const key = normalName((i < 0 ? s : s.slice(0, i)).replace(/^-+/, '').trim());
+  return i < 0 ? key : `${key}=${s.slice(i + 1)}`;
+}
+
+// Nuovi argomenti di vLLM a partire da quelli ATTIVI sul Pod. Lancia INVALID_INPUT per flag vietati, bloccati, sconosciuti
+// (anche le abbreviazioni che argparse accetterebbe), duplicati, valori non validi o nessuna modifica.
 export function computeTune({ currentArgs, set = [], extra = [], flags, maxContext = null }) {
-  for (const item of set) {
-    const key = String(item).split('=')[0].replace(/^-+/, '').trim().toLowerCase().replace(/_/g, '-');
+  const current = normalizeArgTokens(currentArgs);
+  const sets = set.map(normalizeSet);
+  for (const item of sets) {
+    const key = item.split('=')[0];
     if (TUNE_LOCKED.includes(key)) throw invalid(`--${key} non si può cambiare con tune`, '“llmpod tune” non cambia modello, revisione, numero di GPU né chiave, host, porta e nome servito');
   }
-  const args = syncDerivedFields({ vllm: { args: applyOverrides(currentArgs, { set, extra }) } }).vllm.args;
+  const args = syncDerivedFields({ vllm: { args: applyOverrides(current, { set: sets, extra: normalizeArgTokens(extra) }) } }).vllm.args;
+  const seen = new Set();
+  for (const f of args.filter((a) => a.startsWith('--'))) {
+    if (seen.has(f)) throw invalid(`Flag duplicato: ${f}`, `Per cambiare un argomento già presente usa --set ${f.slice(2)}=<valore>`);
+    seen.add(f);
+  }
   const { unknown, forbidden } = validateArgs(args, flags);
-  const before = validateArgs(currentArgs, flags);
+  const before = validateArgs(current, flags);
   const newForbidden = forbidden.filter((f) => !before.forbidden.includes(f));
   if (newForbidden.length) throw invalid(`Argomenti vLLM non consentiti: ${newForbidden.join(', ')}`, 'llmpod gestisce da solo chiave, host, porta e nome servito');
-  const a = argMap(currentArgs);
+  const newUnknown = unknown.filter((f) => !before.unknown.includes(f));
+  if (newUnknown.length) throw invalid(`Flag non riconosciuti da vLLM ${'v0.30.0'}: ${newUnknown.join(', ')}`, 'Usa il nome completo del flag (le abbreviazioni non sono ammesse); elenco in data/vllm-flags-v0.30.0.json');
+  const a = argMap(current);
   const b = argMap(args);
   for (const k of TUNE_LOCKED) {
     const f = `--${k}`;
     if (a.has(f) !== b.has(f) || a.get(f) !== b.get(f)) throw invalid(`${f} non si può cambiare con tune`);
   }
   checkValues(b, maxContext);
-  const changes = diffArgs(currentArgs, args);
+  const changes = diffArgs(current, args);
   if (!changes.added.length && !changes.removed.length && !changes.changed.length) {
     throw invalid('Nessuna modifica rispetto agli argomenti attivi sul Pod', 'Esempio: llmpod tune <profilo> --set max-num-seqs=4');
   }
@@ -55,7 +91,7 @@ export function computeTune({ currentArgs, set = [], extra = [], flags, maxConte
   const to = Number(b.get('--max-model-len'));
   return {
     args, changes,
-    unknown: unknown.filter((f) => !before.unknown.includes(f)),
+    unknown: [],
     contextChange: from !== to && Number.isFinite(to) ? { from, to } : null,
   };
 }

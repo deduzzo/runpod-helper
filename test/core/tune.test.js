@@ -43,15 +43,38 @@ describe('computeTune', () => {
     }
   });
 
+  it('normalizza _ e --k=v prima dei controlli: i flag bloccati e i valori restano protetti', () => {
+    expect(() => tune({ extra: ['--tensor_parallel_size=2'] })).toThrow(/tensor-parallel-size/);
+    expect(() => tune({ extra: ['--max_model_len=300000'] })).toThrow(/--max-model-len/); // già presente: duplicato
+    expect(() => tune({ set: ['--max_model_len=300000'] })).toThrow(/supera il contesto massimo/);
+    expect(() => tune({ extra: ['--gpu_memory_utilization=0.99'] })).toThrow(/gpu-memory-utilization/);
+    expect(() => tune({ set: ['gpu_memory_utilization=0.99'] })).toThrow(/al massimo 0,98/);
+    expect(() => tune({ extra: ['--Revision', 'main'] })).toThrow(/revision/);
+    const r = tune({ set: ['max_model_len=32768'] });
+    expect(r.contextChange).toEqual({ from: 65536, to: 32768 });
+    expect(r.args.filter((a) => a === '--max-model-len')).toHaveLength(1);
+    const e = tune({ extra: ['--max_num_seqs=4'] });
+    expect(e.args.slice(-2)).toEqual(['--max-num-seqs', '4']);
+  });
+
+  it('rifiuta le forme brevi con un solo trattino, le abbreviazioni e i flag duplicati', () => {
+    expect(() => tune({ extra: ['-tp', '2'] })).toThrow(/un solo trattino/);
+    expect(() => tune({ set: ['-tp=2'] })).toThrow(/un solo trattino/);
+    expect(() => tune({ extra: ['--tensor-parallel', '2'] })).toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
+    expect(() => tune({ extra: ['--max-model', '1000'] })).toThrow(expect.objectContaining({ code: 'INVALID_INPUT' }));
+    expect(() => tune({ extra: ['--max-num-seqs', '4', '--max-num-seqs', '8'] })).toThrow(/duplicat/);
+    expect(() => tune({ extra: ['--max-model-len', '32768'] })).toThrow(/duplicat/);
+  });
+
   it('nessuna modifica → errore', () => {
     expect(() => tune({ set: ['max-model-len=65536'] })).toThrow(/Nessuna modifica/);
     expect(() => tune({})).toThrow(/Nessuna modifica/);
   });
 
-  it('riallinea tool-call-parser ed enable-auto-tool-choice; i flag sconosciuti sono segnalati', () => {
-    const r = tune({ set: ['tool-call-parser=false'], extra: ['--flag-inventato'] });
+  it('riallinea tool-call-parser ed enable-auto-tool-choice; i flag sconosciuti (anche abbreviazioni) sono rifiutati', () => {
+    const r = tune({ set: ['tool-call-parser=false'] });
     expect(r.args).not.toContain('--enable-auto-tool-choice');
-    expect(r.unknown).toEqual(['--flag-inventato']);
+    expect(() => tune({ extra: ['--flag-inventato'] })).toThrow(/non riconosciut/);
   });
 });
 
