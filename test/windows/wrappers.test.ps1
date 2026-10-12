@@ -60,10 +60,17 @@ $calls = Read-Log
 Check ($calls.Contains('--project-directory') -and $calls.Contains('compose.yaml')) 'compose usa --project-directory e -f'
 Check ($calls.Contains('run --rm -T llmpod prepare claude --format ps1')) 'prepare eseguito nel container'
 
-# 2. logs, ui
+# 2. docker-logs, logs, ui
 Set-Content -Path $log -Value '' -Encoding ASCII
-& (Join-Path $repo 'bin\llmpod.ps1') logs 2>&1 | Out-Null
-Check ((Read-Log).Contains('logs --tail 200 -f llmpod')) 'logs: ultimi 200 log del servizio llmpod'
+& (Join-Path $repo 'bin\llmpod.ps1') docker-logs 2>&1 | Out-Null
+Check ((Read-Log).Contains('logs --tail 200 -f llmpod')) 'docker-logs: ultimi 200 log del servizio llmpod'
+Set-Content -Path $log -Value '' -Encoding ASCII
+& (Join-Path $repo 'bin\llmpod.ps1') docker-logs open-webui 2>&1 | Out-Null
+Check ((Read-Log).Contains('logs --tail 200 -f open-webui')) 'docker-logs open-webui: log del servizio indicato'
+Set-Content -Path $log -Value '' -Encoding ASCII
+& (Join-Path $repo 'bin\llmpod.ps1') logs prova 2>&1 | Out-Null
+$logCalls = Read-Log
+Check ($logCalls.Contains('llmpod logs prova') -and -not $logCalls.Contains('--tail 200')) "logs: CLI nel container (log di vLLM), non i log dei container (chiamate: '$logCalls')"
 & (Join-Path $repo 'bin\llmpod.ps1') ui 2>&1 | Out-Null
 Check ($LASTEXITCODE -eq 1) 'ui: uscita 1'
 

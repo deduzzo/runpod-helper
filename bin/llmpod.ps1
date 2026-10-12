@@ -72,8 +72,9 @@ function Invoke-Llmpod([string[]]$CliArgs) {
     try { Start-Process $chatUrl } catch { }
     $script:Rc = 0; return
   }
-  if ($first -eq 'logs') {
-    # Diagnosi: ultimi log del servizio (predefinito llmpod), seguiti. Nei log c'e' anche il link dell'interfaccia con il token.
+  if ($first -eq 'docker-logs') {
+    # Diagnosi: ultimi log del container (servizio predefinito llmpod), seguiti. Nei log c'e' anche il link dell'interfaccia
+    # con il token. "logs" invece e' il comando della CLI (log di vLLM del profilo) e passa al container.
     $svc = if ($all.Count -ge 2) { $all[1] } else { 'llmpod' }
     Invoke-Native { Invoke-Compose logs --tail 200 -f $svc }
     $script:Rc = $LASTEXITCODE; return

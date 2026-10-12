@@ -70,7 +70,7 @@ Write-Host 'Avvio dei servizi (Open WebUI al primo avvio può impiegare alcuni m
 $helpText = (Invoke-Native { Invoke-Compose up --help } 2>&1 | Out-String)
 if ($helpText -match '--wait-timeout') {
   Invoke-Native { Invoke-Compose up -d --wait --wait-timeout 120 }
-  if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("⚠ Non tutti i servizi sono ancora pronti (Open WebUI al primo avvio può impiegare alcuni minuti): se serve, controlla con 'bin\llmpod logs'") }
+  if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("⚠ Non tutti i servizi sono ancora pronti (Open WebUI al primo avvio può impiegare alcuni minuti): se serve, controlla con 'bin\llmpod docker-logs'") }
 } else {
   Invoke-Native { Invoke-Compose up -d }
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -81,9 +81,9 @@ for ($i = 0; $i -lt 60; $i++) {
   if ($LASTEXITCODE -eq 0) { $ok = $true; break }
   Start-Sleep -Seconds 1
 }
-if (-not $ok) { [Console]::Error.WriteLine("llmpod non risponde: controlla con 'bin\llmpod logs'"); exit 1 }
+if (-not $ok) { [Console]::Error.WriteLine("llmpod non risponde: controlla con 'bin\llmpod docker-logs'"); exit 1 }
 $url = "http://127.0.0.1:$port/?t=$($env:LLMPOD_UI_TOKEN)"
 Write-Host "Interfaccia llmpod: $url"
 if (-not $NoOpenWebUI) { Write-Host "Open WebUI: http://127.0.0.1:$($env:LLMPOD_OPENWEBUI_PORT) (il primo account che crei diventa amministratore)" }
-Write-Host 'Diagnosi: bin\llmpod logs. Per rientrare nell''interfaccia rilancia questo script (il link con il token cambia a ogni avvio).'
+Write-Host 'Diagnosi: bin\llmpod docker-logs. Per rientrare nell''interfaccia rilancia questo script (il link con il token cambia a ogni avvio).'
 Start-Process $url

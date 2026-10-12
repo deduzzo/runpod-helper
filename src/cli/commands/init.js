@@ -14,6 +14,7 @@ export function register(program, getCtx) {
     .option('--datacenter <id>', 'datacenter preferito (es. EU-RO-1)')
     .option('--volume-size <gb>', 'dimensione del network volume in GB', (v) => Number.parseInt(v, 10))
     .option('--yes', 'non chiedere conferme')
+    .option('--no-volume', 'configura il datacenter senza creare né riusare un network volume (pesi scaricati a ogni avvio)')
     .option('--dry-run', 'non creare il volume')
     .action(async (opts) => {
       const ctx = getCtx();
@@ -50,18 +51,38 @@ export function register(program, getCtx) {
       const dc = opts.datacenter ?? await io.askText('Datacenter preferito (il volume dei pesi sarà creato lì):', suggested);
       if (!usable.some((d) => d.id === dc)) throw new LlmpodError(Codes.INVALID_INPUT, `Datacenter "${dc}" non valido o senza network volume`);
 
-      const existing = (await ctx.runpod.listVolumes()).filter((v) => v.dataCenter === dc);
       let volume = null;
-      if (existing.length && (opts.yes || await io.ask(`Riutilizzare il volume ${existing[0].name} (${existing[0].size} GB)?`, true))) {
-        volume = existing[0];
-      } else {
-        const size = opts.volumeSize ?? Number.parseInt(await io.askText('Dimensione del volume in GB (circa 2× i pesi dei modelli: 150 per ~30B, 500+ per 200B+):', '150'), 10);
-        if (!Number.isInteger(size) || size < 10 || size > 4096) throw new LlmpodError(Codes.INVALID_INPUT, 'La dimensione deve essere tra 10 e 4096 GB');
-        const conf = await confirmCost({ monthlyUSD: size * cfg.volumePricePerGbMonth, description: `Creazione del network volume llmpod-pesi da ${size} GB in ${dc}`, yes: opts.yes, dryRun: opts.dryRun, ask: io.ask });
-        if (conf.dryRun) io.out(`[dry-run] ${conf.message}`);
-        else volume = await ctx.runpod.createVolume({ name: 'llmpod-pesi', size, dataCenter: dc });
+      let noVolume = opts.volume === false;
+      if (!noVolume) {
+        const existing = (await ctx.runpod.listVolumes()).filter((v) => v.dataCenter === dc);
+        if (existing.length && (opts.yes || await io.ask(`Riutilizzare il volume ${existing[0].name} (${existing[0].size} GB)?`, true))) {
+          volume = existing[0];
+        } else {
+          const size = opts.volumeSize ?? Number.parseInt(await io.askText('Dimensione del volume in GB (circa 2× i pesi dei modelli: 150 per ~30B, 500+ per 200B+):', '150'), 10);
+          if (!Number.isInteger(size) || size < 10 || size > 4096) throw new LlmpodError(Codes.INVALID_INPUT, 'La dimensione deve essere tra 10 e 4096 GB');
+          try {
+            const conf = await confirmCost({ monthlyUSD: size * cfg.volumePricePerGbMonth, description: `Creazione del network volume llmpod-pesi da ${size} GB in ${dc}`, yes: opts.yes, dryRun: opts.dryRun, ask: io.ask });
+            if (conf.dryRun) io.out(`[dry-run] ${conf.message}`);
+            else volume = await ctx.runpod.createVolume({ name: 'llmpod-pesi', size, dataCenter: dc });
+          } catch (err) {
+            // Rifiutare il costo del volume non annulla l'init: si prosegue senza volume.
+            if (err.code !== Codes.CANCELLED) throw err;
+            noVolume = true;
+          }
+        }
       }
-      store.writeConfig({ dataCenterId: dc, ...(volume ? { volume: { id: volume.id, name: volume.name, size: volume.size, dataCenterId: dc } } : {}) });
+      const patch = { dataCenterId: dc };
+      if (volume) patch.volume = { id: volume.id, name: volume.name, size: volume.size, dataCenterId: dc };
+      if (noVolume) {
+        // Un volume già configurato nello stesso datacenter verrebbe usato dai profili: non va più usato. Uno di un altro
+        // datacenter non è usato dai profili di questo datacenter e resta configurato (gestibile con destroy-volume).
+        if (cfg.volume && cfg.volume.dataCenterId === dc) {
+          patch.volume = null;
+          io.err(`⚠ Il volume ${cfg.volume.name} (${cfg.volume.size} GB, ${dc}) non sarà più usato da llmpod ma esiste ancora e continua a costare: eliminalo dalla console di Runpod (https://www.runpod.io/console/user/storage) se non ti serve`);
+        }
+        io.err('⚠ Nessun network volume: i pesi saranno scaricati a ogni avvio (puoi crearne uno rilanciando llmpod init)');
+      }
+      store.writeConfig(patch);
       io.out(`✓ Configurazione salvata in ${store.dir}`);
       if (!store.readConfig().advisor?.enabled && !opts.yes && !opts.dryRun
         && await io.ask('Configurare ora il consulente IA che propone gli argomenti di vLLM?', false)) {

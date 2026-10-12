@@ -35,8 +35,9 @@ llmpod_env
 TTY=-T
 if [ -t 0 ] && [ -t 1 ]; then TTY=-it; fi
 
-if [ "${1:-}" = "logs" ]; then
-  # Diagnosi: ultimi log del servizio (predefinito llmpod), seguiti. Nei log c'è anche il link dell'interfaccia con il token.
+if [ "${1:-}" = "docker-logs" ]; then
+  # Diagnosi: ultimi log del container (servizio predefinito llmpod), seguiti. Nei log c'è anche il link dell'interfaccia
+  # con il token. "logs" invece è il comando della CLI (log di vLLM del profilo) e passa al container.
   exec docker compose --project-directory "$ROOT" -f "$ROOT/compose.yaml" logs --tail 200 -f "${2:-llmpod}"
 fi
 

@@ -102,12 +102,19 @@ describe('bin/llmpod', () => {
     expect(t.log()).toContain(`docker compose --project-directory ${ROOTDIR} -f ${ROOTDIR}/compose.yaml run --rm -T llmpod status`);
   });
 
-  it('logs: segue gli ultimi 200 log del servizio llmpod (o di un altro servizio)', () => {
+  it('docker-logs: segue gli ultimi 200 log del servizio llmpod (o di un altro servizio)', () => {
     const t = setup();
-    expect(t.run(['logs']).status).toBe(0);
+    expect(t.run(['docker-logs']).status).toBe(0);
     expect(t.log()).toMatch(/compose.yaml logs --tail 200 -f llmpod\n/);
-    expect(t.run(['logs', 'open-webui']).status).toBe(0);
+    expect(t.run(['docker-logs', 'open-webui']).status).toBe(0);
     expect(t.log()).toMatch(/compose.yaml logs --tail 200 -f open-webui\n/);
+  });
+
+  it('logs: passa al container la CLI (log di vLLM del profilo), non i log dei container', () => {
+    const t = setup();
+    expect(t.run(['logs', 'prova', '--since', '10']).status).toBe(0);
+    expect(t.log()).toContain(`compose.yaml run --rm -T llmpod logs prova --since 10`);
+    expect(t.log()).not.toContain('logs --tail 200');
   });
 
   it('ui: nel setup Docker la avvia scripts/start, uscita 1, niente Docker', () => {
