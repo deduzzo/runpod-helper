@@ -180,7 +180,7 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
         context: { type: 'integer', minimum: 1024, maximum: 1048576 }, concurrency: { type: 'integer', minimum: 1, maximum: 256 },
         set: { ...S.args, description: 'argomenti vLLM chiave=valore' }, extra: S.args,
         gpu: { type: 'string', minLength: 1, maxLength: 100, description: '<id>[x<numero>] tra le opzioni' },
-        ncclSafe: { type: 'boolean', description: 'predefinito true: NCCL_P2P_DISABLE=1 sui Pod multi-GPU senza NVLink; false solo se l\'utente lo chiede' },
+        ncclSafe: { type: 'boolean', description: 'predefinito true: modalità NCCL sicura (variabili NCCL e --disable-custom-all-reduce) sui Pod multi-GPU senza NVLink completo; false solo se l\'utente lo chiede' },
       }, ['model']),
       // Mai il consulente esterno: plan è consentito senza conferma e non deve inviare dati a servizi di terzi.
       run: async ({ model, context, concurrency = 2, set = [], extra = [], gpu, ncclSafe = true }) => {

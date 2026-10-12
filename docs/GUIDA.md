@@ -267,7 +267,7 @@ le mette prima. **Preferisci le varianti con MTP o DSpark**: generano più token
 Altre opzioni di `plan`: `--concurrency <n>` (richieste in parallelo previste, predefinito 2), `--extra-arg <arg>`
 (argomento di vLLM aggiuntivo), `--image <immagine>` (immagine vLLM diversa da quella predefinita),
 `--allow-trust-remote-code` (consente `--trust-remote-code`, solo se ti fidi del codice del repository),
-`--no-nccl-safe` (sui Pod con più GPU senza NVLink non imposta `NCCL_P2P_DISABLE=1`, sconsigliato: vedi
+`--no-nccl-safe` (sui Pod con più GPU senza NVLink completo non usa la modalità NCCL sicura, sconsigliato: vedi
 [Scegliere la GPU](#scegliere-la-gpu)), `--json`.
 
 ---
@@ -284,11 +284,22 @@ disponibili da nessuna parte sono marcate "non disponibile ora").
 
 **Più GPU senza NVLink.** Le configurazioni multi-GPU su schede PCIe (RTX/GeForce, RTX PRO 6000 "Server/Workstation
 Edition", RTX A-series, L4/L40/L40S, A10/A16/A40, A100/H100 PCIe) comunicano attraverso il bus PCIe; in molte
-macchine virtuali il trasporto diretto P2P di NCCL fallisce con `NCCL error: unhandled cuda error`. Per queste
-llmpod avvia il Pod con la variabile **`NCCL_P2P_DISABLE=1`** e il piano mostra un avviso `NCCL:`. NVLink si
-presume solo per le GPU SXM/HGX (H100/H200/B200/B300, A100 SXM, GB200/GB300), che non ne hanno bisogno. Se vuoi
-provare senza (ad esempio per misurare la differenza), crea il piano con `llmpod plan … --no-nccl-safe`: il
-profilo salvato avrà `ncclSafe: false`. Con un modello grande, a parità di prezzo, **una sola GPU più grande** è
+macchine virtuali il trasporto diretto P2P di NCCL (e l'all-reduce personalizzato di vLLM) fallisce con
+`NCCL error: unhandled cuda error` o si blocca. Per queste llmpod avvia il Pod in **modalità NCCL sicura** e il
+piano mostra un avviso `NCCL:`:
+
+| Variabile / argomento | Perché |
+|---|---|
+| `NCCL_P2P_DISABLE=1` (PCIe pure) oppure `NCCL_P2P_LEVEL=NVL` (H100/H200 NVL, NVLink solo a coppie) | niente P2P diretto sul bus PCIe: NCCL passa per la memoria dell'host (un po' più lento, ma stabile) |
+| `NCCL_CUMEM_HOST_ENABLE=0` | rimedio indicato da vLLM per `transport/shm.cc … Cuda failure 217` con la memoria condivisa |
+| `VLLM_ALLREDUCE_USE_SYMM_MEM=0`, `--disable-custom-all-reduce` | niente all-reduce di vLLM basati su accesso diretto tra GPU |
+| `NCCL_DEBUG=WARN` | gli avvisi di NCCL finiscono nei log, così la causa di un errore si vede |
+
+NVLink completo si presume solo per le GPU SXM/HGX (H100/H200/B200/B300, A100 SXM, GB200/GB300), che non ne
+hanno bisogno. `NCCL_IB_DISABLE` non si imposta: InfiniBand serve solo tra nodi diversi e un Pod è un nodo solo.
+L'argomento `--disable-custom-all-reduce` si aggiunge a ogni avvio secondo la GPU scelta e non si salva nel
+profilo. Se vuoi provare senza (ad esempio per misurare la differenza), crea il piano con
+`llmpod plan … --no-nccl-safe`: il profilo salvato avrà `ncclSafe: false`. Con un modello grande, a parità di prezzo, **una sola GPU più grande** è
 di solito la scelta più semplice e veloce da avviare.
 
 Il profilo salvato conserva tutte le configurazioni compatibili. Al momento dell'avvio `llmpod up` rilegge il
@@ -340,7 +351,7 @@ llmpod up prova
    ferma senza creare nulla); per i modelli *gated* verifica l'accesso; legge il credito;
 2. **scelta della GPU** tra quelle disponibili ora (vedi [Scegliere la GPU](#scegliere-la-gpu));
 3. **conferma del costo**: costo orario (e per 24 ore), **stima del tempo e del costo dell'avvio** (vedi
-   [Stimare i costi](#stimare-i-costi)), `NCCL_P2P_DISABLE=1` se il Pod ha più GPU senza NVLink e, se il profilo
+   [Stimare i costi](#stimare-i-costi)), la modalità NCCL sicura se il Pod ha più GPU senza NVLink completo e, se il profilo
    esce dai limiti predefiniti, "inattività: mai (o N min), massimo N h → costo massimo X $". Si ferma se il
    credito è inferiore a un'ora di utilizzo;
 4. **creazione del Pod**, attesa dell'avvio, **download e caricamento dei pesi** (con `--verbose` vedi i log di
@@ -580,8 +591,10 @@ llmpod destroy-volume             # conferma + digitazione del nome del volume; 
   **20–25 minuti solo per leggere i pesi in GPU** (~7 s per ognuno dei 206 file da ~0,6 GiB), oltre al download.
   La conferma di `llmpod up` (e `up_preview` in modalità managed) mostra la stima: *"avvio stimato ~52 min
   (download ~23, caricamento dei pesi ~25) ≈ 3,12 $ prima che il modello sia pronto"*. La stima è prudente:
-  5 minuti fissi, download a ~100 MB/s (si salta se i pesi sono già sul volume), caricamento a ~2 s/GiB con una
-  GPU, ×3 con più GPU, ×2 oltre 100 GiB.
+  5 minuti fissi; download a ~100 MB/s, saltato se la stessa revisione è già sul volume (llmpod lo annota dopo un
+  avvio riuscito con il volume); caricamento a ~2 s/GiB dal disco del Pod, ×4 dal volume di rete, ×1,5 con più GPU.
+  Il fattore del volume è un'ipotesi ricavata dal collaudo (lettura a ~90 MB/s, tipica di uno storage di rete).
+  `up` attende vLLM almeno 1,5 volte la stima prima di chiedere se aspettare ancora.
 - **Fisso**: il volume, al mese.
 - `llmpod status` mostra il costo della sessione in corso e il credito residuo.
 
@@ -791,8 +804,9 @@ managed il consulente è Claude Code stesso e il piano non chiama il consulente 
 | `GATED_MODEL` / `HF_AUTH` | modello con accesso su richiesta | richiedi l'accesso sulla pagina del modello e imposta il token con `llmpod init` |
 | `OOM` | memoria GPU insufficiente | contesto minore, `--set kv-cache-dtype=fp8`, `--set gpu-memory-utilization=0.85` o una GPU più grande |
 | `POD_START_TIMEOUT` | download o caricamento più lunghi del previsto | rispondi sì alla domanda per attendere altri 15 minuti; guarda `llmpod logs` |
-| `VLLM_ERROR` con `NCCL error: unhandled cuda error` (spesso con `SymmMemCommunicator: Device capability 12.0 not supported` e `FlashInfer All Reduce is disabled`) | Pod **multi-GPU su GPU PCIe senza NVLink** (RTX/GeForce, RTX PRO 6000 "Server/Workstation Edition", RTX A-series, L4/L40/L40S, A10/A16/A40, A100/H100 PCIe): il trasporto diretto tra GPU (P2P) di NCCL fallisce nella macchina virtuale, anche dopo molti minuti di caricamento dei pesi. I due avvisi sono normali su Blackwell e non sono la causa | llmpod avvia questi Pod con **`NCCL_P2P_DISABLE=1`** (NCCL passa per la memoria dell'host: un po' più lento tra le GPU, ma stabile) e il piano lo segnala con un avviso `NCCL:`. Se l'errore compare lo stesso: controlla che il profilo non sia stato creato con `--no-nccl-safe` (campo `ncclSafe: false`), altrimenti rigenera piano e profilo; oppure scegli **una sola GPU più grande** o GPU **SXM con NVLink** (H100/H200/B200), per cui la variabile non serve. `NCCL_IB_DISABLE` non serve: InfiniBand si usa solo tra nodi diversi |
-| vLLM in `error` senza riavvii | il supervisore non riavvia vLLM se l'errore arriva **durante il caricamento dei pesi** o non è transitorio (NCCL, CUDA, OOM, errori di EngineCore): un riavvio ricaricherebbe tutti i pesi (anche 20 minuti a pagamento) per ripetere lo stesso errore. Riavvia una volta sola solo per errori di rete o di download prima del caricamento | `up` si ferma subito con la causa (`lastError`/`errorCause` del supervisore, visibili anche in `llmpod metrics`) e propone riparazione (consulente) o eliminazione del Pod |
+| `VLLM_ERROR` con `NCCL error: unhandled cuda error` o `NCCL WARN … Cuda failure 217` (spesso con `SymmMemCommunicator: Device capability 12.0 not supported` e `FlashInfer All Reduce is disabled`) | Pod **multi-GPU senza NVLink completo** (RTX/GeForce, RTX PRO 6000 "Server/Workstation Edition", RTX A-series, L4/L40/L40S, A10/A16/A40, A100/H100 PCIe; H100/H200 NVL solo a coppie): il trasporto diretto tra GPU (P2P) di NCCL o l'all-reduce di vLLM fallisce nella macchina virtuale, anche dopo molti minuti di caricamento dei pesi. I due avvisi sono normali su Blackwell e non sono la causa | llmpod avvia questi Pod in **modalità NCCL sicura** (vedi [Scegliere la GPU](#scegliere-la-gpu): `NCCL_P2P_DISABLE=1` o `NCCL_P2P_LEVEL=NVL`, `NCCL_CUMEM_HOST_ENABLE=0`, `VLLM_ALLREDUCE_USE_SYMM_MEM=0`, `NCCL_DEBUG=WARN`, `--disable-custom-all-reduce`) e il piano lo segnala con un avviso `NCCL:`. Il consulente non viene consultato (non può cambiare l'ambiente). Se l'errore compare lo stesso: controlla che il profilo non sia stato creato con `--no-nccl-safe` (campo `ncclSafe: false`), altrimenti rigenera piano e profilo; oppure scegli **una sola GPU più grande** o GPU **SXM con NVLink** (H100/H200/B200). `NCCL_IB_DISABLE` non serve: InfiniBand si usa solo tra nodi diversi |
+| vLLM in `error` senza riavvii | durante l'avvio il supervisore riavvia vLLM **una volta sola, e solo per errori di rete o di download** (connessione, timeout, 5xx di Hugging Face) arrivati prima che inizi la lettura dei pesi (`Loading safetensors checkpoint shards`). Non riavvia dopo l'inizio della lettura né per errori non transitori (NCCL, CUDA, OOM, `ValueError`…): un riavvio ricaricherebbe tutti i pesi (anche 20 minuti a pagamento) per ripetere lo stesso errore. La causa è la prima riga d'errore specifica (es. quella del Worker), non i messaggi di EngineCore/APIServer che la ripetono. Un crash **dopo** che vLLM era pronto ha diritto a un riavvio | `up` si ferma subito con la causa (`lastError`/`errorCause` del supervisore, visibili anche in `llmpod metrics`) e propone riparazione (consulente; non per gli errori NCCL, che dipendono dall'ambiente) o eliminazione del Pod. Un Pod in errore da 15 minuti viene eliminato dal supervisore anche con l'inattività disattivata (motivo `error-timeout`) |
+| `VLLM_ERROR` "vLLM bloccato (possibile problema NCCL/P2P)" | dopo la lettura dei pesi vLLM non ha scritto nulla nei log per 10 minuti: tipico di una comunicazione NCCL bloccata tra le GPU | il supervisore ferma vLLM e passa in errore invece di far attendere il timeout. Vedi la riga `NCCL error` qui sopra (modalità NCCL sicura, una GPU più grande o GPU SXM) |
 | `ZCODE_RUNNING` | ZCode è aperto e sovrascriverebbe la configurazione | chiudi ZCode e ripeti `llmpod run zcode` |
 | `CONFIG_PERMISSIONS` | `.env` leggibile da altri utenti | `chmod 600 ~/.config/llmpod/.env` |
 | Risposte interrotte dopo circa 100 s | limite del proxy di Runpod per le richieste **non** in streaming | usa client in streaming (Claude Code, OpenCode e pi lo sono) |

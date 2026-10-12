@@ -222,9 +222,10 @@ Per chi sviluppa: [CLAUDE.md](CLAUDE.md) (regole dell'operatore Claude Code) e l
   (126 GiB su 2 GPU PCIe: ~25 minuti solo di caricamento). `llmpod up` mostra la stima di tempo e costo
   dell'avvio prima della conferma.
 - Un errore di vLLM durante il caricamento dei pesi (NCCL, CUDA, memoria) **non** provoca riavvii automatici che
-  ricaricherebbero tutto: `up` si ferma subito e propone riparazione o eliminazione. Sui Pod con più GPU PCIe
-  senza NVLink llmpod imposta `NCCL_P2P_DISABLE=1` (vedi
-  [NCCL error](docs/GUIDA.md#risoluzione-dei-problemi)).
+  ricaricherebbero tutto: `up` si ferma subito e propone riparazione o eliminazione; un vLLM bloccato dopo i pesi
+  (10 minuti senza log) passa in errore, e un Pod in errore da 15 minuti si elimina da solo. Sui Pod con più GPU
+  senza NVLink completo llmpod usa la **modalità NCCL sicura** (`NCCL_P2P_DISABLE=1` o `NCCL_P2P_LEVEL=NVL`,
+  `--disable-custom-all-reduce`; vedi [NCCL error](docs/GUIDA.md#risoluzione-dei-problemi)).
 
 Tabella dei prezzi e stima di una sessione: [Spegnere e costi](docs/GUIDA.md#spegnere-e-costi).
 

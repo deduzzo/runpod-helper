@@ -162,6 +162,6 @@ export async function makePlan({
     cloud,
     kvCacheDtype,
     warnings,
-    ncclSafe: ncclSafe !== false, // false (--no-nccl-safe): niente NCCL_P2P_DISABLE sui Pod multi-GPU senza NVLink
+    ncclSafe: ncclSafe !== false, // false (--no-nccl-safe): niente modalità NCCL sicura sui Pod multi-GPU senza NVLink completo
   }));
 }
