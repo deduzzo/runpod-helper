@@ -33,6 +33,9 @@ Rispondi in italiano. La ricarica interrompe il servizio per alcuni minuti; il P
    segui con `job_status`/`job_events`. Se fallisce compare la domanda "Tornare agli argomenti precedenti?"
    (scade in 3 minuti: poi torna indietro da sola): mostrala all'utente e rispondi con `job_answer` secondo la sua
    risposta (di solito sì). Se vLLM non riparte nemmeno così, proponi `/llmpod-spegni`.
+   Per interrompere un tune: `job_cancel { jobId, confirm: true }` riporta vLLM agli argomenti precedenti e
+   lascia il Pod acceso (l'esito è nell'evento finale del job). Non usare `down` per annullare un tune: elimina
+   il Pod, e serve il permesso esplicito dell'utente.
 8. **Verifica**: di nuovo `metrics` con lo stesso carico e confronta prima/dopo. Se non migliora, proponi di
    tornare indietro (un altro `tune`).
 

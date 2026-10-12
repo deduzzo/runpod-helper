@@ -253,6 +253,16 @@ describe('jobs: annullamento e scadenze per domanda', () => {
     expect(jobs.cancel(job.id)).toBe(false);
   });
 
+  it('settlePending: chiude la domanda col valore sicuro senza annullare il job', async () => {
+    const jobs = createJobs();
+    const job = jobs.start('tune:p', async ({ ask }) => ({ back: await ask('Tornare indietro?', true, { timeoutValue: true }) }));
+    await tick();
+    expect(jobs.settlePending(job.id)).toBe(true);
+    await jobs.wait(job.id, 1000);
+    expect(jobs.get(job.id)).toMatchObject({ status: 'done', result: { back: true } });
+    expect(jobs.settlePending(job.id)).toBe(false);
+  });
+
   it('wait: false se il lavoro non finisce entro il limite', async () => {
     const jobs = createJobs();
     const job = jobs.start('up:p', () => new Promise(() => {}));

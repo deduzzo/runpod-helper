@@ -40,7 +40,7 @@ Server MCP `llmpod` (registrato in `.mcp.json`, avviabile anche con `llmpod mcp`
 | `profiles`, `status` | profili salvati; Pod llmpod avviati / in avvio / spenti / in eliminazione, credito (`all: true`: anche gli altri Pod dell'account) | no |
 | `up_preview` → `up` | opzioni avviabili ora con costo orario e massimo → avvio in background (`gpu`, `confirm: true`, `expectedHourlyUSD`) | **sì** |
 | `job_status`, `job_events`, `job_answer` | avanzamento di `up`/`tune`, domande pendenti (con scadenza `expiresAt`) | dipende dalla domanda |
-| `job_cancel` | annulla un `up`/`tune` in corso ed elimina il Pod del profilo (`confirm: true`) | ferma la spesa |
+| `job_cancel` | `up` non ancora pronto: annulla ed elimina il Pod appena creato; `tune`: interrompe e riporta vLLM agli argomenti precedenti, il Pod RESTA acceso (`confirm: true`) | up: ferma la spesa; tune: il Pod continua a costare |
 | `metrics`, `logs` | token/s, KV %, accettazione MTP/DSpark, errori; log di vLLM mascherati | no |
 | `tune_preview` → `tune` | diff e stima di memoria → ricarica di vLLM (il Pod resta); `tune` vuole `expectedArgs` = `before` dell'anteprima | il Pod continua a costare |
 | `keep_preview` → `keep` | limiti di spegnimento e costo massimo → applicazione | può aumentare la spesa |
@@ -54,7 +54,9 @@ domande solo gli strumenti e i comandi di sola lettura; `up`, `tune`, `keep`, `d
 `job_answer`, `job_cancel` (e i comandi CLI che spendono o modificano) chiedono sempre all'utente.
 
 Sicurezza dei job: se un `up` fallisce il server elimina subito il Pod; mentre un Pod costa le domande
-pendenti scadono in 3 minuti col valore sicuro (`expiresAt`); `down`/`job_cancel` annullano il job in corso.
+pendenti scadono in 3 minuti col valore sicuro (`expiresAt`); `job_cancel` annulla un `up` eliminando il Pod
+appena creato, mentre su un `tune` riporta vLLM agli argomenti precedenti senza toccare il Pod. **`down` è l'unico
+modo esplicito per eliminare un Pod in uso** (anche durante un tune), e solo con il permesso dell'utente.
 
 Skill del progetto: `/llmpod-avvia`, `/llmpod-stato`, `/llmpod-tune`, `/llmpod-spegni`.
 

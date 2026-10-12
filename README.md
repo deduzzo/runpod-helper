@@ -251,8 +251,10 @@ Al primo avvio Claude Code chiede di approvare il server MCP `llmpod` del proget
   a tutti i comandi della shell.
 
 **Sicurezza dei job**: se un avvio fallisce, il server MCP elimina subito il Pod (senza aspettare una risposta);
-mentre un Pod costa, le domande pendenti scadono dopo 3 minuti con il valore sicuro; `down` (o `job_cancel`)
-durante un `up`/`tune` annulla il job ed elimina il Pod; alla chiusura del server (fine sessione, SIGINT,
+mentre un Pod costa, le domande pendenti scadono dopo 3 minuti con il valore sicuro; `job_cancel` su un `up`
+non ancora pronto lo annulla ed elimina il Pod appena creato, su un `tune` riporta vLLM agli argomenti precedenti
+e lascia il Pod acceso; `down` (anche durante un `up`/`tune`) è l'unico modo esplicito per eliminare un Pod e
+chiede sempre conferma; alla chiusura del server (fine sessione, SIGINT,
 SIGTERM) un `up` ancora in corso con il Pod già creato viene annullato e il Pod eliminato (entro 60 s).
 
 **Comandi CLI pensati anche per l'agente** (tutti con `--json`):

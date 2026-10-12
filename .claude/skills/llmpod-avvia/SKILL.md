@@ -30,7 +30,8 @@ Rispondi in italiano. Nessuna spesa senza un "sì" esplicito dell'utente al cost
    download dei pesi, caricamento, smoke test). Riassumi in breve. Se c'è una **domanda pendente**, mostrala
    all'utente così com'è (con il costo e la scadenza `expiresAt`: con il Pod acceso scade in 3 minuti e vale la
    risposta sicura) e rispondi con `job_answer` solo con la sua risposta. Se l'avvio fallisce il Pod viene
-   eliminato da solo; per interrompere: `job_cancel { jobId, confirm: true }` (elimina il Pod).
+   eliminato da solo; per interrompere un avvio non ancora pronto: `job_cancel { jobId, confirm: true }` (annulla
+   ed elimina il Pod appena creato).
 9. **Pronto**: riporta GPU, costo/h, tempo di avvio, eventuale suggerimento di contesto, e i comandi di
    `client_commands { profile }` (`llmpod run claude|opencode|pi|zcode --profile …`). Mai la chiave.
 10. Ricorda i limiti di spegnimento (si allungano con `/llmpod-stato` → keep) e che si spegne con `/llmpod-spegni`.

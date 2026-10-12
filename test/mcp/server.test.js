@@ -382,6 +382,50 @@ describe('nessun Pod lasciato acceso da un job', () => {
     expect((await t.call('job_cancel', { jobId: r.data.jobId, confirm: true })).isError).toBe(true);
   });
 
+  const TUNE = { profile: 'p', set: ['max-num-seqs=4'], expectedArgs: ACTIVE_ARGS, confirm: true };
+  const untilReloads = async (t, n) => {
+    for (let i = 0; i < 500 && t.sv.reloads < n; i++) await new Promise((r) => setTimeout(r, 2));
+    expect(t.sv.reloads).toBe(n);
+  };
+
+  it('job_cancel su un tune in attesa: NON elimina il Pod, riporta vLLM agli argomenti precedenti; esito nell\'evento finale', async () => {
+    const t = setup({ onReload: (_a, n) => (n === 1 ? 'loading' : 'ready') }, { sleep: yieldSleep });
+    const r = await t.call('tune', TUNE);
+    await untilReloads(t, 1);
+    const c = await t.call('job_cancel', { jobId: r.data.jobId, confirm: true });
+    expect(c.data).toMatchObject({ interrupted: true, podKept: true });
+    const job = await t.settle(r.data.jobId);
+    expect(job.status).toBe('failed');
+    expect(job.error).toMatchObject({ code: 'CANCELLED', message: expect.stringMatching(/di nuovo attivo con gli argomenti precedenti; il Pod resta acceso/) });
+    const reloads = t.calls('/reload', 'POST');
+    expect(reloads).toHaveLength(2);
+    expect(reloads[1][2].json.args).toEqual(ACTIVE_ARGS);
+    expect(t.runpod.deletePod).not.toHaveBeenCalled();
+    const ev = await t.call('job_events', { jobId: r.data.jobId });
+    expect(ev.data.events.at(-1)).toMatchObject({ type: 'failed', error: { code: 'CANCELLED' } });
+  });
+
+  it('job_cancel su un tune con la domanda di ritorno pendente: la chiude (sì), torna indietro, Pod acceso', async () => {
+    const t = setup({ onReload: (_a, n) => (n === 1 ? 'error' : 'ready') });
+    const r = await t.call('tune', TUNE);
+    const job = await t.settle(r.data.jobId);
+    expect(job.question.text).toMatch(/Tornare agli argomenti precedenti/);
+    await t.call('job_cancel', { jobId: r.data.jobId, confirm: true });
+    const end = await t.settle(r.data.jobId);
+    expect(end.error.code).toBe('CANCELLED');
+    expect(t.calls('/reload', 'POST').at(-1)[2].json.args).toEqual(ACTIVE_ARGS);
+    expect(t.runpod.deletePod).not.toHaveBeenCalled();
+  });
+
+  it('down durante un tune (richiesta esplicita): annulla il job ed elimina il Pod', async () => {
+    const t = setup({ onReload: () => 'loading' }, { sleep: yieldSleep });
+    const r = await t.call('tune', TUNE);
+    await untilReloads(t, 1);
+    const d = await t.call('down', { profile: 'p', confirm: true });
+    expect(d.data.cancelledJobs).toEqual([r.data.jobId]);
+    expect(t.runpod.deletePod).toHaveBeenCalledWith('pod1');
+  });
+
   it('chiusura del server con un up in corso e Pod creato: elimina il Pod e lo scrive nel log', async () => {
     const t = setup({ pods: [], phase: 'loading' }, { sleep: yieldSleep });
     const r = await t.call('up', UP);

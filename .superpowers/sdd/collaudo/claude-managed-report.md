@@ -119,5 +119,15 @@ Minori:
   se il credito risulta "non disponibile" serve una chiave con accesso completo), nota su `LLMPOD_CONFIG_DIR`
   personalizzata (regola `deny` con percorso assoluto in `settings.local.json`) e sulla sandbox di Claude Code.
 
+**`job_cancel` sui tune** (correzione successiva): annullare un `tune` non elimina più il Pod. Interrompe
+l'attesa in corso (interruzione "morbida", separata dall'annullamento del job), chiude con "sì" la domanda di
+ritorno se pendente e il job stesso ricarica vLLM con gli argomenti precedenti; anche se l'interruzione arriva
+dopo una ricarica riuscita (`isCancelled` in `ops.tune`) si torna indietro. L'esito è nell'evento finale
+(`failed` con codice `CANCELLED`: "vLLM è di nuovo attivo con gli argomenti precedenti; il Pod resta acceso",
+oppure ritorno non riuscito con suggerimento di chiedere all'utente se fare `down`). Solo `job_cancel` su un `up`
+non ancora pronto elimina il Pod; `down` resta l'unico modo esplicito per eliminare un Pod, anche durante un
+tune. Nuovo `jobs.settlePending`. Test: tune in attesa annullato (2 ricariche, nessun DELETE), domanda di ritorno
+pendente, `down` durante un tune.
+
 Dubbio: non ho potuto verificare quali permessi *Restricted* di Runpod coprano la query GraphQL del credito; il
 README lo dice in modo prudente.

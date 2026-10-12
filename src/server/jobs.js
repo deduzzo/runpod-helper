@@ -133,6 +133,14 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
     return jobs.get(jobId)?.cancel?.(reason) ?? false;
   }
 
+  // Chiude la domanda pendente col suo valore sicuro, senza annullare il job.
+  function settlePending(jobId) {
+    const q = jobs.get(jobId)?.question;
+    if (!q) return false;
+    q.settle(q.timeoutValue);
+    return true;
+  }
+
   // Attende la fine del lavoro di un job (anche annullato), al massimo `timeoutMs`; true se è finito.
   async function wait(jobId, timeoutMs = 60_000) {
     const j = jobs.get(jobId);
@@ -153,6 +161,7 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
     start,
     answer,
     cancel,
+    settlePending,
     wait,
     close,
     get: (id) => (jobs.has(id) ? view(jobs.get(id)) : null),
