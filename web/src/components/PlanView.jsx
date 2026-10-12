@@ -81,7 +81,7 @@ export function PlanView({ data, onPlanChange }) {
           <p><span className="text-gray-400">Memoria:</span> pesi {fmtGiB(plan.estimate.weightsGiB)} · KV {fmtGiB(plan.estimate.kvGiB)} · per GPU {fmtGiB(plan.estimate.perGpuGiB)}</p>
           <p><span className="text-gray-400">Contesto:</span> {plan.context} token × {plan.concurrency} {plan.kvCacheDtype ? <Badge tone="violet">KV FP8</Badge> : null}</p>
           <p><span className="text-gray-400">Parser:</span> strumenti {plan.parsers.tool ?? 'nessuno'} · ragionamento {plan.parsers.reasoning ?? 'nessuno'}</p>
-          {plan.mtp && <p><span className="text-gray-400">MTP:</span> {mtpLabel(plan.mtp)}</p>}
+          {plan.mtp && <p><span className="text-gray-400">{plan.mtp.draft === 'dspark' ? 'Draft:' : 'MTP:'}</span> {mtpLabel(plan.mtp)}</p>}
           <p><span className="text-gray-400">Scelta:</span> {chosen ? <>{chosen.name ?? chosen.id} ×{chosen.count} a <strong className="neon-text">{fmtUSD(chosen.hourly)}/h</strong></> : <Badge tone="red">nessuna GPU</Badge>}</p>
         </div>
         {!plan.gpu && (

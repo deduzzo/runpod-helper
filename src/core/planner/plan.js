@@ -1,13 +1,20 @@
 import { LlmpodError, Codes } from '../errors.js';
 import { parseModelRef, summarizeModel } from '../hf.js';
-import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes, hasMtp, GiB } from './vram.js';
-import { detectParsers, buildArgs, applyOverrides, validateArgs, MTP_SPEC } from './vllm-args.js';
+import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes, hasMtp, draftKind, GiB } from './vram.js';
+import { detectParsers, buildArgs, applyOverrides, validateArgs, MTP_SPEC, DSPARK_SPEC } from './vllm-args.js';
 import { selectGpus } from './gpu-select.js';
-import { optionOf } from './gpu-choice.js';
+import { optionOf, refreshNvfp4Warning } from './gpu-choice.js';
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 // Riserva per lo stato del draft MTP (KV del suo strato e buffer): approssimazione per eccesso, i pesi MTP sono già nei file.
 const MTP_RESERVE_GiB = 1;
+// Quantizzazione dichiarata in config.json: 'nvfp4' (ModelOpt quant_algo NVFP4 o compressed-tensors nvfp4-*), altrimenti quant_method.
+function quantizationOf(config) {
+  const q = config.quantization_config ?? config.text_config?.quantization_config ?? null;
+  if (!q) return null;
+  if (/nvfp4/i.test(String(q.quant_algo ?? '')) || /nvfp4/i.test(String(q.format ?? ''))) return 'nvfp4';
+  return q.quant_method ? String(q.quant_method).toLowerCase() : null;
+}
 const isTopLevel = (f, ext) => f.type === 'file' && !f.path.includes('/') && f.path.endsWith(ext);
 
 // Valore di un flag negli argomenti di vllm serve (forma `--flag valore` o `--flag=valore`); vale l'ultima occorrenza (come argparse).
@@ -34,7 +41,10 @@ export function syncDerivedFields(target) {
   if (target.mtp) {
     let tokens = null;
     try { tokens = JSON.parse(argValue(args, '--speculative-config') ?? 'null')?.num_speculative_tokens ?? null; } catch { tokens = null; }
-    target.mtp = { ...target.mtp, enabled: hasFlag(args, '--speculative-config'), tokens };
+    let method = null;
+    try { method = JSON.parse(argValue(args, '--speculative-config') ?? 'null')?.method ?? null; } catch { method = null; }
+    const draft = ['mtp', 'dspark'].includes(method) ? method : (target.mtp.draft ?? null);
+    target.mtp = { ...target.mtp, enabled: hasFlag(args, '--speculative-config'), tokens, draft };
   }
   target.kvCacheDtype = /fp8/i.test(argValue(args, '--kv-cache-dtype') ?? '') ? 'fp8' : null;
   if (Array.isArray(target.warnings) && !target.kvCacheDtype) {
@@ -82,10 +92,11 @@ export async function makePlan({
     warnings.push(`Contesto ridotto da ${context} a ${maxCtx}, il massimo dichiarato dal modello`);
     ctx = maxCtx;
   }
-  if (!summary.hasChatTemplate) warnings.push('Il modello non dichiara un chat template: le chiamate a strumento potrebbero non funzionare');
   if (summary.gated) warnings.push(`Modello gated (${summary.gated}): serve HF_TOKEN con accesso approvato`);
 
   const parsers = detectParsers({ modelId: id, config });
+  // Con --tokenizer-mode della regola (DeepSeek-V4, Mistral) è il tokenizer di vLLM a costruire il prompt: il chat template non serve.
+  if (!summary.hasChatTemplate && !parsers.extraArgs.includes('--tokenizer-mode')) warnings.push('Il modello non dichiara un chat template: le chiamate a strumento potrebbero non funzionare');
   warnings.push(...parsers.warnings);
 
   const sizes = tpSizes(config);
@@ -96,6 +107,9 @@ export async function makePlan({
   const kv = kvBytesPerToken(config);
   // MTP: se i pesi contengono il draft head si attiva la decodifica speculativa (salvo --set speculative-config=false).
   const mtpPresent = hasMtp(config, weightMap);
+  // Tipo di draft: DSpark (config con dspark_*) usa l'argomento della recipe della regola, MTP quello predefinito.
+  const draft = draftKind(config, weightMap);
+  const speculative = draft === 'dspark' ? (parsers.dspark ?? DSPARK_SPEC) : draft === 'mtp' ? MTP_SPEC : null;
   const specDisabled = set.some((x) => /^(--)?speculative[-_]config=false$/.test(x));
   // Memoria costante per GPU oltre pesi e KV: stato lineare degli strati ibridi × concorrenza e riserva del draft MTP (stime per eccesso).
   const extraGiB = ((kv.stateBytes ?? 0) * concurrency) / GiB + (mtpPresent && !specDisabled ? MTP_RESERVE_GiB : 0);
@@ -121,7 +135,7 @@ export async function makePlan({
   }
 
   const tp = sel.choice?.count ?? 1;
-  const args = applyOverrides(buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype, speculative: mtpPresent ? MTP_SPEC : null }), { set, extra });
+  const args = applyOverrides(buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype, speculative }), { set, extra });
   const { unknown, forbidden } = validateArgs(args, flags, { allowTrustRemoteCode });
   if (forbidden.length) {
     throw new LlmpodError(Codes.INVALID_INPUT, `Argomenti vLLM non consentiti: ${forbidden.join(', ')}`, { hint: 'llmpod gestisce da solo chiave, host, porta e nome servito' });
@@ -129,13 +143,13 @@ export async function makePlan({
   if (unknown.length) warnings.push(`Flag non riconosciuti da vLLM ${'v0.30.0'}: ${unknown.join(', ')}`);
 
   const est = estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp), extraGiB });
-  return syncDerivedFields({
-    model: { id, revision: sha, requestedRevision: revision, gated: summary.gated, license: summary.license, params: summary.params, weightsBytes: wBytes, maxContext: maxCtx ?? null },
+  return refreshNvfp4Warning(syncDerivedFields({
+    model: { id, revision: sha, requestedRevision: revision, gated: summary.gated, license: summary.license, params: summary.params, weightsBytes: wBytes, maxContext: maxCtx ?? null, quantization: quantizationOf(config) },
     context: ctx,
     concurrency,
     vllm: { image: vllmImage, args },
     parsers: { tool: parsers.tool, reasoning: parsers.reasoning },
-    mtp: { present: mtpPresent, enabled: false }, // enabled lo deriva syncDerivedFields dagli argomenti
+    mtp: { present: mtpPresent, enabled: false, draft }, // enabled lo deriva syncDerivedFields dagli argomenti
     // kvDtype: base della stima (fp8 solo se il ripiego ha dimezzato la KV), indipendente dagli override successivi
     estimate: { weightsGiB: est.weightsGiB, downloadBytes: downloadBytes(tree), kvGiB: est.kvGiB, perGpuGiB: est.perGpuGiB, extraGiB: est.extraGiB, kvDtype: kvCacheDtype === 'fp8' ? 'fp8' : 'auto' },
     gpu: sel.choice ? { id: sel.choice.gpuId, count: sel.choice.count } : null,
@@ -148,5 +162,5 @@ export async function makePlan({
     cloud,
     kvCacheDtype,
     warnings,
-  });
+  }));
 }

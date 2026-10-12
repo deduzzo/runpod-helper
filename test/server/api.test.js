@@ -164,6 +164,33 @@ describe('validazione dei parametri', () => {
   });
 });
 
+describe('set di modelli consigliati', () => {
+  it('GET /api/model-sets restituisce versione, data e set con i modelli', async () => {
+    const r = await call('/api/model-sets');
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ version: 1, updatedAt: expect.any(String) });
+    const set = r.json.sets.find((s) => s.id === 'abliterated');
+    expect(set.warning).toMatch(/responsabil/i);
+    expect(set.models[0]).toMatchObject({ id: expect.any(String), revision: expect.stringMatching(/^[0-9a-f]{40}$/), recommendedContext: expect.any(Number) });
+  });
+
+  it('POST /api/plan con <set>/<n>: modello alla revisione verificata e contesto consigliato se non indicato', async () => {
+    runPlan.mockResolvedValue({ plan: fakePlan(), advice: null, advisorError: null, advisorSkipped: null });
+    const { sets } = (await call('/api/model-sets')).json;
+    const m = sets.find((s) => s.id === 'abliterated').models[1];
+    const r = await call('/api/plan', { method: 'POST', body: { model: 'abliterated/2' } });
+    expect(r.status).toBe(200);
+    expect(r.json.setWarning).toBe(sets.find((s) => s.id === 'abliterated').warning);
+    expect(runPlan).toHaveBeenLastCalledWith(expect.objectContaining({ modelRef: `${m.id}@${m.revision}`, context: m.recommendedContext }));
+    await call('/api/plan', { method: 'POST', body: { model: 'abliterated/2', context: 16384 } });
+    expect(runPlan).toHaveBeenLastCalledWith(expect.objectContaining({ context: 16384 }));
+    expect((await call('/api/plan', { method: 'POST', body: { model: 'abliterated/999' } })).status).toBe(400);
+    expect((await call('/api/plan', { method: 'POST', body: { model: `abliterated/${m.key}` } })).status).toBe(200);
+    expect(runPlan).toHaveBeenLastCalledWith(expect.objectContaining({ modelRef: `${m.id}@${m.revision}` }));
+    expect((await call('/api/plan', { method: 'POST', body: { model: 'org/modello' } })).json.setWarning).toBeNull();
+  });
+});
+
 describe('ricerca e piano', () => {
   it('search: righe con parser e pesi, limite rispettato', async () => {
     const r = await call('/api/search?q=modello&limit=5');

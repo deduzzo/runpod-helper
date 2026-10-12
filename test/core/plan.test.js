@@ -82,6 +82,18 @@ describe('makePlan', () => {
     expect(plan.vllm.args.filter((a) => a === '--enable-auto-tool-choice')).toHaveLength(1);
   });
 
+  it('senza chat template ma con --tokenizer-mode della regola (DeepSeek-V4): nessun avviso sul chat template', async () => {
+    const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
+    const model = fx('model-qwen3-coder-30b.json');
+    hf.getModel.mockResolvedValue({ ...model, config: { ...model.config, tokenizer_config: {}, chat_template_jinja: undefined } });
+    hf.getConfig.mockResolvedValue({ ...fx('config-qwen3-coder-30b.json'), architectures: ['DeepseekV4ForCausalLM'], model_type: 'deepseek_v4' });
+    const plan = await makePlan({ hf, runpod, ...base, modelRef: 'apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8' });
+    expect(plan.warnings.join(' ')).not.toMatch(/chat template/);
+    hf.getConfig.mockResolvedValue({ ...fx('config-qwen3-coder-30b.json'), architectures: ['FooForCausalLM'], model_type: 'foo' });
+    const other = await makePlan({ hf, runpod, ...base, modelRef: 'x/Foo' });
+    expect(other.warnings.join(' ')).toMatch(/chat template/);
+  });
+
   it('contesto oltre il massimo del modello viene ridotto con avviso', async () => {
     const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
     const plan = await makePlan({ hf, runpod, ...base, context: 10_000_000 });

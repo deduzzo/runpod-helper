@@ -19,6 +19,7 @@ self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di codin
 |---|---|
 | `llmpod init` | Configurazione guidata: credenziali, datacenter preferito, network volume per i pesi |
 | `llmpod search <query>` | Cerca su Hugging Face modelli adatti all'uso agentico (chat template, tool calling) |
+| `llmpod search --sets` / `--set <id>` | Elenca i set di modelli consigliati / mostra solo i modelli di un set (es. `abliterated`; non è il `--set` di `plan`) |
 | `llmpod plan <modello>` | Stima VRAM (pesi + KV cache + margine), elenca le GPU adatte e te le fa scegliere (`--gpu <id>[x<n>]` per indicarla), propone gli argomenti di `vllm serve` |
 | `llmpod save <nome>` | Salva il piano come profilo riutilizzabile |
 | `llmpod up <profilo>` | Ti propone le GPU disponibili ora, crea il Pod, attende vLLM, esegue uno smoke test con chiamata a strumento |
@@ -201,6 +202,61 @@ llmpod keep <profilo> --max-hours 24 --save   # aggiorna anche il profilo, per i
   `llmpod status` e la pagina mostrano nella colonna "Spegnimento" i limiti correnti letti dal Pod.
 - I Pod avviati con una versione precedente di llmpod hanno un supervisore senza questa funzione: `keep`
   lo rileva e ti dice di eliminare e riavviare il Pod (`llmpod down <profilo>`, poi `llmpod up <profilo>`).
+
+## Set di modelli consigliati
+
+Oltre alla ricerca globale su Hugging Face, llmpod propone **set di modelli già verificati**
+(`data/model-sets.json`). Il primo è **`abliterated`**: modelli senza rifiuti (abliterated, heretic,
+uncensored), molto capaci e adatti ai client di coding agentici (Claude Code, OpenCode, pi, ZCode):
+Qwen3.8-27B (quello in uso, GPTQ e BF16), Qwen3.6-35B-A3B, gpt-oss-120b, MiniMax-M2.7,
+Qwen3.8-Flash-Next, DeepSeek-V4-Flash e V4.1-Flash, GLM-5.3-Flash e GLM-5.3 completo.
+
+> ⚠ Sono modelli con salvaguardie ridotte o rimosse: usali in modo responsabile, nel rispetto della legge
+> e delle licenze, e non esporli a utenti non consapevoli.
+
+```bash
+llmpod search --sets                     # elenco dei set
+llmpod search --set abliterated          # modelli del set: id breve, variante, formato, pesi, MTP/DSpark, contesto
+llmpod search glm --set abliterated      # il testo filtra dentro il set
+llmpod plan abliterated/qwen3.8-27b-gptq # per id breve (stabile): revisione verificata e contesto consigliato
+llmpod plan abliterated/1                # per posizione nell'elenco (comoda, ma cambia se il set viene riordinato)
+llmpod plan abliterated/1 --context 65536
+```
+
+Attenzione ai due `--set`: in `llmpod search --set <id>` indica **il set di modelli**, in `llmpod plan --set
+chiave=valore` imposta invece **un argomento di vLLM** (es. `--set kv-cache-dtype=fp8`). `plan <set>/<n>`,
+`POST /api/plan` con un riferimento al set e `search --set … --json` riportano anche l'avviso del set.
+
+Nell'interfaccia web, pagina **Modelli**: il selettore **Ricerca** passa da "Tutti i modelli" a un set
+consigliato, che compare come schede (formato, pesi, MTP o DSpark, contesto, parser, licenza, note, link alla
+pagina Hugging Face); **Calcola il piano** (uno alla volta) precompila il modello alla revisione verificata e il contesto consigliato e calcola il piano con
+GPU e prezzo correnti. Prezzi e GPU non sono nel set: dipendono dalla disponibilità e li calcola il piano.
+
+**Criteri di inclusione** (verificati sull'API pubblica di Hugging Face, senza token):
+
+- solo formati che vLLM v0.30.0 carica nativamente: safetensors BF16, FP8, AWQ, GPTQ, compressed-tensors,
+  NVFP4 (e l'MXFP4 nativo di gpt-oss) **nella radice** del repository; niente GGUF, MLX, EXL3 o pesi in
+  sottocartelle;
+- architettura presente nel registro dei modelli di vLLM v0.30.0 e tool parser noto in
+  `data/parsers.json` (le regole nuove citano la recipe ufficiale in `source`);
+- a parità di modello, varianti con un **draft head** nei pesi e quindi decodifica speculativa: **MTP**
+  (tensori `mtp.*` o strato nextn `model.layers.<n>.`/`model.language_model.layers.<n>.` nel weight_map) oppure
+  **DSpark** (DeepSeek-V4-Flash-0731 e V4.1: i tensori `mtp.*` sono stadi DSpark, riconosciuti dalle chiavi
+  `dspark_*` della config). llmpod sceglie `--speculative-config` di conseguenza: `{"method":"mtp",…}` oppure
+  l'argomento DSpark della recipe vLLM del modello; il piano lo mostra nella riga MTP/Draft. Le altre
+  raccomandazioni delle recipe (es. `--kv-cache-dtype fp8 --block-size 256` per DeepSeek-V4, `--engram-config`
+  su H100 per V4.1) compaiono come avvisi del piano, non come argomenti automatici; per i modelli NVFP4 il piano
+  avvisa se la GPU scelta non è Blackwell; per ogni famiglia 1–3 varianti (la più piccola di qualità alta e quella piena);
+- repository non gated (metadati verificabili senza token) e pubblicatori diffusi o affidabili.
+
+**Come si aggiorna un set**: per ogni candidato si registrano revisione (sha), `quantization_config` di
+`config.json`, dimensione dei pesi (shard elencati nell'indice), presenza MTP, architettura, contesto
+massimo, parser, licenza; poi si modifica `data/model-sets.json` (aggiornando `updatedAt`) e si esegue
+`npm test`: lo schema è validato al caricamento e un test controlla che i parser di ogni modello siano
+quelli che llmpod sceglie per la sua architettura. Ogni modello ha un id breve stabile (`key`) e il campo `draft` (`mtp`, `dspark` o null); le fixture reali in
+`test/fixtures/hf/model-sets/` permettono il test di coerenza tra `mtp`/`draft` del set e il rilevamento del
+planner. Il campo `revision` fissa la versione verificata: per
+passare a una revisione più recente va ricontrollata e aggiornata.
 
 ## Consulente IA (facoltativo)
 

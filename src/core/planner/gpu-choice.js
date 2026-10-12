@@ -4,6 +4,19 @@ import { argsForCount } from '../pod/body.js';
 
 const ALT_LIMIT = 4;
 
+// GPU Blackwell (kernel FP4 nativi): B200/B300, GB200/GB300, RTX PRO 6000 Blackwell, GeForce RTX 50xx.
+export const isBlackwell = (gpuId) => /\bG?B[23]00\b|blackwell|rtx 50\d0|rtx pro 6000/i.test(String(gpuId ?? ''));
+const NVFP4_WARNING = 'NVFP4:';
+// Avviso NVFP4 sulla GPU scelta (rigenerato a ogni cambio di GPU): fuori da Blackwell vLLM usa kernel di ripiego più lenti.
+export function refreshNvfp4Warning(plan) {
+  if (!Array.isArray(plan.warnings)) return plan;
+  plan.warnings = plan.warnings.filter((w) => !w.startsWith(NVFP4_WARNING));
+  if (plan.model?.quantization === 'nvfp4' && plan.gpu && !isBlackwell(plan.gpu.id)) {
+    plan.warnings.push(`${NVFP4_WARNING} ${plan.gpu.id} non è una GPU Blackwell: vLLM usa kernel FP4 di ripiego, più lenti; per le prestazioni piene scegli B200/B300 o RTX PRO 6000/RTX 5090`);
+  }
+  return plan;
+}
+
 // Voce dell'elenco `plan.options` a partire da un candidato di selectGpus.
 export function optionOf(c) {
   const elsewhere = c.elsewhere ?? [];
@@ -58,7 +71,7 @@ export function applyGpuChoice(plan, wanted) {
   if (plan.vllm?.args) plan.vllm.args = argsForCount(plan.vllm.args, choice.count);
   if (plan.estimate) plan.estimate.perGpuGiB = choice.perGpuGiB;
   if (Array.isArray(plan.warnings)) plan.warnings = plan.warnings.filter((w) => !w.startsWith('NO_GPU_AVAILABLE'));
-  return plan;
+  return refreshNvfp4Warning(plan);
 }
 
 export function optionLabel(o, dataCenterId) {

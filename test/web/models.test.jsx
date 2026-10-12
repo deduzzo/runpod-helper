@@ -71,7 +71,8 @@ describe('pagina Modelli', () => {
   });
 
   it('errore del piano mostrato con il suggerimento', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: { code: 'GATED_MODEL', message: 'Accesso negato a meta-llama/X', hint: 'Richiedi l\'accesso' } }), { status: 400 }));
+    // Una risposta nuova per ogni chiamata (anche il caricamento dei set consigliati legge il corpo).
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ error: { code: 'GATED_MODEL', message: 'Accesso negato a meta-llama/X', hint: 'Richiedi l\'accesso' } }), { status: 400 }));
     render(<Models />);
     fireEvent.change(screen.getByLabelText(/Modello/), { target: { value: 'meta-llama/X' } });
     fireEvent.click(screen.getByRole('button', { name: 'Calcola il piano' }));
