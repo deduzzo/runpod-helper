@@ -22,8 +22,10 @@ Rispondi in italiano. Nessuna spesa senza un "sì" esplicito dell'utente al cost
    **prezzo/h**, disponibilità nel datacenter del volume o altrove (senza volume: pesi scaricati a ogni avvio).
    Fai scegliere all'utente, poi `save_profile { name, model: <model del piano>, gpu: { id, count } }`.
 6. **Anteprima dell'avvio**: `up_preview { profile }`. Mostra le opzioni avviabili ORA con **costo orario e
-   costo massimo** (`maxCostUSD`, secondo le ore massime del watchdog) e i limiti di spegnimento
-   (inattività, ore massime). Chiedi quale GPU e la conferma esplicita del costo.
+   costo massimo** (`maxCostUSD`, secondo le ore massime del watchdog), la **stima dell'avvio** (`startup.text`:
+   minuti di download e caricamento dei pesi e quanto si paga prima che il modello sia pronto; sui modelli > 100 GiB
+   e multi-GPU può superare i 40 minuti) e i limiti di spegnimento (inattività, ore massime). Se `ncclSafe` è vero
+   il Pod parte con `NCCL_P2P_DISABLE=1` (più GPU senza NVLink). Chiedi quale GPU e la conferma esplicita del costo.
 7. **Avvio**: `up { profile, gpu: { id, count, dataCenterId }, confirm: true, expectedHourlyUSD: <hourlyUSD
    dell'opzione scelta> }`. Se l'errore è `PRICE_CHANGED`, mostra il nuovo prezzo e richiedi conferma.
 8. **Avanzamento**: `job_status { jobId }` e `job_events { jobId, since }` ogni 20–30 secondi (fasi: creazione,

@@ -242,7 +242,7 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
       },
     },
     {
-      name: 'up_preview', description: 'Anteprima dell\'avvio (nessuna spesa): rilegge la disponibilità e restituisce le GPU avviabili ora con costo orario e costo massimo secondo il watchdog. Da mostrare all\'utente prima di up.',
+      name: 'up_preview', description: 'Anteprima dell\'avvio (nessuna spesa): rilegge la disponibilità e restituisce le GPU avviabili ora con costo orario, costo massimo secondo il watchdog e stima del tempo e del costo dell\'avvio (startup: download + caricamento dei pesi, pagati prima che il modello sia pronto). Da mostrare all\'utente prima di up.',
       inputSchema: obj({ profile: S.profile, limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Numero massimo di opzioni (predefinito 12, una per GPU×numero×volume, in ordine di costo)' } }, ['profile']),
       run: ({ profile, limit }) => syncOps().upPreview(profile, { limit }),
     },

@@ -18,6 +18,8 @@ import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
 import { applyGpuChoice, vramLabel } from './planner/gpu-choice.js';
 import { podState, STOPPED_STATUSES } from './pod-state.js';
+import { estimateStartup, startupText } from './planner/startup.js';
+import { needsNcclSafe } from './planner/nccl.js';
 import { createLiveOps } from './ops-live.js';
 
 // ACTIVE: Pod acceso (o in avvio). Un Pod EXITED (spento) non è attivo ma ESISTE ancora e costa lo spazio su disco:
@@ -35,6 +37,13 @@ function watchdogNote(wd, hourly) {
   if (!exceedsDefaults(wd)) return '';
   return `; ${idleText(wd.idleMinutes)}, massimo ${wd.maxHours} h → costo massimo ${fmtUSD(wd.maxHours * hourly)}`;
 }
+
+// Stima del tempo e del costo dell'avvio (download + caricamento dei pesi) su un candidato: il Pod costa anche prima di essere pronto.
+function startupOf(profile, c) {
+  const e = estimateStartup({ downloadBytes: profileDownloadBytes(profile), weightsBytes: profile.model?.weightsBytes, count: c.count, hourlyUSD: c.hourly });
+  return { ...e, text: startupText(e) };
+}
+const ncclSafeFor = (profile, c) => profile.ncclSafe !== false && needsNcclSafe(c.id, c.count);
 
 export const AMBIGUOUS_CREATE_WARNING = 'Potrebbe essere stato creato un Pod non ancora visibile: controlla tra un minuto con "llmpod status" o su https://www.runpod.io/console/pods';
 
@@ -311,6 +320,10 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
             // Il watchdog elimina il Pod al più tardi dopo maxHours dall'avvio: è la spesa massima di un avvio.
             maxCostUSD: Math.round(c.hourly * wd.maxHours * 100) / 100,
             affordable: balance >= c.hourly,
+            // Tempo e costo stimati prima che il modello sia pronto (download + caricamento dei pesi).
+            startup: startupOf(profile, c),
+            // NCCL_P2P_DISABLE=1 nel Pod (più GPU senza NVLink)
+            ncclSafe: ncclSafeFor(profile, c),
           })),
           moreOptions: Math.max(0, unique.length - max),
         };
@@ -406,7 +419,8 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const buildBody = (c) => buildPodBody({ profile, candidate: c, apiKey, hfToken: env.HF_TOKEN, minCudaVersion: cfg.minCudaVersion });
     const conf = await confirmCost({
       hourlyUSD: first.hourly, yes: yes || costConfirmed, dryRun, ask,
-      description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`,
+      description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`
+        + `; ${startupOf(profile, first).text}${ncclSafeFor(profile, first) ? '; NCCL_P2P_DISABLE=1 (più GPU senza NVLink)' : ''}`,
     });
     if (conf.dryRun) {
       const body = buildBody(first);

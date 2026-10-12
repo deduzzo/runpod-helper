@@ -4,6 +4,7 @@ import { createOps } from '../../src/core/ops.js';
 import { createEvents } from '../../src/core/events.js';
 import { redact } from '../../src/core/secrets.js';
 import { createWorld, KEY, ACTIVE_ARGS } from '../fixtures/fake-world.js';
+import { estimateStartup, startupText } from '../../src/core/planner/startup.js';
 
 function setup(opts = {}, { answers = [] } = {}) {
   const w = createWorld(opts);
@@ -177,6 +178,21 @@ describe('ops.upPreview e up con GPU scelta e prezzo atteso', () => {
     expect(r.balanceUSD).toBe(50);
     expect(t.runpod.createPod).not.toHaveBeenCalled();
     expect(t.ask).not.toHaveBeenCalled();
+  });
+
+  it('upPreview: stima del tempo e del costo dell\'avvio per ogni opzione, e protezione NCCL', async () => {
+    const t = setup(noPods);
+    const r = await t.ops.upPreview('p');
+    const expected = estimateStartup({ downloadBytes: 40 * 1024 ** 3, weightsBytes: 40 * 1024 ** 3, count: 1, hourlyUSD: 1.5 });
+    expect(r.options[0].startup).toEqual({ ...expected, text: startupText(expected) });
+    expect(r.options[0].ncclSafe).toBe(false); // una sola GPU: nessuna variabile NCCL
+    expect(r.options[1].startup.costUSD).toBeCloseTo((expected.totalSeconds / 3600) * 2.5, 2);
+  });
+
+  it('up: la conferma del costo mostra la stima dell\'avvio', async () => {
+    const t = setup(noPods);
+    await t.ops.up('p', { gpu: { id: 'GPU80', count: 1 }, expectedHourlyUSD: 1.5 });
+    expect(t.ask.mock.calls[0][0]).toMatch(/avvio stimato ~\d+ min \(download ~\d+, caricamento dei pesi ~\d+\) ≈ [\d,]+ \$ prima che il modello sia pronto/);
   });
 
   it('upPreview: al massimo `limit` opzioni, con il numero di quelle escluse', async () => {
