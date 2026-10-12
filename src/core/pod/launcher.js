@@ -5,6 +5,20 @@ import { proxyUrl } from '../runpod.js';
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RANK = { HIGH: 0, MEDIUM: 1, LOW: 2, NONE: 3 };
 const OOM_RE = /out of memory|OutOfMemoryError|insufficient memory|No available memory for the cache blocks/i;
+// Righe che indicano la causa di un errore (non i frame dello stack): servono perché la coda dei log di vLLM contiene
+// spesso solo la traceback dell'APIServer, mentre la causa vera è stampata prima dal processo EngineCore.
+const CAUSE_RE = /(\b[A-Z]\w*(Error|Exception)\b|CUDA error|out of memory|not supported|unsupported|NotImplemented|AssertionError|Errore)/;
+const FRAME_RE = /^\s*(\([\w.-]+ pid=\d+\)\s*)?(File "|\^+\s*$|Traceback \(most recent call last\)|return |raise$)/;
+export function causeLines(lines, max = 8) {
+  const out = [];
+  for (const l of lines) {
+    if (!CAUSE_RE.test(l) || FRAME_RE.test(l)) continue;
+    const clean = l.replace(/^\([\w.-]+ pid=\d+\)\s*/, '').trim();
+    if (!clean || out.includes(clean)) continue;
+    out.push(clean);
+  }
+  return out.slice(-max);
+}
 
 export function rankCandidates({ profile, catalogs, cloud = 'SECURE' }) {
   const key = cloud.toLowerCase();
@@ -105,12 +119,14 @@ export async function waitForReady({ sup, timeoutMs, since: sinceOpt = 0, sleep 
   const deadline = now() + timeoutMs;
   let since = sinceOpt;
   const recent = [];
+  const causes = []; // righe di causa viste durante tutta l'attesa (non solo le ultime 200)
   while (now() < deadline) {
     const logs = await sup.logs(since);
     for (const l of logs?.lines ?? []) {
       since = Math.max(since, l.n);
       recent.push(l.line);
       if (recent.length > 200) recent.shift();
+      if (CAUSE_RE.test(l.line) && !FRAME_RE.test(l.line)) { causes.push(l.line); if (causes.length > 50) causes.shift(); }
       onLog(l.line);
     }
     const st = await sup.status();
@@ -118,10 +134,12 @@ export async function waitForReady({ sup, timeoutMs, since: sinceOpt = 0, sleep 
       onStatus(st);
       if (st.phase === 'ready') return { ...st, logCursor: since };
       if (st.phase === 'error' || st.phase === 'terminating') {
-        const oom = recent.some((l) => OOM_RE.test(l));
-        throw new LlmpodError(oom ? Codes.OOM : Codes.VLLM_ERROR, `vLLM non è partito: ${st.lastError ?? st.terminateReason ?? st.phase}`, {
+        const oom = recent.some((l) => OOM_RE.test(l)) || causes.some((l) => OOM_RE.test(l));
+        const rootCause = causeLines(causes);
+        const cause = rootCause.at(-1);
+        throw new LlmpodError(oom ? Codes.OOM : Codes.VLLM_ERROR, `vLLM non è partito: ${st.lastError ?? st.terminateReason ?? st.phase}${cause ? ` — causa: ${cause.slice(0, 300)}` : ''}`, {
           hint: oom ? 'Memoria GPU insufficiente: riduci --context, usa --set kv-cache-dtype=fp8 o scegli una GPU più grande' : 'Controlla i log mostrati sopra',
-          details: { lastLines: recent.slice(-30), logCursor: since, ...(st.phase === 'terminating' ? { terminating: true } : {}) },
+          details: { lastLines: rootCause.length ? [...rootCause, '…', ...recent.slice(-22)] : recent.slice(-30), rootCause, logCursor: since, ...(st.phase === 'terminating' ? { terminating: true } : {}) },
         });
       }
     }
