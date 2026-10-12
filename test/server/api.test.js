@@ -178,11 +178,16 @@ describe('set di modelli consigliati', () => {
     runPlan.mockResolvedValue({ plan: fakePlan(), advice: null, advisorError: null, advisorSkipped: null });
     const { sets } = (await call('/api/model-sets')).json;
     const m = sets.find((s) => s.id === 'abliterated').models[1];
-    expect((await call('/api/plan', { method: 'POST', body: { model: 'abliterated/2' } })).status).toBe(200);
+    const r = await call('/api/plan', { method: 'POST', body: { model: 'abliterated/2' } });
+    expect(r.status).toBe(200);
+    expect(r.json.setWarning).toBe(sets.find((s) => s.id === 'abliterated').warning);
     expect(runPlan).toHaveBeenLastCalledWith(expect.objectContaining({ modelRef: `${m.id}@${m.revision}`, context: m.recommendedContext }));
     await call('/api/plan', { method: 'POST', body: { model: 'abliterated/2', context: 16384 } });
     expect(runPlan).toHaveBeenLastCalledWith(expect.objectContaining({ context: 16384 }));
     expect((await call('/api/plan', { method: 'POST', body: { model: 'abliterated/999' } })).status).toBe(400);
+    expect((await call('/api/plan', { method: 'POST', body: { model: `abliterated/${m.key}` } })).status).toBe(200);
+    expect(runPlan).toHaveBeenLastCalledWith(expect.objectContaining({ modelRef: `${m.id}@${m.revision}` }));
+    expect((await call('/api/plan', { method: 'POST', body: { model: 'org/modello' } })).json.setWarning).toBeNull();
   });
 });
 

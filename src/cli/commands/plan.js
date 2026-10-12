@@ -24,7 +24,7 @@ async function chooseGpu(ctx, plan) {
 
 export function register(program, getCtx) {
   program.command('plan <modello>')
-    .description('Stima VRAM, sceglie la GPU e gli argomenti di vllm serve (org/modello, org/modello@rev, URL o <set>/<n> di un set consigliato)')
+    .description('Stima VRAM, sceglie la GPU e gli argomenti di vllm serve (org/modello, org/modello@rev, URL, <set>/<n> o <set>/<id> di un set consigliato)')
     .option('--context <n>', 'lunghezza massima del contesto (con <set>/<n>: quello consigliato dal set)', toInt, 65536)
     .option('--concurrency <n>', 'richieste in parallelo previste', toInt, 2)
     .option('--set <chiave=valore>', 'imposta un argomento di vLLM (ripetibile)', collect, [])
@@ -40,6 +40,7 @@ export function register(program, getCtx) {
       const ctx = getCtx();
       // <set>/<n>: modello del set alla revisione verificata; senza --context esplicito vale il contesto consigliato.
       const fromSet = resolveSetRef(ref);
+      if (fromSet) ctx.io.err(`⚠ Set ${fromSet.setId}: ${fromSet.warning}`);
       const modelRef = fromSet ? fromSet.modelRef : ref;
       const context = fromSet && cmd.getOptionValueSource('context') === 'default' ? fromSet.recommendedContext : opts.context;
       const off = attachRenderer(ctx.events, ctx.io);
@@ -70,7 +71,7 @@ export function register(program, getCtx) {
       io.out(`Modello:   ${m.id} @ ${m.revision.slice(0, 12)} (${m.requestedRevision})  licenza: ${m.license ?? '?'}  gated: ${m.gated ? 'sì' : 'no'}`);
       io.out(`Memoria:   pesi ${fmtGiB(plan.estimate.weightsGiB)} · KV cache ${fmtGiB(plan.estimate.kvGiB)} (${plan.context} token × ${plan.concurrency}) · per GPU ${fmtGiB(plan.estimate.perGpuGiB)}${plan.kvCacheDtype ? ' · KV FP8' : ''}`);
       io.out(`Parser:    strumenti ${plan.parsers.tool ?? 'nessuno'} · ragionamento ${plan.parsers.reasoning ?? 'nessuno'}`);
-      if (plan.mtp) io.out(`MTP:       ${mtpLabel(plan.mtp)}`);
+      if (plan.mtp) io.out(`${plan.mtp.draft === 'dspark' ? 'Draft:    ' : 'MTP:      '} ${mtpLabel(plan.mtp)}`);
       io.out('');
       io.out(table(plan.options ?? plan.candidates, [
         { key: 'name', label: 'GPU' },

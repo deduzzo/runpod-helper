@@ -53,11 +53,19 @@ describe('CLI: search --sets / --set', () => {
     expect(out).toMatch(new RegExp(`(^|\\n)\\s*${n}\\s`));
   });
 
-  it('--set --json produce i modelli del set con la posizione', async () => {
+  it('--set --json produce set, avviso e modelli con la posizione', async () => {
     const s = sandbox();
     expect(await s.run(['search', '--set', 'abliterated', '--json'], { hf: hfFake() })).toBe(0);
-    const rows = JSON.parse(s.out());
-    expect(rows[0]).toMatchObject({ n: 1, id: getSet('abliterated').models[0].id, revision: SHA });
+    const out = JSON.parse(s.out());
+    expect(out).toMatchObject({ set: 'abliterated', name: 'Abliterated', warning: getSet('abliterated').warning });
+    expect(out.models[0]).toMatchObject({ n: 1, id: getSet('abliterated').models[0].id, key: getSet('abliterated').models[0].key, revision: SHA });
+  });
+
+  it('la colonna MTP distingue il draft DSpark e con la colonna Id', async () => {
+    const s = sandbox();
+    expect(await s.run(['search', 'deepseek', '--set', 'abliterated'], { hf: hfFake() })).toBe(0);
+    expect(s.out()).toMatch(/apetersson\/DeepSeek-V4-Flash-0731-Abliterated-FP8.*DSpark/);
+    expect(s.out()).toContain('deepseek-v4-flash-0731-fp8');
   });
 
   it('set inesistente → errore con i set disponibili', async () => {
@@ -89,6 +97,15 @@ describe('CLI: plan <set>/<n>', () => {
     expect(plan.model).toMatchObject({ id: m.id, revision: SHA, requestedRevision: SHA });
     expect(plan.context).toBe(m.recommendedContext);
     expect(hf.resolveSha).not.toHaveBeenCalled();
+    expect(s.err()).toContain(getSet('abliterated').warning);
+  });
+
+  it('<set>/<id-breve>: stesso modello, riferimento stabile', async () => {
+    const s = sandbox();
+    s.store.writeConfig({ dataCenterId: 'EU-RO-1' });
+    const m = getSet('abliterated').models[0];
+    expect(await s.run(['plan', `abliterated/${m.key}`, '--no-advisor', '--json'], { hf: hfFake(), runpod: runpodFake() })).toBe(0);
+    expect(JSON.parse(s.out()).model.id).toBe(m.id);
   });
 
   it('--context esplicito vince sul contesto consigliato', async () => {

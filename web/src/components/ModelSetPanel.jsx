@@ -21,7 +21,7 @@ function Fact({ label, children }) {
   );
 }
 
-function ModelCard({ n, model: m, busy, onPlan }) {
+function ModelCard({ n, model: m, busy, disabled, onPlan }) {
   return (
     <li
       className="fade-up group flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400/40 hover:shadow-[0_0_24px_rgba(139,92,246,0.25)] focus-within:border-cyan-400/60"
@@ -29,12 +29,12 @@ function ModelCard({ n, model: m, busy, onPlan }) {
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs text-gray-500">#{n} · {m.family}</p>
+          <p className="text-xs text-gray-500">#{n} · {m.family} · <span className="font-mono">{m.key}</span></p>
           <h3 className="break-all font-mono text-sm text-cyan-100">{m.id}</h3>
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-1">
           <Badge tone="violet">{m.variant}</Badge>
-          {m.mtp ? <Badge tone="green">MTP</Badge> : <Badge tone="gray">senza MTP</Badge>}
+          {m.draft === 'dspark' ? <Badge tone="cyan">DSpark</Badge> : m.mtp ? <Badge tone="green">MTP</Badge> : <Badge tone="gray">senza MTP</Badge>}
         </div>
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
@@ -48,8 +48,11 @@ function ModelCard({ n, model: m, busy, onPlan }) {
       {m.quantization && <p className="text-xs text-gray-400">{m.quantization}</p>}
       <p className="text-sm text-gray-300">{m.notes}</p>
       <div className="mt-auto flex items-center justify-between gap-2">
-        <span className="font-mono text-[11px] text-gray-500" title={m.revision}>@{m.revision.slice(0, 12)}</span>
-        <Button aria-label={`Calcola il piano per ${m.id}`} loading={busy} onClick={() => onPlan(m)}>Calcola il piano</Button>
+        <div className="flex min-w-0 flex-col">
+          <a href={`https://huggingface.co/${encodeURI(m.id)}`} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-300 underline-offset-2 transition hover:text-cyan-200 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60">Pagina su Hugging Face ↗</a>
+          <span className="font-mono text-[11px] text-gray-500" title={m.revision}>@{m.revision.slice(0, 12)}</span>
+        </div>
+        <Button aria-label={`Calcola il piano per ${m.id}`} loading={busy} disabled={disabled} onClick={() => onPlan(m)}>Calcola il piano</Button>
       </div>
     </li>
   );
@@ -68,10 +71,10 @@ export function ModelSetPanel({ set, busy, onPlan }) {
         ? <p className="text-sm text-gray-400">Nessun modello del set corrisponde al filtro</p>
         : (
           <ul className="grid gap-3 md:grid-cols-2">
-            {rows.map(({ n, model }) => <ModelCard key={model.id} n={n} model={model} busy={busy === model.id} onPlan={onPlan} />)}
+            {rows.map(({ n, model }) => <ModelCard key={model.id} n={n} model={model} busy={busy === model.id} disabled={Boolean(busy) && busy !== model.id} onPlan={onPlan} />)}
           </ul>
         )}
-      <p className="text-xs text-gray-500">Prezzo e GPU dipendono dalla disponibilità attuale: il piano li calcola dal catalogo Runpod. Da terminale: llmpod search --set {set.id}</p>
+      <p className="text-xs text-gray-500">Prezzo e GPU dipendono dalla disponibilità attuale: il piano li calcola dal catalogo Runpod. Da terminale: llmpod search --set {set.id} · llmpod plan {set.id}/&lt;id&gt;</p>
     </div>
   );
 }

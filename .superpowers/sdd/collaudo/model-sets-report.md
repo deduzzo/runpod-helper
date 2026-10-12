@@ -22,30 +22,29 @@ registro dei modelli e liste dei parser di vLLM al tag **v0.30.0** (`vllm/model_
   390 px e 1280 px con un server locale su configurazione vuota.
 - Parser (`data/parsers.json`, con `source` della recipe): `DeepseekV4ForCausalLM` → deepseek_v4 /
   deepseek_v4 + `--tokenizer-mode deepseek_v4`; `DeepseekV41ForCausalLM` → deepseek_v41 / deepseek_v41 +
-  `--tokenizer-mode deepseek_v41` e `speculative` DSpark (`{"method":"dspark","num_speculative_tokens":5}`,
-  V4.1 non ha MTP ma un draft DSpark nei tensori `mtp.*`); `Qwen4ExpForConditionalGeneration`
-  (Qwen3.8-Flash-Next) → qwen3_coder / qwen3. Il planner usa `speculative` della regola al posto di
-  `{"method":"mtp",...}` e non avvisa più "nessun chat template" quando la regola imposta `--tokenizer-mode`.
+  `--tokenizer-mode deepseek_v41`; entrambe con l'argomento DSpark della recipe (vedi "Correzioni");
+  `Qwen4ExpForConditionalGeneration` (Qwen3.8-Flash-Next) → qwen3_coder / qwen3. Il planner non avvisa più
+  "nessun chat template" quando la regola imposta `--tokenizer-mode`.
 - README: sezione "Set di modelli consigliati" (uso, criteri, aggiornamento).
 
 ## Set finale
 
-| # | Modello | Famiglia | Variante | Formato | Pesi | MTP | Contesto max | Consigliato | Parser (tool · reasoning) | Licenza |
+| # | Id breve | Modello | Variante | Formato | Pesi | Draft | Contesto max | Consigliato | Parser (tool · reasoning) | Licenza |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | llmfan46/Qwen3.8-27B-Uncensored-Heretic-Native-MTP-Preserved-GPTQ-Int4 | Qwen3.8-27B | GPTQ Int4 | GPTQ | 18,2 GiB | sì | 262.144 | 131.072 | qwen3_coder · qwen3 | apache-2.0 |
-| 2 | llmfan46/Qwen3.8-27B-Uncensored-Heretic-Native-MTP-Preserved | Qwen3.8-27B | BF16 | BF16 | 51,7 GiB | sì | 262.144 | 131.072 | qwen3_coder · qwen3 | apache-2.0 |
-| 3 | llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GPTQ-Int4 | Qwen3.6-35B-A3B | GPTQ Int4 | GPTQ | 20,8 GiB | sì | 262.144 | 131.072 | qwen3_coder · qwen3 | apache-2.0 |
-| 4 | kldzj/gpt-oss-120b-heretic-v2 | gpt-oss-120b | MXFP4 | MXFP4 | 60,8 GiB | no | 131.072 | 131.072 | openai · openai_gptoss | apache-2.0 |
-| 5 | alonsoko/MiniMax-M2.7-BF16-ultra-uncensored-heretic-AWQ-W4A16 | MiniMax-M2.7 | AWQ W4A16 | AWQ | 111,6 GiB | no | 204.800 | 131.072 | minimax_m2 · minimax_m2 | other |
-| 6 | llmfan46/MiniMax-M2.7-BF16-ultra-uncensored-heretic | MiniMax-M2.7 | BF16 | BF16 | 426,0 GiB | no | 204.800 | 131.072 | minimax_m2 · minimax_m2 | other |
-| 7 | dealignai/Qwen3.8-Flash-Next-ABLITERATED-NVFP4 | Qwen3.8-Flash-Next | NVFP4 | NVFP4 | 125,9 GiB | sì | 262.144 | 131.072 | qwen3_coder · qwen3 | other |
-| 8 | dealignai/Qwen3.8-Flash-Next-UNCENSORED-FP8 | Qwen3.8-Flash-Next | FP8 | FP8 | 172,8 GiB | sì | 262.144 | 131.072 | qwen3_coder · qwen3 | apache-2.0 |
-| 9 | apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8 | DeepSeek-V4-Flash | FP8 (0731) | FP8 | 155,4 GiB | sì | 1.048.576 | 131.072 | deepseek_v4 · deepseek_v4 | mit |
-| 10 | dealignai/DeepSeek-V4.1-Flash-UNCENSORED-FP8 | DeepSeek-V4.1-Flash | FP8 | FP8 | 475,3 GiB | sì | 1.048.576 | 131.072 | deepseek_v41 · deepseek_v41 | mit |
-| 11 | dealignai/GLM-5.3-Flash-UNCENSORED-NVFP4 | GLM-5.3-Flash | NVFP4 | NVFP4 | 181,3 GiB | sì | 1.048.576 | 131.072 | glm47 · glm47 | mit |
-| 12 | dealignai/GLM-5.3-Flash-UNCENSORED-FP8 | GLM-5.3-Flash | FP8 | FP8 | 305,8 GiB | sì | 1.048.576 | 131.072 | glm47 · glm47 | mit |
-| 13 | dealignai/GLM-5.3-UNCENSORED-NVFP4 | GLM-5.3 | NVFP4 | NVFP4 | 432,9 GiB | sì | 1.048.576 | 65.536 | glm47 · glm47 | mit |
-| 14 | dealignai/GLM-5.3-UNCENSORED-FP8 | GLM-5.3 | FP8 | FP8 | 703,7 GiB | sì | 1.048.576 | 65.536 | glm47 · glm47 | mit |
+| 1 | qwen3.8-27b-gptq | llmfan46/Qwen3.8-27B-Uncensored-Heretic-Native-MTP-Preserved-GPTQ-Int4 | GPTQ Int4 | gptq | 18,2 GiB | MTP | 262.144 | 131.072 | qwen3_coder · qwen3 | apache-2.0 |
+| 2 | qwen3.8-27b-bf16 | llmfan46/Qwen3.8-27B-Uncensored-Heretic-Native-MTP-Preserved | BF16 | bf16 | 51,7 GiB | MTP | 262.144 | 131.072 | qwen3_coder · qwen3 | apache-2.0 |
+| 3 | qwen3.6-35b-a3b-gptq | llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GPTQ-Int4 | GPTQ Int4 | gptq | 20,8 GiB | MTP | 262.144 | 131.072 | qwen3_coder · qwen3 | apache-2.0 |
+| 4 | gpt-oss-120b-mxfp4 | kldzj/gpt-oss-120b-heretic-v2 | MXFP4 | mxfp4 | 60,8 GiB | — | 131.072 | 131.072 | openai · openai_gptoss | apache-2.0 |
+| 5 | minimax-m2.7-awq | alonsoko/MiniMax-M2.7-BF16-ultra-uncensored-heretic-AWQ-W4A16 | AWQ W4A16 | compressed-tensors | 111,6 GiB | — | 204.800 | 131.072 | minimax_m2 · minimax_m2 | other |
+| 6 | minimax-m2.7-bf16 | llmfan46/MiniMax-M2.7-BF16-ultra-uncensored-heretic | BF16 | bf16 | 426,0 GiB | — | 204.800 | 131.072 | minimax_m2 · minimax_m2 | other |
+| 7 | qwen3.8-flash-next-nvfp4 | dealignai/Qwen3.8-Flash-Next-ABLITERATED-NVFP4 | NVFP4 | nvfp4 | 125,9 GiB | MTP | 262.144 | 131.072 | qwen3_coder · qwen3 | other |
+| 8 | qwen3.8-flash-next-fp8 | dealignai/Qwen3.8-Flash-Next-UNCENSORED-FP8 | FP8 | fp8 | 172,8 GiB | MTP | 262.144 | 131.072 | qwen3_coder · qwen3 | apache-2.0 |
+| 9 | deepseek-v4-flash-0731-fp8 | apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8 | FP8 (0731) | fp8 | 155,4 GiB | DSpark | 1.048.576 | 131.072 | deepseek_v4 · deepseek_v4 | mit |
+| 10 | deepseek-v4.1-flash-fp8 | dealignai/DeepSeek-V4.1-Flash-UNCENSORED-FP8 | FP8 | fp8 | 475,3 GiB | DSpark | 1.048.576 | 131.072 | deepseek_v41 · deepseek_v41 | mit |
+| 11 | glm-5.3-flash-nvfp4 | dealignai/GLM-5.3-Flash-UNCENSORED-NVFP4 | NVFP4 | nvfp4 | 181,3 GiB | MTP | 1.048.576 | 131.072 | glm47 · glm47 | mit |
+| 12 | glm-5.3-flash-fp8 | dealignai/GLM-5.3-Flash-UNCENSORED-FP8 | FP8 | fp8 | 305,8 GiB | MTP | 1.048.576 | 131.072 | glm47 · glm47 | mit |
+| 13 | glm-5.3-nvfp4 | dealignai/GLM-5.3-UNCENSORED-NVFP4 | NVFP4 | nvfp4 | 432,9 GiB | MTP | 1.048.576 | 65.536 | glm47 · glm47 | mit |
+| 14 | glm-5.3-fp8 | dealignai/GLM-5.3-UNCENSORED-FP8 | FP8 | fp8 | 703,7 GiB | MTP | 1.048.576 | 65.536 | glm47 · glm47 | mit |
 
 ## Candidati valutati
 
@@ -126,11 +125,47 @@ EXL3 (Infatoshi GLM-5.3-UNCENSORED-EXL3, MikeRoz …-exl3, dealignai DeepSeek-V4
 NInfer e "ds4" (formati non vLLM), LoRA/PEFT. Kimi K2.x/K3 e Mistral/Devstral: nessuna variante
 abliterated safetensors adatta (vedi tabella). MiMo-V2.6 non considerato: la recipe richiede vLLM 0.31.0.
 
+## Correzioni dopo la revisione
+
+Branch riallineato a origin/main con rebase (nessun conflitto; `syncDerivedFields` di main con `mtp.tokens` e la
+nuova `mtpLabel` conservati ed estesi).
+
+1. **DSpark (critico).** DeepSeek-V4-Flash-0731 e V4.1 hanno tensori `mtp.*` che sono stadi DSpark (config con
+   `dspark_block_size`, `dspark_target_layer_ids`… ; niente e_proj/h_proj/enorm/hnorm). Nuovo `draftKind(config,
+   weightMap)` in `vram.js`: `dspark` se config o text_config hanno chiavi `dspark_*`, altrimenti `mtp`. Il planner usa
+   il campo `dspark` della regola (recipe V4-Flash, variante 0731: `{"method":"dspark","num_speculative_tokens":7,
+   "draft_sample_method":"probabilistic"}`; recipe V4.1 su NVIDIA: `{"method":"dspark","num_speculative_tokens":5,
+   "draft_sample_method":"probabilistic","rejection_sample_method":"block","enable_adaptive_verification":true}`),
+   in mancanza `DSPARK_SPEC` (valore 0731). Note del #9 corrette ("draft DSpark").
+2. **GLM-5.3-Flash.** `hasMtp` accetta anche `model.language_model.layers.<num_hidden_layers>.`; la recipe GLM-5.3-Flash
+   usa `{"method":"mtp",…}` (vLLM v0.30.0 registra Glm5NextMTPModel), quindi resta `mtp`.
+   Fixture reali per tutti i 14 modelli (`test/fixtures/hf/model-sets/`: config.json completo ed estratto del
+   weight_map con prime chiavi, chiavi `mtp.*` e dello strato nextn) e test di coerenza: `mtp` e `draft` del set ==
+   `hasMtp`/`draftKind` del planner su ciascuna fixture.
+3. #5 MiniMax-M2.7 AWQ: `format: "compressed-tensors"`, variante "AWQ W4A16".
+4. Campo `draft` (`mtp`/`dspark`/null) nel set e in `plan.mtp.draft` (derivato anche da `method` di
+   `--speculative-config`); `mtpLabel` → "DSpark attivo (… N token per passo)" / "draft DSpark presente nei pesi ma
+   disattivato"; CLI e PlanView mostrano la riga "Draft:" per DSpark; colonna MTP di `search --set` e badge delle
+   schede: "DSpark".
+5. Avvisi delle recipe nelle regole (non argomenti automatici): V4 `--kv-cache-dtype fp8`, `--block-size 256`
+   (e `--trust-remote-code` solo con `--allow-trust-remote-code`); V4.1 su H100 `--engram-config '{"cpu_offload":true}'`
+   e `--max-num-batched-tokens 4096`, verifica adattiva disattivata su AMD.
+6. Avviso NVFP4 (quant_algo NVFP4 o formato nvfp4-*) se la GPU scelta non è Blackwell (B200/B300/GB200/GB300,
+   RTX PRO 6000, RTX 50xx); `plan.model.quantization`; l'avviso si rigenera in `applyGpuChoice`.
+7. Avviso del set in `plan <set>/<n>` (stderr), `POST /api/plan` (`setWarning`) e `search --set … --json`
+   (ora `{ set, name, warning, models }`).
+8. Id breve stabile `key` per ogni modello (validato, unico, non solo cifre): `plan <set>/<key>` oltre a
+   `<set>/<n>` (posizionale, documentato); colonna "Id" in `search --set`.
+9. README: i due `--set` (set di modelli in `search`, argomento vLLM in `plan`).
+10. Web: durante un calcolo gli altri "Calcola il piano" (schede e modulo) sono disabilitati; link
+    "Pagina su Hugging Face" (`https://huggingface.co/${encodeURI(id)}`, target _blank, rel="noopener noreferrer").
+11. README: DSpark, criteri del draft head, avvisi delle recipe, fixture di coerenza.
+
 ## Verifica
 
-- `npm test`: 75 file, 902 test JS verdi + 31 test Python OK.
+- `npm test`: 77 file, 925 test JS verdi + 31 test Python OK (dopo il rebase e le correzioni).
 - `npm run build:web`: verde.
-- Nuovi test: `test/core/model-sets.test.js` (schema, dati reali, parser coerenti con parsers.json, MTP per
+- Nuovi test: `test/core/model-sets-drafts.test.js` (fixture reali: coerenza set/planner, DSpark 0731 e V4.1, prefisso GLM-Flash, avvisi recipe, NVFP4), `test/core/model-sets.test.js` (schema, dati reali, parser coerenti con parsers.json, MTP per
   famiglia, riferimenti `<set>/<n>`), `test/cli/cli-model-sets.test.js`, `test/web/model-sets.test.jsx`,
   casi in `test/core/vllm-args.test.js`, `test/core/plan.test.js`, `test/server/api.test.js`.
 
@@ -138,8 +173,8 @@ abliterated safetensors adatta (vedi tabella). MiMo-V2.6 non considerato: la rec
 
 - La stima della KV cache di DeepSeek-V4/V4.1 (attenzione compressa, `head_dim` 512 con 1 testa KV) e di
   qwen4_exp usa la formula generica del planner: non verificata su questi modelli, potrebbe sovrastimare.
-- DeepSeek-V4.1-Flash: la recipe usa anche opzioni di DSpark (verifica adattiva) e l'immagine nightly al
-  lancio; in v0.30.0 architettura, tokenizer e parser ci sono, ma l'avvio reale non è stato provato.
+- DeepSeek-V4/V4.1 con DSpark: argomenti presi dalle recipe ufficiali e architettura/draft presenti nel registro di
+  vLLM v0.30.0 (DSparkDraftModel, DSparkV41DraftModel), ma l'avvio reale non è stato provato.
 - NVFP4 (ModelOpt): nativo su Blackwell; su Hopper vLLM usa kernel di ripiego più lenti (indicato nelle note).
 - Le varianti orcarouter (le più scaricate per GLM-5.3-Flash e Qwen3.8-27B) sono gated "auto": escluse
   perché non verificabili senza token; con HF_TOKEN e accesso approvato restano utilizzabili per id.

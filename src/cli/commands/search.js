@@ -21,7 +21,7 @@ function showSets(ctx, json) {
 function showSet(ctx, id, query, json) {
   const set = getSet(id);
   const rows = filterSetModels(set, query);
-  if (json) return ctx.io.raw(JSON.stringify(rows.map(({ n, model }) => ({ n, ...model })), null, 2));
+  if (json) return ctx.io.raw(JSON.stringify({ set: set.id, name: set.name, warning: set.warning, models: rows.map(({ n, model }) => ({ n, ...model })) }, null, 2));
   ctx.io.out(`Set "${set.name}" (${set.id}): ${set.description}`);
   ctx.io.err(`⚠ ${set.warning}`);
   ctx.io.out('');
@@ -32,14 +32,15 @@ function showSet(ctx, id, query, json) {
   ctx.io.out(table(rows, [
     { label: '#', align: 'right', value: (r) => r.n },
     { label: 'Modello', value: (r) => r.model.id },
+    { label: 'Id', value: (r) => r.model.key },
     { label: 'Variante', value: (r) => r.model.variant },
     { label: 'Formato', value: (r) => r.model.format.toUpperCase() },
     { label: 'Pesi', align: 'right', value: (r) => fmtGiB(r.model.weightsGiB) },
-    { label: 'MTP', value: (r) => (r.model.mtp ? 'sì' : 'no') },
+    { label: 'MTP', value: (r) => (r.model.draft === 'dspark' ? 'DSpark' : r.model.mtp ? 'sì' : 'no') },
     { label: 'Contesto', align: 'right', value: (r) => fmtTokens(r.model.context) },
     { label: 'Consigliato', align: 'right', value: (r) => fmtTokens(r.model.recommendedContext) },
   ]));
-  ctx.io.out(`\nCalcola costo e GPU con: llmpod plan ${set.id}/<n>  (es. llmpod plan ${set.id}/${rows[0].n}: revisione verificata e contesto consigliato)`);
+  ctx.io.out(`\nCalcola costo e GPU con: llmpod plan ${set.id}/<n> oppure ${set.id}/<id>  (es. llmpod plan ${set.id}/${rows[0].model.key}: revisione verificata e contesto consigliato; <n> è la posizione nell'elenco e può cambiare, <id> no)`);
   return undefined;
 }
 

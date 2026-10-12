@@ -13,8 +13,9 @@ const sets = {
   sets: [{
     id: 'abliterated', name: 'Abliterated', description: 'Modelli senza rifiuti per il coding agentico', warning: 'Salvaguardie ridotte: uso responsabile',
     models: [
-      { id: 'llmfan46/Qwen3.8-27B-GPTQ', revision: SHA1, family: 'Qwen3.8-27B', variant: 'GPTQ Int4', format: 'gptq', quantization: 'GPTQ 4 bit', weightsGiB: 18.2, mtp: true, context: 262144, toolParser: 'qwen3_coder', reasoningParser: 'qwen3', license: 'apache-2.0', notes: 'Il modello in uso', recommendedContext: 131072, architecture: 'Qwen3_5ForConditionalGeneration', modelType: 'qwen3_5', gated: false },
-      { id: 'dealignai/GLM-5.3-Flash-UNCENSORED-FP8', revision: SHA2, family: 'GLM-5.3-Flash', variant: 'FP8', format: 'fp8', quantization: 'FP8', weightsGiB: 305.8, mtp: false, context: 1048576, toolParser: 'glm47', reasoningParser: 'glm47', license: 'mit', notes: 'Grande', recommendedContext: 98304, architecture: 'Glm5NextForConditionalGeneration', modelType: 'glm5_next', gated: false },
+      { id: 'llmfan46/Qwen3.8-27B-GPTQ', key: 'qwen3.8-27b-gptq', revision: SHA1, family: 'Qwen3.8-27B', variant: 'GPTQ Int4', format: 'gptq', quantization: 'GPTQ 4 bit', weightsGiB: 18.2, mtp: true, draft: 'mtp', context: 262144, toolParser: 'qwen3_coder', reasoningParser: 'qwen3', license: 'apache-2.0', notes: 'Il modello in uso', recommendedContext: 131072, architecture: 'Qwen3_5ForConditionalGeneration', modelType: 'qwen3_5', gated: false },
+      { id: 'dealignai/GLM-5.3-Flash-UNCENSORED-FP8', key: 'glm-5.3-flash-fp8', revision: SHA2, family: 'GLM-5.3-Flash', variant: 'FP8', format: 'fp8', quantization: 'FP8', weightsGiB: 305.8, mtp: false, draft: null, context: 1048576, toolParser: 'glm47', reasoningParser: 'glm47', license: 'mit', notes: 'Grande', recommendedContext: 98304, architecture: 'Glm5NextForConditionalGeneration', modelType: 'glm5_next', gated: false },
+      { id: 'apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8', key: 'deepseek-v4-flash-0731-fp8', revision: '7d02640c72a2c8127f116d3d1933ddfec5e4c0fa', family: 'DeepSeek-V4-Flash', variant: 'FP8 (0731)', format: 'fp8', quantization: null, weightsGiB: 155.4, mtp: true, draft: 'dspark', context: 1048576, toolParser: 'deepseek_v4', reasoningParser: 'deepseek_v4', license: 'mit', notes: 'Draft nei pesi', recommendedContext: 131072, architecture: 'DeepseekV4ForCausalLM', modelType: 'deepseek_v4', gated: false },
     ],
   }],
 };
@@ -43,11 +44,18 @@ describe('pagina Modelli: set consigliati', () => {
     expect(screen.queryByLabelText('Cerca un modello')).toBeNull();
     expect(screen.getByText('Salvaguardie ridotte: uso responsabile')).toBeTruthy();
     const cards = screen.getAllByRole('listitem');
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(3);
     expect(within(cards[0]).getByText('llmfan46/Qwen3.8-27B-GPTQ')).toBeTruthy();
     expect(within(cards[0]).getByText('18,2 GiB')).toBeTruthy();
     expect(within(cards[0]).getByText('MTP')).toBeTruthy();
     expect(within(cards[1]).queryByText('MTP')).toBeNull();
+    expect(within(cards[2]).getByText('DSpark')).toBeTruthy();
+    expect(within(cards[2]).queryByText('MTP')).toBeNull();
+    const link = within(cards[0]).getByRole('link', { name: /Hugging Face/ });
+    expect(link.getAttribute('href')).toBe('https://huggingface.co/llmfan46/Qwen3.8-27B-GPTQ');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(within(cards[2]).getByText(/deepseek-v4-flash-0731-fp8/)).toBeTruthy();
     expect(fetchMock.mock.calls.some(([p]) => String(p).startsWith('/api/search'))).toBe(false);
   });
 
@@ -74,6 +82,19 @@ describe('pagina Modelli: set consigliati', () => {
     expect(screen.getByLabelText('Contesto').value).toBe('98304');
     const call = fetchMock.mock.calls.find(([p, i]) => p === '/api/plan' && i?.method === 'POST');
     expect(JSON.parse(call[1].body)).toMatchObject({ model: `dealignai/GLM-5.3-Flash-UNCENSORED-FP8@${SHA2}`, context: 98304 });
+  });
+
+  it('mentre un piano è in calcolo gli altri "Calcola il piano" sono disabilitati', async () => {
+    let release;
+    mockApi({ 'GET /api/model-sets': sets, 'POST /api/plan': () => new Promise((r) => { release = () => r({ plan, planId: 'p1', advice: null, advisorError: null, advisorSkipped: null }); }) });
+    render(<Models />);
+    await chooseSet();
+    fireEvent.click(screen.getByRole('button', { name: 'Calcola il piano per dealignai/GLM-5.3-Flash-UNCENSORED-FP8' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Calcola il piano per llmfan46/Qwen3.8-27B-GPTQ' }).disabled).toBe(true));
+    expect(screen.getByRole('button', { name: 'Calcola il piano' }).disabled).toBe(true);
+    release();
+    await screen.findByText('Piano calcolato');
+    expect(screen.getByRole('button', { name: 'Calcola il piano per llmfan46/Qwen3.8-27B-GPTQ' }).disabled).toBe(false);
   });
 
   it('se i set non si caricano resta la ricerca globale', async () => {

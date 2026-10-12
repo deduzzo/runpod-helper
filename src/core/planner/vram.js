@@ -86,11 +86,20 @@ export function hasMtp(config, weightMap) {
     const keys = Object.keys(weightMap);
     if (keys.some((k) => /(^|\.)mtp\./.test(k))) return true;
     if ((c.num_nextn_predict_layers ?? 0) > 0 && c.num_hidden_layers > 0) {
-      return keys.some((k) => k.startsWith(`model.layers.${c.num_hidden_layers}.`));
+      // Strato nextn oltre l'ultimo: model.layers.<n>. (GLM-5.3, DeepSeek-V3) o model.language_model.layers.<n>. (GLM-5.3-Flash, multimodale).
+      return keys.some((k) => k.startsWith(`model.layers.${c.num_hidden_layers}.`) || k.startsWith(`model.language_model.layers.${c.num_hidden_layers}.`));
     }
     return false;
   }
   return declared;
+}
+
+// Tipo di draft head nei pesi: 'dspark' se la config (o text_config) ha chiavi dspark_* (DeepSeek-V4-Flash-0731 e V4.1: i tensori
+// mtp.* sono stadi DSpark, non un modulo MTP), 'mtp' per un draft MTP/nextn, null se assente.
+export function draftKind(config, weightMap) {
+  if (!hasMtp(config, weightMap)) return null;
+  const keys = [...Object.keys(config ?? {}), ...Object.keys(config?.text_config ?? {})];
+  return keys.some((k) => k.startsWith('dspark_')) ? 'dspark' : 'mtp';
 }
 
 // In quante GPU si ripartisce davvero la KV cache: con MLA la cache latente non è sharded;

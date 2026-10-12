@@ -74,7 +74,7 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     ctx.store.writeJson('last-plan.json', r.plan);
     state.lastAdvice = r.advice && r.advice.accepted.length ? r.advice : null;
     state.lastAdvicePlanId = state.lastAdvice ? planId(r.plan) : null;
-    return { plan: r.plan, planId: planId(r.plan), advice: adviceView(r.advice), advisorError: r.advisorError ? redact(String(r.advisorError)) : r.advisorError, advisorSkipped: r.advisorSkipped };
+    return { plan: r.plan, planId: planId(r.plan), advice: adviceView(r.advice), advisorError: r.advisorError ? redact(String(r.advisorError)) : r.advisorError, advisorSkipped: r.advisorSkipped, setWarning: fromSet?.warning ?? null };
   }));
 
   add('POST', '/api/plan/apply-advice', json(async ({ req }) => {

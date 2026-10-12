@@ -3,6 +3,8 @@ import fs from 'node:fs';
 export const VLLM_VERSION = 'v0.30.0';
 // Decodifica speculativa con il draft head MTP del modello (recipe vLLM per Qwen3.5); valore JSON, un solo argomento.
 export const MTP_SPEC = '{"method":"mtp","num_speculative_tokens":1}';
+// Draft DSpark nei pesi (config con chiavi dspark_*) senza indicazione della regola: valore della recipe vLLM DeepSeek-V4-Flash (0731).
+export const DSPARK_SPEC = '{"method":"dspark","num_speculative_tokens":7,"draft_sample_method":"probabilistic"}';
 const dataFile = (name) => new URL(`../../../data/${name}`, import.meta.url);
 const RULES = JSON.parse(fs.readFileSync(dataFile('parsers.json'), 'utf8')).rules;
 const ALWAYS_FORBIDDEN = ['--api-key', '--host', '--port', '--allowed-local-media-path', '--served-model-name', '--config'];
@@ -19,7 +21,7 @@ export function detectParsers({ modelId, config }) {
   const rule = RULES.find((r) => matches(r, modelId, c));
   if (!rule) {
     return {
-      tool: null, reasoning: null, extraArgs: [], speculative: null,
+      tool: null, reasoning: null, extraArgs: [], dspark: null,
       warnings: [`UNKNOWN_TOOL_PARSER: nessun tool-call parser noto per ${modelId} (${(c.architectures ?? []).join(', ') || c.model_type}); usa --set tool-call-parser=<nome>`],
     };
   }
@@ -27,8 +29,8 @@ export function detectParsers({ modelId, config }) {
     tool: rule.tool ?? null,
     reasoning: rule.reasoning ?? null,
     extraArgs: rule.extraArgs ?? [],
-    // Decodifica speculativa propria dell'architettura (es. DSpark di DeepSeek-V4.1) al posto di MTP_SPEC; null = MTP_SPEC.
-    speculative: rule.speculative ?? null,
+    // --speculative-config della recipe quando il draft nei pesi è DSpark (DeepSeek-V4/V4.1); null = DSPARK_SPEC.
+    dspark: rule.dspark ?? null,
     warnings: rule.warning ? [rule.warning] : [],
   };
 }

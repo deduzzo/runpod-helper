@@ -6,8 +6,8 @@ import { detectParsers } from '../../src/core/planner/vllm-args.js';
 const real = JSON.parse(fs.readFileSync(new URL('../../data/model-sets.json', import.meta.url), 'utf8'));
 const SHA = 'aedc6ce29b7b0c84c7fadfb59fb8524357f8014c';
 const model = (over = {}) => ({
-  id: 'org/Modello-GPTQ', revision: SHA, family: 'Famiglia', variant: 'GPTQ Int4', format: 'gptq', quantization: 'GPTQ 4 bit',
-  weightsGiB: 18.2, mtp: true, context: 262144, toolParser: 'qwen3_coder', reasoningParser: 'qwen3', license: 'apache-2.0',
+  id: 'org/Modello-GPTQ', key: 'modello-gptq', revision: SHA, family: 'Famiglia', variant: 'GPTQ Int4', format: 'gptq', quantization: 'GPTQ 4 bit',
+  weightsGiB: 18.2, mtp: true, draft: 'mtp', context: 262144, toolParser: 'qwen3_coder', reasoningParser: 'qwen3', license: 'apache-2.0',
   notes: 'nota', recommendedContext: 131072, architecture: 'Qwen3_5ForConditionalGeneration', modelType: 'qwen3_5', gated: false, ...over,
 });
 const doc = (models = [model()], over = {}) => ({
@@ -41,7 +41,12 @@ describe('validazione dello schema dei set', () => {
     ['mtp non booleano', doc([model({ mtp: 'sì' })]), /mtp/],
     ['contesto consigliato oltre il massimo', doc([model({ recommendedContext: 524288 })]), /recommendedContext/],
     ['tool parser mancante', doc([model({ toolParser: null })]), /toolParser/],
-    ['modello duplicato', doc([model(), model()]), /duplicat/],
+    ['modello duplicato', doc([model(), model({ key: 'altro' })]), /duplicat/],
+    ['id breve duplicato', doc([model(), model({ id: 'org/Altro' })]), /key.*duplicat/],
+    ['id breve numerico (si confonderebbe con la posizione)', doc([model({ key: '12' })]), /key/],
+    ['draft sconosciuto', doc([model({ draft: 'eagle' })]), /draft/],
+    ['draft senza mtp', doc([model({ mtp: false, draft: 'mtp' })]), /draft/],
+    ['mtp senza draft', doc([model({ draft: null })]), /draft/],
   ])('%s → errore', (_, d, re) => {
     const p = problems(d);
     expect(p.length).toBeGreaterThan(0);
@@ -80,6 +85,15 @@ describe('set abliterated (dati verificati)', () => {
     }
   });
 
+  it('MiniMax AWQ: formato compressed-tensors (AWQ è la variante); DeepSeek-V4-Flash-0731 ha draft DSpark', () => {
+    const awq = set.models.find((m) => m.id === 'alonsoko/MiniMax-M2.7-BF16-ultra-uncensored-heretic-AWQ-W4A16');
+    expect(awq).toMatchObject({ format: 'compressed-tensors', variant: 'AWQ W4A16' });
+    const v4 = set.models.find((m) => m.id === 'apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8');
+    expect(v4.draft).toBe('dspark');
+    expect(v4.notes).toMatch(/DSpark/);
+    expect(v4.notes).not.toMatch(/MTP nativo/);
+  });
+
   it('per ogni famiglia con MTP disponibile la variante proposta lo ha', () => {
     for (const f of ['GLM-5.3', 'GLM-5.3-Flash', 'DeepSeek-V4.1-Flash', 'DeepSeek-V4-Flash', 'Qwen3.8-27B', 'Qwen3.8-Flash-Next', 'Qwen3.6-35B-A3B']) {
       expect(set.models.filter((m) => m.family === f).every((m) => m.mtp), f).toBe(true);
@@ -111,13 +125,19 @@ describe('listSets, getSet, filterSetModels', () => {
 describe('resolveSetRef', () => {
   it('<set>/<n> → id@revisione verificata e contesto consigliato (n parte da 1)', () => {
     const m = getSet('abliterated').models[0];
-    expect(resolveSetRef('abliterated/1')).toEqual({ setId: 'abliterated', n: 1, model: m, modelRef: `${m.id}@${m.revision}`, recommendedContext: m.recommendedContext });
+    expect(resolveSetRef('abliterated/1')).toEqual({ setId: 'abliterated', n: 1, model: m, modelRef: `${m.id}@${m.revision}`, recommendedContext: m.recommendedContext, warning: getSet('abliterated').warning });
   });
 
   it('un id Hugging Face normale non è un riferimento a un set', () => {
     expect(resolveSetRef('Qwen/Qwen3.8-27B')).toBeNull();
     expect(resolveSetRef('org/1')).toBeNull();
     expect(resolveSetRef('https://huggingface.co/abliterated/1')).toBeNull();
+  });
+
+  it('<set>/<id-breve> è stabile: stesso risultato della posizione', () => {
+    const m = getSet('abliterated').models[2];
+    expect(resolveSetRef(`abliterated/${m.key}`)).toEqual(resolveSetRef('abliterated/3'));
+    expect(resolveSetRef('abliterated/non-esiste')).toBeNull();
   });
 
   it('numero fuori intervallo → INVALID_INPUT con suggerimento', () => {

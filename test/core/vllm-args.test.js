@@ -37,20 +37,22 @@ describe('detectParsers', () => {
   });
 
   // Recipe vLLM ufficiali (models/deepseek-ai/DeepSeek-V4-Flash.yaml, DeepSeek-V4.1-Flash.yaml, models/Qwen/Qwen3.8-Flash-Next.yaml).
-  it('DeepSeek-V4: parser deepseek_v4 e --tokenizer-mode deepseek_v4; MTP con il metodo predefinito', () => {
+  it('DeepSeek-V4: parser deepseek_v4, --tokenizer-mode deepseek_v4, DSpark della recipe V4-Flash (0731) e avviso', () => {
     const p = detectParsers({ modelId: 'apetersson/DeepSeek-V4-Flash-0731-Abliterated-FP8', config: cfg(['DeepseekV4ForCausalLM'], 'deepseek_v4') });
-    expect(p).toMatchObject({ tool: 'deepseek_v4', reasoning: 'deepseek_v4', extraArgs: ['--tokenizer-mode', 'deepseek_v4'], speculative: null });
+    expect(p).toMatchObject({ tool: 'deepseek_v4', reasoning: 'deepseek_v4', extraArgs: ['--tokenizer-mode', 'deepseek_v4'] });
+    expect(JSON.parse(p.dspark)).toEqual({ method: 'dspark', num_speculative_tokens: 7, draft_sample_method: 'probabilistic' });
+    expect(p.warnings.join(' ')).toMatch(/--block-size 256/);
   });
 
-  it('DeepSeek-V4.1: parser deepseek_v41, --tokenizer-mode deepseek_v41 e draft DSpark al posto di MTP', () => {
+  it('DeepSeek-V4.1: parser deepseek_v41, --tokenizer-mode deepseek_v41 e DSpark della recipe V4.1', () => {
     const p = detectParsers({ modelId: 'dealignai/DeepSeek-V4.1-Flash-UNCENSORED-FP8', config: cfg(['DeepseekV41ForCausalLM'], 'deepseek_v41') });
     expect(p).toMatchObject({ tool: 'deepseek_v41', reasoning: 'deepseek_v41', extraArgs: ['--tokenizer-mode', 'deepseek_v41'] });
-    expect(JSON.parse(p.speculative)).toMatchObject({ method: 'dspark', num_speculative_tokens: 5 });
+    expect(JSON.parse(p.dspark)).toMatchObject({ method: 'dspark', num_speculative_tokens: 5, rejection_sample_method: 'block', enable_adaptive_verification: true });
   });
 
   it('Qwen3.8-Flash-Next (qwen4_exp): qwen3_coder / qwen3', () => {
     expect(detectParsers({ modelId: 'dealignai/Qwen3.8-Flash-Next-ABLITERATED-NVFP4', config: cfg(['Qwen4ExpForConditionalGeneration'], 'qwen4_exp') }))
-      .toMatchObject({ tool: 'qwen3_coder', reasoning: 'qwen3', speculative: null });
+      .toMatchObject({ tool: 'qwen3_coder', reasoning: 'qwen3', dspark: null });
   });
 
   it('architettura sconosciuta → nessun parser e avviso', () => {

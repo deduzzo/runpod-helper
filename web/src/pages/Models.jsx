@@ -111,7 +111,7 @@ export default function Models() {
             <label className="flex items-center gap-2 text-sm text-gray-300 sm:col-span-3">
               <input type="checkbox" checked={useAdvisor} onChange={(e) => setUseAdvisor(e.target.checked)} /> Usa il consulente
             </label>
-            <Button type="submit" loading={busy === 'plan'} disabled={!model.trim()}>Calcola il piano</Button>
+            <Button type="submit" loading={busy === 'plan'} disabled={!model.trim() || (Boolean(busy) && busy !== 'search')}>Calcola il piano</Button>
           </form>
         </Card>
       </div>
