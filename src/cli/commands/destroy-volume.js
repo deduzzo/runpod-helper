@@ -11,8 +11,9 @@ export function register(program, getCtx) {
       const { io, store } = ctx;
       const volume = store.readConfig().volume;
       if (!volume) throw new LlmpodError(Codes.NOT_FOUND, 'Nessun network volume configurato');
-      const active = (await ctx.runpod.listPods()).filter((p) => p.name?.startsWith('llmpod-') && !['TERMINATED', 'EXITED'].includes(p.status));
-      if (active.length) throw new LlmpodError(Codes.INVALID_INPUT, `Ci sono Pod llmpod attivi (${active.map((p) => p.id).join(', ')})`, { hint: 'Terminali prima con: llmpod down' });
+      // Anche un Pod spento (EXITED) esiste ancora e costa: va eliminato prima.
+      const active = (await ctx.runpod.listPods()).filter((p) => p.name?.startsWith('llmpod-') && p.status !== 'TERMINATED');
+      if (active.length) throw new LlmpodError(Codes.INVALID_INPUT, `Ci sono Pod llmpod (${active.map((p) => `${p.id}${p.status === 'EXITED' ? ', spento' : ''}`).join('; ')})`, { hint: 'Eliminali prima con: llmpod down' });
       const conf = await confirmAction({ description: `Eliminare DEFINITIVAMENTE il volume ${volume.name} (${volume.size} GB, ${volume.dataCenterId})? I pesi scaricati andranno persi`, yes: opts.yes, dryRun: opts.dryRun, ask: io.ask });
       if (conf.dryRun) return io.out(`[dry-run] ${conf.message}`);
       if (!opts.yes && (await io.askText('Per confermare digita il nome del volume:', '')) !== volume.name) {

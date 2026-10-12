@@ -1,21 +1,22 @@
 import { fmtUSD } from '../../core/confirm.js';
 import { table, fmtDuration } from '../render.js';
+import { STOPPED_WARNING } from '../../core/pod-state.js';
 
 export function register(program, getCtx) {
   program.command('status')
-    .description('Pod attivi, costi, credito residuo, volume')
+    .description('Pod (avviati e spenti), costi, credito residuo, volume')
     .option('--json', 'output JSON')
     .action(async (opts) => {
       const ctx = getCtx();
       const s = await ctx.ops.status();
       if (opts.json) return ctx.io.raw(JSON.stringify(s, null, 2));
       const { io } = ctx;
-      if (!s.pods.length) io.out('Nessun Pod llmpod attivo.');
+      if (!s.pods.length) io.out('Nessun Pod llmpod.');
       else {
         io.out(table(s.pods, [
           { label: 'Profilo', value: (p) => `${p.profile}${p.orphan ? ' (orfano)' : ''}` },
           { key: 'podId', label: 'Pod' },
-          { key: 'status', label: 'Stato' },
+          { key: 'stateLabel', label: 'Stato' },
           { label: 'GPU', value: (p) => (p.gpu ? `${p.gpu.id} ×${p.gpu.count}` : '?') },
           { label: 'Costo', align: 'right', value: (p) => `${fmtUSD(p.hourlyUSD)}/h` },
           { label: 'Uptime', align: 'right', value: (p) => fmtDuration(p.uptimeSeconds) },
@@ -24,6 +25,10 @@ export function register(program, getCtx) {
             ? `inattivo da ${fmtDuration(p.supervisor.idleSeconds)} su ${fmtDuration(p.supervisor.idleLimitSeconds)}; massimo tra ${fmtDuration(p.supervisor.maxSeconds - p.supervisor.uptimeSeconds)}`
             : p.supervisor?.phase ?? '—') },
         ]));
+        for (const p of s.pods.filter((x) => x.state === 'stopped')) {
+          const cost = p.storageUSD != null ? ` (${fmtUSD(p.storageUSD)}/h di spazio su disco)` : '';
+          io.out(`⚠ ${p.profile} (${p.podId}): ${STOPPED_WARNING(p.profile)}${cost}`);
+        }
         if (s.pods.some((p) => p.orphan)) io.out('⚠ Pod "orfani": non risultano avviati da questo computer. Terminali con: llmpod down <profilo>');
       }
       io.out(`Credito residuo: ${s.balance ? fmtUSD(s.balance.balance) : 'non disponibile'}`);
