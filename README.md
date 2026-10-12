@@ -6,8 +6,10 @@ veloci). Si usa in tre modi, con lo stesso core:
 
 - **CLI** `llmpod`, dal terminale;
 - **interfaccia web** locale (`llmpod ui`, installabile come PWA), anche con Docker;
-- **modalità Claude Code managed** (`llmpod manage`): Claude Code fa da operatore di llmpod tramite un server MCP,
-  con skill e permessi del progetto.
+- **modalità Claude Code managed** (`llmpod start`, oppure `llmpod manage`): Claude Code fa da operatore di llmpod
+  tramite un server MCP, con skill e permessi del progetto. Il modo più semplice è `llmpod start` (dopo `npm link`)
+  o il doppio clic su `scripts/start-managed.command` (macOS) / `scripts/start-managed.sh`: configura llmpod se
+  serve, chiede la cartella di lavoro e apre Claude Code gestito.
 
 Cosa fa, in sintesi:
 
@@ -179,6 +181,7 @@ llmpod ti fa a ogni passo, è nella [guida](docs/GUIDA.md#avviare-il-pod).
 | `llmpod destroy-volume` | Elimina il network volume con i pesi (doppia conferma) |
 | `llmpod advisor` | Configura il consulente IA esterno (`--preset`, `--test`, `--disable`) |
 | `llmpod ui` | Interfaccia web locale e proxy per Open WebUI (`--port`, `--no-open`, `--no-proxy`) |
+| `llmpod start` | Avvio guidato della modalità managed: configura llmpod se serve, chiede la cartella di lavoro e apre Claude Code gestito (`--cwd`, `--profile`, `--yes`); senza `npm link`: doppio clic su `scripts/start-managed.command` (macOS) o `scripts/start-managed.sh` |
 | `llmpod manage` | Modalità Claude Code managed: avvia Claude Code nella cartella di llmpod o, con `--cwd <cartella>`, nella tua (`--profile`) |
 | `llmpod mcp` | Server MCP di llmpod su stdio (equivale a `llmpod-mcp`) |
 | `llmpod prepare <client>` | Uso interno del wrapper Docker: prepara il client e stampa lo script per avviarlo sull'host |

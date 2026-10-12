@@ -12,7 +12,7 @@ export const PROJECT_DIR = fileURLToPath(new URL('../../../', import.meta.url)).
 export const PROJECT_FILES = ['CLAUDE.md', '.claude/settings.json', '.claude/skills', '.mcp.json'];
 export const missingProjectFiles = (dir = PROJECT_DIR) => PROJECT_FILES.filter((f) => !fs.existsSync(path.join(dir, f)));
 
-const realProjectDir = () => { try { return fs.realpathSync(PROJECT_DIR); } catch { return PROJECT_DIR; } };
+export const realProjectDir = () => { try { return fs.realpathSync(PROJECT_DIR); } catch { return PROJECT_DIR; } };
 
 // Variabili di configurazione da passare al server MCP (solo percorsi di configurazione, mai chiavi o segreti).
 const MCP_ENV_KEYS = ['LLMPOD_CONFIG_DIR', 'ZCODE_DIR', 'PI_CODING_AGENT_DIR'];
@@ -33,6 +33,50 @@ export function managedFlags(env = process.env) {
 
 const INSTALL_HINT = 'Installa Claude Code: curl -fsSL https://claude.ai/install.sh | bash   (oppure: npm install -g @anthropic-ai/claude-code)';
 
+// Prompt iniziale per Claude Code quando si indica un profilo (valida il nome).
+export function profilePrompt(profile) {
+  if (!profile) return [];
+  assertProfileName(profile);
+  return [`Lavora sul profilo llmpod "${profile}": mostrami lo stato dei Pod e proponi i passi successivi.`];
+}
+
+// Avvia Claude Code gestito da llmpod. cwd: cartella di lavoro assoluta (undefined o uguale a PROJECT_DIR = cartella del progetto
+// llmpod, senza flag aggiuntivi); extraArgs: argomenti iniziali (es. prompt del profilo); result.code riceve il codice di uscita.
+export async function launchManaged({ ctx, cwd: workDir, extraArgs = [], result }) {
+  // Con cwd uguale alla cartella del progetto llmpod non serve nessun flag aggiuntivo.
+  const external = workDir && workDir !== realProjectDir() ? workDir : null;
+  const args = [...extraArgs];
+  const missing = missingProjectFiles();
+  if (missing.length) {
+    ctx.io.err(`⚠ Mancano in ${PROJECT_DIR}: ${missing.join(', ')}. Claude Code partirebbe senza le regole, i permessi o il server MCP di llmpod`);
+    ctx.io.err('  Usa una copia completa del repository o reinstalla il pacchetto');
+    if (missing.includes('CLAUDE.md') && !(await ctx.io.ask('Avviare comunque Claude Code?', false))) {
+      throw new LlmpodError(Codes.CANCELLED, 'Avvio annullato: manca CLAUDE.md nella cartella del progetto');
+    }
+  }
+  const env = { ...process.env, ...(ctx.env === process.env ? {} : ctx.env) };
+  let cwd = PROJECT_DIR;
+  if (external) {
+    cwd = external;
+    // --mcp-config e --add-dir accettano più valori: il prompt iniziale (se c'è) va PRIMA dei flag, altrimenti verrebbe letto come un loro valore.
+    args.push(...managedFlags(ctx.env));
+    // Senza questa variabile Claude Code non carica il CLAUDE.md delle cartelle di --add-dir.
+    env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
+    ctx.io.err(`▸ Avvio di Claude Code gestito da llmpod nella cartella ${external}`);
+    ctx.io.err(`  Regole (CLAUDE.md), permessi e strumenti MCP di llmpod vengono dal progetto ${PROJECT_DIR}; le skill /llmpod-* dipendono da --add-dir (se non compaiono, usa gli strumenti MCP)`);
+  } else {
+    ctx.io.err(`▸ Avvio di Claude Code in ${PROJECT_DIR}`);
+  }
+  // Nessuna chiave nell'ambiente: Claude Code usa llmpod tramite il server MCP e la CLI, che leggono da soli la configurazione.
+  const child = ctx.spawn('claude', args, { cwd, stdio: 'inherit', env });
+  result.code = await new Promise((resolve, reject) => {
+    child.on('error', (err) => reject(err.code === 'ENOENT'
+      ? new LlmpodError(Codes.INVALID_INPUT, 'Comando "claude" non trovato', { hint: INSTALL_HINT })
+      : err));
+    child.on('exit', (code) => resolve(code ?? 0));
+  });
+}
+
 export function register(program, getCtx, result) {
   program.command('manage')
     .description('Modalità "Claude Code managed": avvia Claude Code nella cartella di llmpod, con skill, permessi e server MCP del progetto')
@@ -41,43 +85,8 @@ export function register(program, getCtx, result) {
     .option('--dir <cartella>', 'alias di --cwd')
     .action(async (opts) => {
       const ctx = getCtx();
-      const workDir = resolveCwd(opts.cwd ?? opts.dir);
-      // Con --cwd uguale alla cartella del progetto llmpod non serve nessun flag aggiuntivo.
-      const external = workDir && workDir !== realProjectDir() ? workDir : null;
-      const args = [];
-      if (opts.profile) {
-        assertProfileName(opts.profile);
-        args.push(`Lavora sul profilo llmpod "${opts.profile}": mostrami lo stato dei Pod e proponi i passi successivi.`);
-      }
-      const missing = missingProjectFiles();
-      if (missing.length) {
-        ctx.io.err(`⚠ Mancano in ${PROJECT_DIR}: ${missing.join(', ')}. Claude Code partirebbe senza le regole, i permessi o il server MCP di llmpod`);
-        ctx.io.err('  Usa una copia completa del repository o reinstalla il pacchetto');
-        if (missing.includes('CLAUDE.md') && !(await ctx.io.ask('Avviare comunque Claude Code?', false))) {
-          throw new LlmpodError(Codes.CANCELLED, 'Avvio annullato: manca CLAUDE.md nella cartella del progetto');
-        }
-      }
-      const env = { ...process.env, ...(ctx.env === process.env ? {} : ctx.env) };
-      let cwd = PROJECT_DIR;
-      if (external) {
-        cwd = external;
-        // --mcp-config e --add-dir accettano più valori: il prompt iniziale (se c'è) va PRIMA dei flag, altrimenti verrebbe letto come un loro valore.
-        args.push(...managedFlags(ctx.env));
-        // Senza questa variabile Claude Code non carica il CLAUDE.md delle cartelle di --add-dir.
-        env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
-        ctx.io.err(`▸ Avvio di Claude Code gestito da llmpod nella cartella ${external}`);
-        ctx.io.err(`  Regole (CLAUDE.md), permessi e strumenti MCP di llmpod vengono dal progetto ${PROJECT_DIR}; le skill /llmpod-* dipendono da --add-dir (se non compaiono, usa gli strumenti MCP)`);
-      } else {
-        ctx.io.err(`▸ Avvio di Claude Code in ${PROJECT_DIR}`);
-      }
-      // Nessuna chiave nell'ambiente: Claude Code usa llmpod tramite il server MCP e la CLI, che leggono da soli la configurazione.
-      const child = ctx.spawn('claude', args, { cwd, stdio: 'inherit', env });
-      result.code = await new Promise((resolve, reject) => {
-        child.on('error', (err) => reject(err.code === 'ENOENT'
-          ? new LlmpodError(Codes.INVALID_INPUT, 'Comando "claude" non trovato', { hint: INSTALL_HINT })
-          : err));
-        child.on('exit', (code) => resolve(code ?? 0));
-      });
+      const cwd = resolveCwd(opts.cwd ?? opts.dir);
+      await launchManaged({ ctx, cwd, extraArgs: profilePrompt(opts.profile), result });
     });
 
   program.command('mcp')

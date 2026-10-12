@@ -24,8 +24,9 @@ import * as metrics from './commands/metrics.js';
 import * as logs from './commands/logs.js';
 import * as tune from './commands/tune.js';
 import * as manage from './commands/manage.js';
+import * as start from './commands/start.js';
 
-export const COMMANDS = [init, search, plan, save, up, down, keep, status, metrics, logs, tune, manage, env, run, rotateKey, destroyVolume, advisor, ui, chat, prepare];
+export const COMMANDS = [init, search, plan, save, up, down, keep, status, metrics, logs, tune, manage, start, env, run, rotateKey, destroyVolume, advisor, ui, chat, prepare];
 
 export async function runCli(argv, { io, env = process.env, overrides = {}, stdin = process.stdin } = {}) {
   const ownPrompt = io ? null : createPrompt();
