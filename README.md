@@ -26,6 +26,7 @@ self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di codin
 | `llmpod env` | Stampa gli `export` per altri client |
 | `llmpod chat` | Prova veloce con Open WebUI locale (Docker) collegato al Pod |
 | `llmpod status` | Pod avviati, in avvio e spenti, uptime, costo della sessione, credito residuo, costo del volume |
+| `llmpod keep <profilo>` | Cambia inattività e ore massime di un Pod già avviato, con il costo massimo fino alla nuova scadenza (vedi "Tenere acceso un Pod") |
 | `llmpod down` | Elimina il Pod, acceso o spento (il volume con i pesi resta) |
 | `llmpod rotate-key` | Rigenera la chiave API di vLLM del profilo |
 | `llmpod destroy-volume` | Elimina il network volume (doppia conferma) |
@@ -168,6 +169,30 @@ speculativo, riserva circa 1 GiB di VRAM e mostra la riga `MTP:`. Per disattivar
 
 Il Pod si spegne da solo dopo 30 minuti senza richieste o dopo 8 ore in ogni caso
 (valori nel profilo, sezione `watchdog`), anche a portatile spento.
+
+### Tenere acceso un Pod
+
+Per un lavoro lungo puoi cambiare i limiti di un Pod **già avviato**, senza riavviarlo:
+
+```bash
+llmpod keep <profilo> --max-hours 24          # durata massima: 24 ore dall'avvio del Pod
+llmpod keep <profilo> --no-idle               # non spegnere mai per inattività (resta il limite di ore)
+llmpod keep <profilo> --idle-minutes 120      # spegni dopo 2 ore senza richieste
+llmpod keep <profilo> --max-hours 24 --save   # aggiorna anche il profilo, per i prossimi avvii
+```
+
+- `--idle-minutes` accetta da 0 a 1440 (`--no-idle` equivale a 0); `--max-hours` da 0,25 a 168. Le ore
+  massime si contano **sempre dall'avvio del Pod**, non da quando lanci `keep`. Cambiando l'inattività il
+  conteggio riparte da adesso.
+- Il comando stampa i nuovi limiti, quando il Pod si spegnerà e il **costo massimo** fino a quel momento
+  (ore rimanenti × costo orario). Se aumenti le ore massime chiede conferma (`--yes` per saltarla): un Pod
+  tenuto acceso costa finché non lo spegni con `llmpod down` o non scatta un limite.
+- I limiti restano anche se il supervisore nel Pod si riavvia. Senza `--save` valgono solo per questo Pod.
+- Nell'interfaccia web, pagina "Stato e costi": il pulsante **Prolunga** di ogni Pod avviato apre una
+  finestra con inattività (anche "Mai") e ore massime, e riporta il costo massimo prima della conferma.
+  `llmpod status` e la pagina mostrano nella colonna "Spegnimento" i limiti correnti letti dal Pod.
+- I Pod avviati con una versione precedente di llmpod hanno un supervisore senza questa funzione: `keep`
+  lo rileva e ti dice di eliminare e riavviare il Pod (`llmpod down <profilo>`, poi `llmpod up <profilo>`).
 
 ## Consulente IA (facoltativo)
 
