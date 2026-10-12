@@ -92,8 +92,10 @@ describe('makePlan: MLX e pesi (R3, R4b)', () => {
     hf.listFiles.mockResolvedValue([{ type: 'file', path: 'original/model-00001.safetensors', size: 1000 }, { type: 'file', path: 'config.json', size: 5 }]);
     const err = await makePlan({ hf, runpod, ...base }).catch((e) => e);
     expect(err).toMatchObject({ code: 'INVALID_INPUT', message: expect.stringContaining('i pesi sono solo in sottocartelle: non supportato') });
-    hf.listFiles.mockResolvedValue([{ type: 'file', path: 'model.gguf', size: 1000 }]);
+    hf.listFiles.mockResolvedValue([{ type: 'file', path: 'pytorch_model.bin', size: 1000 }]);
     await expect(makePlan({ hf, runpod, ...base })).rejects.toMatchObject({ message: expect.stringContaining('non contiene file .safetensors') });
+    hf.listFiles.mockResolvedValue([{ type: 'file', path: 'model.gguf', size: 1000 }]);
+    await expect(makePlan({ hf, runpod, ...base })).rejects.toMatchObject({ code: 'INVALID_INPUT', message: expect.stringContaining('repository GGUF') });
   });
 
   it('R4b: Devstral-Small-2507 pesa 43,9 GiB (non il doppio) con e senza indice dei pesi', async () => {

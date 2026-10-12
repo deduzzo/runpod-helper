@@ -1,0 +1,71 @@
+{
+  "_id": "6a942101a72e0b7a20262474",
+  "id": "llmfan46/Qwen3.8-27B-Uncensored-Heretic-Native-MTP-Preserved-GPTQ-Int4",
+  "downloads": 4469,
+  "lastModified": "2026-08-31T14:04:53.000Z",
+  "gated": false,
+  "cardData": {
+    "library_name": "transformers",
+    "license": "apache-2.0",
+    "pipeline_tag": "image-text-to-text",
+    "tags": [
+      "heretic",
+      "uncensored",
+      "decensored",
+      "abliterated",
+      "mpoa",
+      "mtp"
+    ],
+    "base_model": [
+      "llmfan46/Qwen3.8-27B-Ultra-Uncensored-Heretic-Native-MTP-Preserved"
+    ]
+  },
+  "library_name": "transformers",
+  "tags": [
+    "transformers",
+    "safetensors",
+    "qwen3_5",
+    "image-text-to-text",
+    "heretic",
+    "uncensored",
+    "decensored",
+    "abliterated",
+    "mpoa",
+    "mtp",
+    "conversational",
+    "base_model:llmfan46/Qwen3.8-27B-Ultra-Uncensored-Heretic-Native-MTP-Preserved",
+    "base_model:quantized:llmfan46/Qwen3.8-27B-Ultra-Uncensored-Heretic-Native-MTP-Preserved",
+    "license:apache-2.0",
+    "endpoints_compatible",
+    "4-bit",
+    "gptq",
+    "region:us"
+  ],
+  "sha": "aedc6ce29b7b0c84c7fadfb59fb8524357f8014c",
+  "config": {
+    "architectures": [
+      "Qwen3_5ForConditionalGeneration"
+    ],
+    "model_type": "qwen3_5",
+    "quantization_config": {
+      "bits": 4,
+      "checkpoint_format": "gptq",
+      "desc_act": false,
+      "format": "gptq",
+      "group_size": 128,
+      "lm_head": false,
+      "method": "gptq",
+      "pack_dtype": "int32",
+      "quant_method": "gptq",
+      "sym": true
+    },
+    "chat_template_jinja": "{{ messages }}"
+  },
+  "safetensors": {
+    "parameters": {
+      "BF16": 3454464752,
+      "I32": 24326963200
+    },
+    "total": 27781427952
+  }
+}

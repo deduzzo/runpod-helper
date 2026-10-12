@@ -1,6 +1,7 @@
 import { runPlan, applyAdvice } from '../../core/plan-flow.js';
 import { fmtUSD } from '../../core/confirm.js';
 import { shellQuoteArgs } from '../../core/planner/shell-quote.js';
+import { mtpLabel } from '../../core/planner/mtp-label.js';
 import { table, fmtGiB, attachRenderer, renderAdvice } from '../render.js';
 
 const toInt = (v) => Number.parseInt(v, 10);
@@ -47,6 +48,7 @@ export function register(program, getCtx) {
       io.out(`Modello:   ${m.id} @ ${m.revision.slice(0, 12)} (${m.requestedRevision})  licenza: ${m.license ?? '?'}  gated: ${m.gated ? 'sì' : 'no'}`);
       io.out(`Memoria:   pesi ${fmtGiB(plan.estimate.weightsGiB)} · KV cache ${fmtGiB(plan.estimate.kvGiB)} (${plan.context} token × ${plan.concurrency}) · per GPU ${fmtGiB(plan.estimate.perGpuGiB)}${plan.kvCacheDtype ? ' · KV FP8' : ''}`);
       io.out(`Parser:    strumenti ${plan.parsers.tool ?? 'nessuno'} · ragionamento ${plan.parsers.reasoning ?? 'nessuno'}`);
+      if (plan.mtp) io.out(`MTP:       ${mtpLabel(plan.mtp)}`);
       io.out('');
       io.out(table(plan.candidates, [
         { key: 'name', label: 'GPU' },

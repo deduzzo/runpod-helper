@@ -1,10 +1,13 @@
 import { LlmpodError, Codes } from '../errors.js';
 import { parseModelRef, summarizeModel } from '../hf.js';
-import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes } from './vram.js';
-import { detectParsers, buildArgs, applyOverrides, validateArgs } from './vllm-args.js';
+import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes, hasMtp, GiB } from './vram.js';
+import { detectParsers, buildArgs, applyOverrides, validateArgs, MTP_SPEC } from './vllm-args.js';
 import { selectGpus } from './gpu-select.js';
 
 const SHA_RE = /^[0-9a-f]{40}$/;
+// Riserva per lo stato del draft MTP (KV del suo strato e buffer): approssimazione per eccesso, i pesi MTP sono già nei file.
+const MTP_RESERVE_GiB = 1;
+const isTopLevel = (f, ext) => f.type === 'file' && !f.path.includes('/') && f.path.endsWith(ext);
 
 // Valore di un flag negli argomenti di vllm serve (forma `--flag valore` o `--flag=valore`); vale l'ultima occorrenza (come argparse).
 // null se assente o senza valore.
@@ -27,6 +30,7 @@ export function syncDerivedFields(target) {
     for (let i = args.length - 1; i >= 0; i--) if (args[i] === '--enable-auto-tool-choice') args.splice(i, 1);
   }
   target.parsers = { tool: argValue(args, '--tool-call-parser'), reasoning: argValue(args, '--reasoning-parser') };
+  if (target.mtp) target.mtp = { ...target.mtp, enabled: hasFlag(args, '--speculative-config') };
   target.kvCacheDtype = /fp8/i.test(argValue(args, '--kv-cache-dtype') ?? '') ? 'fp8' : null;
   if (Array.isArray(target.warnings) && !target.kvCacheDtype) {
     target.warnings = target.warnings.filter((w) => !w.startsWith('KV cache in FP8'));
@@ -49,7 +53,14 @@ export async function makePlan({
     throw new LlmpodError(Codes.INVALID_INPUT, `Formato MLX non supportato da vLLM: ${id}`, { hint: 'Cerca la versione safetensors/AWQ dello stesso modello (ad esempio quella dell\'organizzazione originale, non mlx-community)' });
   }
   const sha = SHA_RE.test(revision) ? revision : await hf.resolveSha(id, revision);
-  const [tree, config] = await Promise.all([hf.listFiles(id, sha), hf.getConfig(id, sha)]);
+  const tree = await hf.listFiles(id, sha);
+  // Repository GGUF (llama.cpp): rifiutato prima di cercare config.json e prima di ogni chiamata a Runpod.
+  if (tree.some((f) => isTopLevel(f, '.gguf')) && !tree.some((f) => isTopLevel(f, '.safetensors'))) {
+    throw new LlmpodError(Codes.INVALID_INPUT, `${id} è un repository GGUF (formato di llama.cpp): vLLM in llmpod richiede pesi safetensors`, {
+      hint: `Usa la versione safetensors del modello${summary.baseModel ? ` (il modello base indicato è ${summary.baseModel})` : ' (es. il modello base indicato nella model card)'} oppure una quantizzazione AWQ/GPTQ/FP8`,
+    });
+  }
+  const config = await hf.getConfig(id, sha);
 
   // Con l'indice dei pesi (file piccolo) contano solo gli shard elencati; se non è leggibile vale la regola sull'albero.
   const weightMap = await hf.getWeightIndex?.(id, sha);
@@ -78,8 +89,13 @@ export async function makePlan({
   for (const count of sizes) catalogs[count] = await runpod.listGpus({ count, cloud, minCudaVersion });
 
   const kv = kvBytesPerToken(config);
+  // MTP: se i pesi contengono il draft head si attiva la decodifica speculativa (salvo --set speculative-config=false).
+  const mtpPresent = hasMtp(config, weightMap);
+  const specDisabled = set.some((x) => /^(--)?speculative[-_]config=false$/.test(x));
+  // Memoria costante per GPU oltre pesi e KV: stato lineare degli strati ibridi × concorrenza e riserva del draft MTP (stime per eccesso).
+  const extraGiB = ((kv.stateBytes ?? 0) * concurrency) / GiB + (mtpPresent && !specDisabled ? MTP_RESERVE_GiB : 0);
   const pick = (kvPerToken) => {
-    const needs = (tp) => estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp) }).perGpuGiB;
+    const needs = (tp) => estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp), extraGiB }).perGpuGiB;
     return { needs, sel: selectGpus({ catalogs, dataCenterId, needs, tpSizes: sizes, cloud }) };
   };
   let kvCacheDtype = null;
@@ -100,22 +116,23 @@ export async function makePlan({
   }
 
   const tp = sel.choice?.count ?? 1;
-  const args = applyOverrides(buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype }), { set, extra });
+  const args = applyOverrides(buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype, speculative: mtpPresent ? MTP_SPEC : null }), { set, extra });
   const { unknown, forbidden } = validateArgs(args, flags, { allowTrustRemoteCode });
   if (forbidden.length) {
     throw new LlmpodError(Codes.INVALID_INPUT, `Argomenti vLLM non consentiti: ${forbidden.join(', ')}`, { hint: 'llmpod gestisce da solo chiave, host, porta e nome servito' });
   }
   if (unknown.length) warnings.push(`Flag non riconosciuti da vLLM ${'v0.30.0'}: ${unknown.join(', ')}`);
 
-  const est = estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp) });
+  const est = estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp), extraGiB });
   return syncDerivedFields({
     model: { id, revision: sha, requestedRevision: revision, gated: summary.gated, license: summary.license, params: summary.params, weightsBytes: wBytes, maxContext: maxCtx ?? null },
     context: ctx,
     concurrency,
     vllm: { image: vllmImage, args },
     parsers: { tool: parsers.tool, reasoning: parsers.reasoning },
+    mtp: { present: mtpPresent, enabled: false }, // enabled lo deriva syncDerivedFields dagli argomenti
     // kvDtype: base della stima (fp8 solo se il ripiego ha dimezzato la KV), indipendente dagli override successivi
-    estimate: { weightsGiB: est.weightsGiB, downloadBytes: downloadBytes(tree), kvGiB: est.kvGiB, perGpuGiB: est.perGpuGiB, kvDtype: kvCacheDtype === 'fp8' ? 'fp8' : 'auto' },
+    estimate: { weightsGiB: est.weightsGiB, downloadBytes: downloadBytes(tree), kvGiB: est.kvGiB, perGpuGiB: est.perGpuGiB, extraGiB: est.extraGiB, kvDtype: kvCacheDtype === 'fp8' ? 'fp8' : 'auto' },
     gpu: sel.choice ? { id: sel.choice.gpuId, count: sel.choice.count } : null,
     hourlyUSD: sel.choice?.hourly ?? null,
     alternatives: sel.alternatives.map((c) => ({ id: c.gpuId, count: c.count, hourly: c.hourly })),

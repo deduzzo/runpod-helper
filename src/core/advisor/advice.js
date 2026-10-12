@@ -167,7 +167,7 @@ export function makeFitsWith(plan) {
   const c = plan.candidates?.find((x) => x.gpuId === plan.gpu?.id && x.count === plan.gpu?.count);
   if (!c) return () => true;
   const tp = plan.gpu.count;
-  const fixed = plan.estimate.weightsGiB / tp + 2;
+  const fixed = plan.estimate.weightsGiB / tp + 2 + (plan.estimate.extraGiB ?? 0);
   const kvPerGpu = plan.estimate.perGpuGiB - fixed;
   return (args) => {
     const m = argMap(args);

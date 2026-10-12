@@ -1,0 +1,48 @@
+{
+  "id": "0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF",
+  "tags": [
+    "transformers",
+    "safetensors",
+    "gguf",
+    "qwen3.8",
+    "qwen3.5",
+    "heretic",
+    "abliterated",
+    "uncensored",
+    "roleplay",
+    "imatrix",
+    "text-generation",
+    "conversational",
+    "base_model:Qwen/Qwen3.8-27B",
+    "base_model:quantized:Qwen/Qwen3.8-27B",
+    "license:apache-2.0",
+    "endpoints_compatible",
+    "region:us"
+  ],
+  "cardData": {
+    "license": "apache-2.0",
+    "base_model": [
+      "Qwen/Qwen3.8-27B"
+    ],
+    "library_name": "transformers",
+    "tags": [
+      "qwen3.8",
+      "qwen3.5",
+      "heretic",
+      "abliterated",
+      "uncensored",
+      "roleplay",
+      "gguf",
+      "imatrix"
+    ],
+    "pipeline_tag": "text-generation"
+  },
+  "library_name": "transformers",
+  "downloads": 1160506,
+  "lastModified": "2026-09-20T13:42:25.000Z",
+  "gated": false,
+  "sha": "ab8d7bd81d03117501e4da60cccdff4c80f0eea0",
+  "config": {
+    "chat_template_jinja": "{{ messages }}"
+  }
+}

@@ -25,8 +25,18 @@ export function parseModelRef(input) {
   return { id: s, revision };
 }
 
+// Modello base dichiarato nella model card (stringa o elenco); null se assente.
+function baseModelOf(m) {
+  const b = m.cardData?.base_model;
+  const first = Array.isArray(b) ? b[0] : b;
+  return typeof first === 'string' && first ? first : null;
+}
+
 export function summarizeModel(m) {
-  const licenseTag = (m.tags ?? []).find((t) => t.startsWith('license:'));
+  const tags = m.tags ?? [];
+  // Repository GGUF (llama.cpp): senza metadati safetensors vLLM non può caricarlo.
+  const isGguf = m.library_name === 'gguf' || tags.includes('gguf');
+  const licenseTag = tags.find((t) => t.startsWith('license:'));
   const tok = m.config?.tokenizer_config;
   return {
     id: m.id,
@@ -39,7 +49,12 @@ export function summarizeModel(m) {
     dtypes: Object.keys(m.safetensors?.parameters ?? {}),
     libraryName: m.library_name ?? null,
     // Formato MLX (Apple Silicon): vLLM non lo carica.
-    isMlx: m.library_name === 'mlx' || (m.tags ?? []).includes('mlx'),
+    isMlx: m.library_name === 'mlx' || tags.includes('mlx'),
+    isGguf,
+    ggufOnly: isGguf && !m.safetensors,
+    baseModel: baseModelOf(m),
+    // MTP (decodifica speculativa): dai soli metadati disponibili (tag o nome); null = non determinabile senza scaricare i pesi.
+    mtp: tags.includes('mtp') || /(^|[^a-z0-9])mtp([^a-z0-9]|$)/i.test(m.id ?? '') ? true : null,
     quantBits: Number.isFinite(m.config?.quantization_config?.bits) ? m.config.quantization_config.bits : null,
     architectures: m.config?.architectures ?? [],
     modelType: m.config?.model_type ?? null,

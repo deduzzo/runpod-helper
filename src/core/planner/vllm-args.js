@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 
 export const VLLM_VERSION = 'v0.30.0';
+// Decodifica speculativa con il draft head MTP del modello (recipe vLLM per Qwen3.5); valore JSON, un solo argomento.
+export const MTP_SPEC = '{"method":"mtp","num_speculative_tokens":1}';
 const dataFile = (name) => new URL(`../../../data/${name}`, import.meta.url);
 const RULES = JSON.parse(fs.readFileSync(dataFile('parsers.json'), 'utf8')).rules;
 const ALWAYS_FORBIDDEN = ['--api-key', '--host', '--port', '--allowed-local-media-path', '--served-model-name', '--config'];
@@ -29,7 +31,7 @@ export function detectParsers({ modelId, config }) {
   };
 }
 
-export function buildArgs({ context, tp, revision, parsers, gpuUtil = 0.9, kvCacheDtype }) {
+export function buildArgs({ context, tp, revision, parsers, gpuUtil = 0.9, kvCacheDtype, speculative = null }) {
   const args = [
     '--max-model-len', String(context),
     '--tensor-parallel-size', String(tp),
@@ -39,6 +41,7 @@ export function buildArgs({ context, tp, revision, parsers, gpuUtil = 0.9, kvCac
   if (parsers.tool) args.push('--enable-auto-tool-choice', '--tool-call-parser', parsers.tool);
   if (parsers.reasoning) args.push('--reasoning-parser', parsers.reasoning);
   if (kvCacheDtype) args.push('--kv-cache-dtype', kvCacheDtype);
+  if (speculative) args.push('--speculative-config', speculative);
   args.push(...(parsers.extraArgs ?? []));
   return args;
 }

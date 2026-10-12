@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api, fmtUSD, fmtGiB } from '../lib/api.js';
 import { shellQuoteArgs } from '../../../src/core/planner/shell-quote.js';
+import { mtpLabel } from '../../../src/core/planner/mtp-label.js';
 import { Card, Button, Field, Badge, ErrorBox, CodeBlock, inputClass } from './ui.jsx';
 
 const AVAIL = { HIGH: 'green', MEDIUM: 'cyan', LOW: 'amber', NONE: 'red' };
@@ -48,6 +49,7 @@ export function PlanView({ data, onPlanChange }) {
           <p><span className="text-gray-400">Memoria:</span> pesi {fmtGiB(plan.estimate.weightsGiB)} · KV {fmtGiB(plan.estimate.kvGiB)} · per GPU {fmtGiB(plan.estimate.perGpuGiB)}</p>
           <p><span className="text-gray-400">Contesto:</span> {plan.context} token × {plan.concurrency} {plan.kvCacheDtype ? <Badge tone="violet">KV FP8</Badge> : null}</p>
           <p><span className="text-gray-400">Parser:</span> strumenti {plan.parsers.tool ?? 'nessuno'} · ragionamento {plan.parsers.reasoning ?? 'nessuno'}</p>
+          {plan.mtp && <p><span className="text-gray-400">MTP:</span> {mtpLabel(plan.mtp)}</p>}
           <p><span className="text-gray-400">Scelta:</span> {plan.gpu ? <>{plan.gpu.id} ×{plan.gpu.count} a <strong className="neon-text">{fmtUSD(plan.hourlyUSD)}/h</strong></> : <Badge tone="red">nessuna GPU</Badge>}</p>
         </div>
         {!plan.gpu && (
