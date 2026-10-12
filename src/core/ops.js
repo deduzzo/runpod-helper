@@ -6,6 +6,7 @@ import { registerSecret, redactObject } from './secrets.js';
 import { profileKeyVar } from './config.js';
 import { proxyUrl } from './runpod.js';
 import { confirmCost, confirmAction, fmtUSD } from './confirm.js';
+import { validateWatchdog, maxCostUSD, fmtHours } from './watchdog.js';
 import { buildPodBody, argsForCount } from './pod/body.js';
 import { adviseRepair } from './advisor/advisor.js';
 import { diffArgs, fitsForOption } from './advisor/advice.js';
@@ -459,6 +460,52 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     return { podId: deleted[0].podId, podIds: deleted.map((d) => d.podId), stopped: deleted[0].stopped, sessionUSD };
   }
 
+  // Cambia i limiti di spegnimento (inattività, durata massima dall'avvio) di un Pod già avviato, senza riavviarlo.
+  // Con `save` aggiorna anche il profilo, per i prossimi avvii. `yes` salta la conferma del costo massimo (chiesta se le ore massime aumentano).
+  async function keep(name, { idleMinutes, maxHours, save = false, yes = false } = {}) {
+    const wanted = validateWatchdog({ idleMinutes, maxHours });
+    store.readProfile(name); // NOT_FOUND se il profilo non esiste
+    const pod = await findPod(name);
+    if (!pod) throw new LlmpodError(Codes.NOT_FOUND, `Nessun Pod attivo per il profilo ${name}`, { hint: `Esegui: llmpod up ${name}` });
+    if (pod.status !== 'RUNNING') throw new LlmpodError(Codes.INVALID_INPUT, `Il Pod ${pod.id} non è ancora avviato (${pod.status}): riprova quando è pronto`);
+    const apiKey = keyOf(name);
+    registerSecret(apiKey);
+    const sup = createSupervisorClient({ http, podId: pod.id, apiKey });
+    const current = await sup.status();
+    if (!current) throw new LlmpodError(Codes.HTTP, `Il supervisore del Pod ${pod.id} non risponde`, { hint: 'Il Pod potrebbe essere ancora in avvio: riprova tra poco, oppure controlla con: llmpod status' });
+    const hourlyUSD = pod.cost ?? 0;
+    const newMaxSeconds = wanted.maxHours != null ? wanted.maxHours * 3600 : current.maxSeconds;
+    if (wanted.maxHours != null && newMaxSeconds > current.maxSeconds && !yes) {
+      const remaining = newMaxSeconds - current.uptimeSeconds;
+      const cost = maxCostUSD({ hourlyUSD, maxSeconds: newMaxSeconds, uptimeSeconds: current.uptimeSeconds });
+      await confirmAction({
+        description: `Prolungare il Pod ${pod.id} (${name}) fino a ${fmtHours(newMaxSeconds)} dall'avvio: resterà acceso al massimo ${fmtHours(remaining)} ancora — costo massimo stimato ${fmtUSD(cost)} (${fmtUSD(hourlyUSD)}/h)`,
+        ask,
+      });
+    }
+    const r = await sup.setWatchdog(wanted);
+    if (r.status === 404) {
+      throw new LlmpodError(Codes.INVALID_INPUT, `Il supervisore del Pod ${pod.id} è di una versione precedente e non supporta la modifica dei limiti`, { hint: `Serve un Pod avviato con questa versione di llmpod: "llmpod down ${name}" e poi "llmpod up ${name}"` });
+    }
+    if (!r.ok) throw new LlmpodError(Codes.HTTP, `Il supervisore ha rifiutato i nuovi limiti: HTTP ${r.status}${r.data?.error ? ` ${String(r.data.error).slice(0, 200)}` : ''}`);
+    const idleLimitSeconds = r.data?.idleLimitSeconds ?? current.idleLimitSeconds;
+    const maxSeconds = r.data?.maxSeconds ?? newMaxSeconds;
+    const uptimeSeconds = r.data?.uptimeSeconds ?? current.uptimeSeconds;
+    const remainingSeconds = Math.max(0, maxSeconds - uptimeSeconds);
+    let saved = false;
+    if (save) {
+      const p = store.readProfile(name);
+      p.watchdog = { ...p.watchdog, ...(wanted.idleMinutes != null && { idleMinutes: wanted.idleMinutes }), ...(wanted.maxHours != null && { maxHours: wanted.maxHours }) };
+      store.writeProfile(p);
+      saved = true;
+    }
+    return {
+      podId: pod.id, idleLimitSeconds, maxSeconds, uptimeSeconds, remainingSeconds,
+      expiresAt: new Date(now() + remainingSeconds * 1000).toISOString(),
+      hourlyUSD, maxCostUSD: maxCostUSD({ hourlyUSD, maxSeconds, uptimeSeconds }), saved,
+    };
+  }
+
   async function status() {
     const [pods, balance] = await Promise.all([runpod.listPods(), runpod.getBalance().catch(() => null)]);
     const state = store.readState();
@@ -513,5 +560,5 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     throw new LlmpodError(Codes.INVALID_INPUT, 'Specifica il profilo con --profile', { hint: all.length ? `Profili: ${all.join(', ')}` : 'Crea un profilo con: llmpod plan <modello> e llmpod save <nome>' });
   }
 
-  return { saveProfile, saveProfileArgs, up, down, status, endpoint, rotateKey, resolveProfile };
+  return { saveProfile, saveProfileArgs, up, down, keep, status, endpoint, rotateKey, resolveProfile };
 }

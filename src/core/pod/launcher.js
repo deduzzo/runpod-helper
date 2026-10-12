@@ -80,6 +80,8 @@ export function createSupervisorClient({ http, podId, apiKey, baseUrl = proxyUrl
     status: () => get('/status'),
     logs: (since = 0) => get(`/logs?since=${since}`),
     reload: (args) => http.request('POST', `${baseUrl}/reload`, { headers, json: { args }, timeoutMs: 20_000 }),
+    // Cambia i limiti di spegnimento sul Pod avviato; un supervisore vecchio risponde 404.
+    setWatchdog: ({ idleMinutes, maxHours }) => http.request('POST', `${baseUrl}/watchdog`, { headers, json: { idleMinutes, maxHours }, timeoutMs: 20_000 }),
   };
 }
 
