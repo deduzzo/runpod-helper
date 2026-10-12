@@ -232,13 +232,14 @@ describe('scripts/start.sh: correzioni della revisione finale', () => {
     expect(calls).not.toContain('--wait');
   });
 
-  it('suggerisce bin/llmpod logs e usa la porta di Open WebUI configurata', () => {
+  it('suggerisce bin/llmpod docker-logs e usa la porta di Open WebUI configurata', () => {
     const { home } = prepared();
     const { bin, log } = fakeBin();
     const r = runStart([], { home, bin, env: { LLMPOD_OPENWEBUI_PORT: '3456' } });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('Open WebUI: http://127.0.0.1:3456');
-    expect(r.stdout).toContain('bin/llmpod logs');
+    expect(r.stdout).toContain('bin/llmpod docker-logs');
+    expect(r.stdout + r.stderr).not.toMatch(/bin\/llmpod logs\b/);
     expect(fs.readFileSync(log, 'utf8')).toContain('OWPORT=3456');
     const r2 = runStart([], { home, bin });
     expect(r2.stdout).toContain('Open WebUI: http://127.0.0.1:3000');

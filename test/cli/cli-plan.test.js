@@ -61,6 +61,51 @@ describe('CLI: init', () => {
     expect(await s.run(['init', '--dry-run'], { runpod })).toBe(0);
     expect(runpod.createVolume).not.toHaveBeenCalled();
   });
+
+  it('rifiutare la creazione del volume salva la configurazione senza volume, con un avviso', async () => {
+    // domande: costo del volume (no), consulente (no)
+    const s = sandbox({ answers: { secret: [SECRETS.RUNPOD_API_KEY, ''], text: ['EU-RO-1', '150'], ask: [false, false] } });
+    const runpod = runpodFake();
+    expect(await s.run(['init'], { runpod })).toBe(0);
+    expect(runpod.createVolume).not.toHaveBeenCalled();
+    expect(s.prompt.ask.mock.calls[0][0]).toContain('al mese');
+    const cfg = s.store.readConfig();
+    expect(cfg.dataCenterId).toBe('EU-RO-1');
+    expect(cfg.volume ?? null).toBeNull();
+    expect(s.all()).toMatch(/i pesi saranno scaricati a ogni avvio/);
+    expect(s.store.readEnv().RUNPOD_API_KEY).toBe(SECRETS.RUNPOD_API_KEY);
+  });
+
+  it('init --no-volume: nessun volume creato né riusato, nessuna domanda sul costo', async () => {
+    const s = sandbox({ answers: { secret: [SECRETS.RUNPOD_API_KEY, ''], ask: [false] } });
+    const runpod = runpodFake();
+    runpod.listVolumes = vi.fn(async () => [{ id: 'volX', name: 'llmpod-pesi', size: 100, dataCenter: 'EU-RO-1' }]);
+    expect(await s.run(['init', '--no-volume', '--datacenter', 'EU-RO-1'], { runpod })).toBe(0);
+    expect(runpod.createVolume).not.toHaveBeenCalled();
+    expect(s.prompt.ask.mock.calls.map((c) => c[0]).join('\n')).not.toMatch(/al mese|Riutilizzare/);
+    expect(s.prompt.askText).not.toHaveBeenCalled();
+    const cfg = s.store.readConfig();
+    expect(cfg.dataCenterId).toBe('EU-RO-1');
+    expect(cfg.volume ?? null).toBeNull();
+    expect(s.all()).toMatch(/i pesi saranno scaricati a ogni avvio/);
+  });
+
+  it('init --no-volume con un volume configurato nello stesso datacenter: non lo usa più e avvisa che costa ancora', async () => {
+    const s = sandbox({ answers: { secret: [SECRETS.RUNPOD_API_KEY, ''], ask: [false] } });
+    s.store.writeConfig({ dataCenterId: 'EU-RO-1', volume: { id: 'vol1', name: 'llmpod-pesi', size: 150, dataCenterId: 'EU-RO-1' } });
+    const runpod = runpodFake();
+    expect(await s.run(['init', '--no-volume', '--datacenter', 'EU-RO-1'], { runpod })).toBe(0);
+    expect(s.store.readConfig().volume ?? null).toBeNull();
+    expect(s.all()).toMatch(/llmpod-pesi.*continua a costare/);
+  });
+
+  it('init --no-volume lascia configurato un volume di un altro datacenter (resta gestibile con destroy-volume)', async () => {
+    const s = sandbox({ answers: { secret: [SECRETS.RUNPOD_API_KEY, ''], ask: [false] } });
+    s.store.writeConfig({ dataCenterId: 'US-X', volume: { id: 'vol9', name: 'llmpod-pesi', size: 150, dataCenterId: 'US-X' } });
+    const runpod = runpodFake();
+    expect(await s.run(['init', '--no-volume', '--datacenter', 'EU-RO-1'], { runpod })).toBe(0);
+    expect(s.store.readConfig()).toMatchObject({ dataCenterId: 'EU-RO-1', volume: { id: 'vol9' } });
+  });
 });
 
 describe('CLI: search, plan, save', () => {

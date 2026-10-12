@@ -65,9 +65,12 @@ llmpod init
    per un 200B+) e ti mostra il **costo mensile** prima di crearlo (`--volume-size <gb>` per non chiederlo);
 5. se vuoi, il [consulente IA esterno](#consulente-ia-esterno).
 
-Se rifiuti la creazione del volume l'operazione si annulla. Per salvare chiavi e datacenter **senza creare il
-volume** usa `llmpod init --dry-run`: i pesi saranno scaricati a ogni avvio. Puoi rilanciare `llmpod init` in
-qualsiasi momento: le chiavi già presenti si possono mantenere.
+**Senza volume.** Se rifiuti la creazione del volume, `init` salva comunque la configurazione senza volume e lo
+segnala con un avviso ("i pesi saranno scaricati a ogni avvio"). Con `llmpod init --no-volume` configuri il
+datacenter senza creare né riusare un volume e senza domande sul costo. Se avevi già configurato un volume nello
+stesso datacenter, llmpod smette di usarlo ma **il volume resta su Runpod e continua a costare**: l'avviso lo
+ricorda, e puoi eliminarlo dalla console di Runpod. Puoi rilanciare `llmpod init` in qualsiasi momento (anche per
+creare il volume più tardi): le chiavi già presenti si possono mantenere.
 
 ### Chiave Runpod
 
@@ -551,7 +554,7 @@ Open WebUI escluso `scripts\start.ps1 -NoOpenWebUI`).
 - Al primo avvio parte `llmpod init`, che richiede un **terminale interattivo**: se manca la chiave Runpod e lo
   script non è eseguito da un terminale, si ferma con un messaggio.
 - Poi si apre l'interfaccia (`http://127.0.0.1:7860`, con il token nel link stampato; il link cambia a ogni
-  avvio e compare anche in `bin/llmpod logs`) e Open WebUI su `http://127.0.0.1:3000`. Al primo avvio Open WebUI
+  avvio e compare anche in `bin/llmpod docker-logs`) e Open WebUI su `http://127.0.0.1:3000`. Al primo avvio Open WebUI
   può impiegare qualche minuto: lo script attende fino a 2 minuti e poi prosegue.
 - **Crea subito l'account di Open WebUI**: il primo account diventa amministratore e la registrazione di altri è
   disattivata. Finché non esiste, chiunque raggiunga `127.0.0.1:3000` dal tuo computer potrebbe crearlo per primo.
@@ -563,7 +566,8 @@ Open WebUI escluso `scripts\start.ps1 -NoOpenWebUI`).
 ```bash
 bin/llmpod status
 bin/llmpod run claude          # anche: opencode, pi, zcode (anche: bin/llmpod claude)
-bin/llmpod logs                # log del container llmpod (bin/llmpod logs open-webui per Open WebUI)
+bin/llmpod logs <profilo>      # log di vLLM del Pod, come llmpod logs (anche --follow)
+bin/llmpod docker-logs         # log del container llmpod (bin/llmpod docker-logs open-webui per Open WebUI)
 bin/llmpod chat                # apre Open WebUI sull'host (http://localhost:3000)
 ```
 
@@ -571,9 +575,8 @@ Il wrapper esegue i comandi nel container e avvia i client **sul tuo computer**,
 Su Windows è `bin\llmpod` (cioè `bin\llmpod.cmd`, che lancia `llmpod.ps1` con `-ExecutionPolicy Bypass`, senza
 cambiare la policy di PowerShell). `bin/llmpod ui` non serve: l'interfaccia la avvia `scripts/start`.
 
-Nota: con il wrapper `logs` mostra i log dei container, non quelli di vLLM. Per i log di vLLM puoi eseguire la CLI
-nel container in esecuzione, per esempio `docker exec -it llmpod-llmpod-1 node src/cli/index.js logs <profilo>`
-(verifica il nome del container con `docker ps`).
+Con il wrapper `logs` è il comando della CLI (log di vLLM dal supervisore del Pod), mentre i log dei container
+locali, utili per la diagnosi di `scripts/start`, si leggono con `docker-logs [servizio]` (predefinito `llmpod`).
 
 ### Configurazione e piattaforme
 

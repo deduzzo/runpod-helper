@@ -77,7 +77,9 @@ La configurazione guidata chiede:
   residuo si legge con l'API GraphQL, che può richiedere la chiave con accesso completo
   ([dettagli](docs/GUIDA.md#chiave-runpod));
 - **token Hugging Face** (facoltativo): basta un token *Read*, serve solo per i modelli *gated*;
-- **datacenter** preferito e **network volume** per i pesi (facoltativo, con il costo mensile).
+- **datacenter** preferito e **network volume** per i pesi, con il costo mensile. È facoltativo: se rifiuti la
+  creazione (o usi `llmpod init --no-volume`) la configurazione viene salvata senza volume e i pesi si scaricano a
+  ogni avvio.
 
 Le chiavi vengono salvate in `~/.config/llmpod/.env` con permessi `600` e non vengono mai stampate: non
 condividere quel file.
@@ -105,7 +107,8 @@ scripts\start.bat             # Windows
 Al primo avvio parte `llmpod init` (serve un terminale interattivo), poi si aprono l'interfaccia web
 (`http://127.0.0.1:7860`, con il token nel link stampato) e Open WebUI (`http://127.0.0.1:3000`; **crea subito
 l'account amministratore**). La CLI si usa con il wrapper `bin/llmpod` (su Windows `bin\llmpod`), per esempio
-`bin/llmpod status` o `bin/llmpod run claude`. Si ferma tutto con `scripts/stop.sh` (o `scripts\stop.bat`), che
+`bin/llmpod status`, `bin/llmpod run claude` o `bin/llmpod logs <profilo>` (i log dei container sono
+`bin/llmpod docker-logs`). Si ferma tutto con `scripts/stop.sh` (o `scripts\stop.bat`), che
 **non** elimina i Pod su Runpod. Dettagli, variabili e note per piattaforma: [Docker](docs/GUIDA.md#docker).
 
 ### Aggiornamento
@@ -135,7 +138,7 @@ llmpod ti fa a ogni passo, è nella [guida](docs/GUIDA.md#avviare-il-pod).
 
 | Comando | Cosa fa |
 |---|---|
-| `llmpod init` | Configurazione guidata: chiavi, datacenter preferito, network volume (`--datacenter`, `--volume-size`, `--dry-run`) |
+| `llmpod init` | Configurazione guidata: chiavi, datacenter preferito, network volume (`--datacenter`, `--volume-size`, `--no-volume`, `--dry-run`) |
 | `llmpod search [testo]` | Cerca su Hugging Face modelli adatti all'uso agentico; `--sets` elenca i set consigliati, `--set <id>` mostra un set |
 | `llmpod plan <modello>` | Stima VRAM, propone le GPU e gli argomenti di vLLM (`--context`, `--gpu`, `--set chiave=valore`, `--no-advisor`) |
 | `llmpod save <nome>` | Salva l'ultimo piano come profilo |
