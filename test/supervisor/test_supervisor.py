@@ -24,6 +24,20 @@ def free_port():
         return s.getsockname()[1]
 
 
+def fake_proc(procs):
+    """Finta /proc: {pid: (comm, ppid)} con i file stat e comm."""
+    root = tempfile.mkdtemp()
+    for pid, (comm, ppid) in procs.items():
+        d = os.path.join(root, str(pid))
+        os.makedirs(d)
+        with open(os.path.join(d, 'stat'), 'w') as f:
+            f.write(f'{pid} ({comm}) S {ppid} 1 1 0 -1\n')
+        with open(os.path.join(d, 'comm'), 'w') as f:
+            f.write(comm + '\n')
+    os.makedirs(os.path.join(root, 'self'))
+    return root
+
+
 def wait_until(cond, timeout=15):
     end = time.time() + timeout
     while time.time() < end:
@@ -162,6 +176,17 @@ class PureFunctions(unittest.TestCase):
         # crash a runtime (vLLM era pronto): un riavvio, anche dopo il caricamento e con errore non transitorio
         self.assertTrue(sv.restart_decision(loading_started=True, fatal=True, transient=False, restarts=0, max_restarts=1, was_ready=True)[0])
         self.assertFalse(sv.restart_decision(loading_started=True, fatal=True, transient=False, restarts=1, max_restarts=1, was_ready=True)[0])
+
+    def test_compiling_descendants(self):
+        root = fake_proc({100: ('python3', 1), 101: ('python3', 100), 102: ('ninja', 101), 103: ('cicc', 102),
+                          200: ('nvcc', 1), 201: ('bash', 100)})
+        self.assertEqual(sorted(sv.compiling_descendants(100, root)), ['cicc', 'ninja'])
+        self.assertEqual(sv.compiling_descendants(201, root), [])
+        self.assertEqual(sv.compiling_descendants(100, os.path.join(root, 'assente')), [])
+
+    def test_stall_minutes_dall_ambiente(self):
+        cfg = sv.env_config({'LLMPOD_MODEL': 'm', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k', 'LLMPOD_STALL_MINUTES': '45'})
+        self.assertEqual(cfg['stall_seconds'], 45 * 60)
 
     def test_max_restarts_predefinito_uno(self):
         cfg = sv.env_config({'LLMPOD_MODEL': 'm', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k'})
@@ -325,13 +350,23 @@ class SupervisorIntegration(unittest.TestCase):
         self.sup._observe('(EngineCore_DP0 pid=120) WARNING 10-12 [symm_mem.py:60] SymmMemCommunicator: Device capability 12.0 not supported')
         self.assertIsNone(self.sup.last_cause)
 
-    def test_crash_dopo_ready_un_riavvio(self):
+    def test_crash_dopo_ready_un_riavvio_mai_due_consecutivi(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '2'
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'ready'))
+        os.environ['FAKE_VLLM_NOT_READY'] = '1'  # il processo riavviato muore prima di essere pronto
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.restarts)[1] == 1))
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
+        self.assertEqual(self.sup.restarts, 1)  # nessun secondo riavvio consecutivo
+        self.assertIn('nessun riavvio automatico', self.sup.last_error)
+
+    def test_restarts_si_azzera_quando_vllm_torna_pronto(self):
         os.environ['FAKE_VLLM_EXIT_AFTER'] = '2'
         self.sup.start_vllm()
         self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'ready'))
         self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.restarts)[1] == 1))
-        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
-        self.assertIn('dopo 1 riavvi', self.sup.last_error)
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'ready'))
+        self.assertEqual(self.sup.restarts, 0)  # un crash a runtime successivo ha di nuovo diritto a un riavvio
 
     def test_errore_non_riscritto_a_ogni_controllo(self):
         os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.3'
@@ -358,16 +393,56 @@ class SupervisorIntegration(unittest.TestCase):
         self.assertIsNone(self.sup.error_since)
 
     def test_stallo_dopo_il_caricamento_dei_pesi(self):
+        self.assertEqual(self.cfg['stall_seconds'], 30 * 60)  # predefinito: 30 minuti
         self.sup.phase = 'loading'
         self.sup._observe('(Worker_TP0 pid=1) Loading safetensors checkpoint shards: 100% Completed | 206/206 [24:00<00:00, 7s/it]')
-        self.now[0] += 9 * 60
+        self.now[0] += 29 * 60
         self.assertIsNone(self.sup.step())
         self.assertEqual(self.sup.phase, 'loading')
         self.now[0] += 61
         self.sup.step()
         st = self.sup.status()
         self.assertEqual(st['phase'], 'error')
-        self.assertIn('vLLM bloccato (possibile problema NCCL/P2P)', st['errorCause'])
+        self.assertIn('vLLM fermo senza log da 30 minuti dopo il caricamento dei pesi', st['errorCause'])
+        self.assertIn('possibile blocco NCCL/P2P o compilazione molto lunga', st['errorCause'])
+
+    def test_stallo_con_compilazione_in_corso_rimanda_di_10_minuti(self):
+        root = fake_proc({100: ('python3', 1), 101: ('python3', 100), 102: ('ninja', 101), 103: ('nvcc', 102)})
+
+        class Proc:
+            pid = 100
+            def poll(self):
+                return None
+        self.sup.cfg['proc_root'] = root
+        self.sup.proc = Proc()
+        self.sup.expected_exit = True  # nessun rilevamento di crash su questo processo finto
+        self.sup.phase = 'loading'
+        self.sup._observe('INFO Loading weights took 1440.00 seconds')
+        self.now[0] += 30 * 60
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'loading')
+        self.assertTrue(any('compilazione in corso' in l['line'] for l in self.sup.logs_since(0)))
+        self.now[0] += 9 * 60
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'loading')
+        # compilazione finita: allo scadere del rinvio passa a 'error'
+        os.remove(os.path.join(root, '102', 'stat'))
+        os.remove(os.path.join(root, '103', 'stat'))
+        self.sup.proc = None
+        self.now[0] += 61
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'error')
+
+    def test_tick_di_emergenza_controlla_anche_error_timeout(self):
+        self.sup.idle_seconds = 0
+        self.sup.fail('x')
+        self.now[0] += 16 * 60
+
+        def boom():
+            raise RuntimeError('guasto simulato')
+        self.sup.step = boom
+        self.sup.terminate_pod = lambda: True
+        self.assertEqual(self.sup.tick(), 'error-timeout')
 
     def test_nessuno_stallo_durante_il_caricamento_dei_pesi(self):
         self.sup.phase = 'loading'

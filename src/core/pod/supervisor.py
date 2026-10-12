@@ -71,7 +71,16 @@ TRANSIENT_RE = re.compile(r'ConnectionError|ConnectTimeout|ReadTimeout|Timeout(E
                           r'\b50[234] Server Error|429 Client Error')
 CAUSE_RE = re.compile(r'(\b[A-Z]\w*(Error|Exception|Timeout)\b|CUDA error|Cuda failure|out of memory|not supported|unsupported|NotImplemented)')
 WARNING_RE = re.compile(r'\bWARNING\b')
-STALL_CAUSE = 'vLLM bloccato (possibile problema NCCL/P2P)'
+# Processi di compilazione (Inductor, JIT di FlashInfer/Triton, autotune): finché girano vLLM può restare muto a lungo.
+COMPILERS = {'ninja', 'nvcc', 'cicc', 'ptxas', 'cc1plus', 'cc1', 'ld', 'ld.lld', 'ld.gold', 'gcc', 'g++', 'c++', 'cc',
+             'cudafe++', 'fatbinary', 'nvlink', 'clang', 'clang++'}
+COMPILE_CMDLINE = re.compile(r'\b(ninja|nvcc|ptxas|cicc)\b|(triton|flashinfer)\S*[/_](build|jit|compile)')
+STALL_POSTPONE_SECONDS = 600
+
+
+def stall_cause(minutes):
+    return (f'vLLM fermo senza log da {minutes} minuti dopo il caricamento dei pesi '
+            '(possibile blocco NCCL/P2P o compilazione molto lunga)')
 FRAME_RE = re.compile(r'^\s*(File "|\^+\s*$|Traceback \(most recent call last\)|return |raise$)')
 PROC_PREFIX = re.compile(r'^\([\w.-]+ pid=\d+\)\s*')
 
@@ -116,6 +125,48 @@ def classify_line(line):
     if TRANSIENT_RE.search(clean):
         return 'transient'
     return None
+
+
+def compiling_descendants(pid, proc_root='/proc'):
+    """Nomi dei processi di compilazione discendenti di `pid`, letti da /proc (stat per il padre, comm e cmdline)."""
+    children = {}
+    names = {}
+    try:
+        entries = [e for e in os.listdir(proc_root) if e.isdigit()]
+    except OSError:
+        return []
+    for entry in entries:
+        try:
+            with open(os.path.join(proc_root, entry, 'stat')) as f:
+                stat_line = f.read()
+        except OSError:
+            continue
+        head, _, rest = stat_line.rpartition(')')
+        fields = rest.split()
+        if len(fields) < 2 or not fields[1].lstrip('-').isdigit():
+            continue
+        child = int(entry)
+        children.setdefault(int(fields[1]), []).append(child)
+        names[child] = head.partition('(')[2]
+    found = []
+    stack = list(children.get(pid, []))
+    seen = set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend(children.get(cur, []))
+        comm = names.get(cur, '')
+        cmdline = ''
+        try:
+            with open(os.path.join(proc_root, str(cur), 'cmdline'), 'rb') as f:
+                cmdline = f.read().replace(b'\0', b' ').decode('utf-8', 'replace')
+        except OSError:
+            pass
+        if comm in COMPILERS or COMPILE_CMDLINE.search(cmdline):
+            found.append(comm)
+    return found
 
 
 def restart_decision(loading_started, fatal, transient, restarts, max_restarts, was_ready=False):
@@ -268,7 +319,8 @@ def env_config(env):
         'max_restarts': int(env.get('LLMPOD_MAX_RESTARTS', '1')),  # solo errori transitori prima dei pesi
         'state_dir': env.get('LLMPOD_STATE_DIR', '/root'),
         # vLLM fermo senza log dopo la lettura dei pesi: si dichiara bloccato (tipico di un problema NCCL/P2P tra le GPU)
-        'stall_seconds': float(env.get('LLMPOD_STALL_MINUTES', '10')) * 60,
+        # (predefinito 30: la compilazione di vLLM su Blackwell a freddo può restare muta a lungo; llmpod lo passa dal profilo)
+        'stall_seconds': float(env.get('LLMPOD_STALL_MINUTES', '30')) * 60,
         # un Pod in errore si elimina dopo questo tempo anche con l'inattività disattivata
         'error_seconds': float(env.get('LLMPOD_ERROR_MINUTES', '15')) * 60,
     }
@@ -599,11 +651,17 @@ class Supervisor:
                     else:
                         self.fail(f'vLLM terminato con codice {code} {why}' + (f' — causa: {cause[:300]}' if cause else ''), cause)
                 elif self._stalled(now):
-                    minutes = round(self.cfg['stall_seconds'] / 60)
-                    self.expected_exit = True
-                    if self.proc is not None and self.proc.poll() is None:
-                        self.proc.terminate()  # senza attendere: il controllo non si blocca
-                    self.fail(f'{STALL_CAUSE}: nessuna riga di log da {minutes} min dopo il caricamento dei pesi', STALL_CAUSE)
+                    compilers = self._compiling()
+                    if compilers:
+                        # Compilazione in corso (Inductor, JIT FlashInfer/Triton): non è un blocco, si riguarda tra 10 minuti.
+                        self.last_output_at = now - self.cfg.get('stall_seconds', 1800) + STALL_POSTPONE_SECONDS
+                        self.log(f'[llmpod] compilazione in corso ({", ".join(sorted(set(compilers)))}), attendo')
+                    else:
+                        cause = stall_cause(round(self.cfg.get('stall_seconds', 1800) / 60))
+                        self.expected_exit = True
+                        if self.proc is not None and self.proc.poll() is None:
+                            self.proc.terminate()  # senza attendere: il controllo non si blocca
+                        self.fail(cause, cause)
             finally:
                 self.proc_lock.release()
         if self.phase in ('downloading', 'loading'):
@@ -614,6 +672,8 @@ class Supervisor:
                     if not self.reloading:
                         self.phase = 'ready'
                         self.tracker = IdleTracker(now)
+                        # Di nuovo pronto dopo un riavvio: un crash successivo ha ancora diritto a un riavvio (mai due consecutivi).
+                        self.restarts = 0
                         promoted = True
             if promoted:
                 self.log('[llmpod] vLLM pronto')
@@ -627,14 +687,23 @@ class Supervisor:
                     tracker.observe(now, in_flight, success)
             except Exception as e:  # noqa: BLE001
                 self.log(f'[llmpod] metriche non disponibili: {e}')
+        return self._termination(now)
+
+    def _termination(self, now):
+        """Motivo di terminazione: durata massima, inattività o errore da error_seconds (anche con inattività "mai")."""
         tracker = self.tracker
         idle = tracker.idle_seconds(now) if tracker else None
         reason = termination_reason(now, self.started_at, self.max_seconds, idle, self.idle_seconds)
-        # Un Pod in errore non serve a nessuno: si elimina anche con l'inattività disattivata ("mai").
         if (reason is None and self.phase == 'error' and self.error_since is not None
                 and now - self.error_since >= self.cfg.get('error_seconds', 900)):
             reason = 'error-timeout'
         return reason
+
+    def _compiling(self):
+        proc = self.proc
+        if proc is None or proc.poll() is not None:
+            return []
+        return compiling_descendants(proc.pid, self.cfg.get('proc_root', '/proc'))
 
     def _stalled(self, now):
         """Vero se vLLM, dopo aver letto i pesi, non scrive più nulla da stall_seconds (es. NCCL bloccato tra le GPU)."""
@@ -670,9 +739,7 @@ class Supervisor:
             reason = self.step()
         except Exception as e:  # noqa: BLE001
             self.log(f'[llmpod] errore nel controllo: {e}')
-            now = self.clock()
-            idle = self.tracker.idle_seconds(now) if self.tracker else None
-            reason = termination_reason(now, self.started_at, self.max_seconds, idle, self.idle_seconds)
+            reason = self._termination(self.clock())
         if reason:
             self.terminate_reason = reason
             self.phase = 'terminating'
