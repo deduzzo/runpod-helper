@@ -317,6 +317,8 @@ def env_config(env):
         'vllm_cmd': json.loads(env['LLMPOD_VLLM_CMD']) if env.get('LLMPOD_VLLM_CMD') else ['vllm', 'serve'],
         'status_port': int(env.get('LLMPOD_STATUS_PORT', '8001')),
         'max_restarts': int(env.get('LLMPOD_MAX_RESTARTS', '1')),  # solo errori transitori prima dei pesi
+        # riavvii dopo crash a runtime (vLLM era pronto) per tutta la vita del Pod; si azzera solo con reload/tune
+        'max_runtime_restarts': int(env.get('LLMPOD_MAX_RUNTIME_RESTARTS', '2')),
         'state_dir': env.get('LLMPOD_STATE_DIR', '/root'),
         # vLLM fermo senza log dopo la lettura dei pesi: si dichiara bloccato (tipico di un problema NCCL/P2P tra le GPU)
         # (predefinito 30: la compilazione di vLLM su Blackwell a freddo può restare muta a lungo; llmpod lo passa dal profilo)
@@ -361,6 +363,7 @@ class Supervisor:
         self.args = list(cfg['args'])
         self.phase = 'downloading' if cfg['model_bytes'] > 0 else 'loading'
         self.restarts = 0
+        self.runtime_restarts = 0
         self.last_error = None
         self.error_cause = None
         self.error_since = None
@@ -561,6 +564,7 @@ class Supervisor:
                 self.args = list(args)
                 self.phase = 'loading'
                 self.restarts = 0
+                self.runtime_restarts = 0  # reload/tune esplicito: il conto dei crash a runtime riparte
                 self.last_error = None
                 self.error_cause = None
                 self.error_since = None
@@ -574,6 +578,7 @@ class Supervisor:
                 self.args = list(args)
                 self.phase = 'loading'
                 self.restarts = 0
+                self.runtime_restarts = 0  # reload/tune esplicito: il conto dei crash a runtime riparte
                 self.last_error = None
                 self.error_cause = None
                 self.error_since = None
@@ -640,7 +645,14 @@ class Supervisor:
                                                     self.transient_cause is not None, self.restarts, self.cfg['max_restarts'],
                                                     was_ready=was_ready)
                     cause = self.current_cause()
-                    if restart:
+                    if restart and was_ready and self.runtime_restarts >= self.cfg.get('max_runtime_restarts', 2):
+                        # Ciclo pronto → crash → riavvio: ogni giro ricarica i pesi e costa. Limite per la vita del Pod.
+                        crashes = self.runtime_restarts + 1
+                        limit_cause = f"vLLM si è bloccato {crashes} volte dopo l'avvio"
+                        self.fail(f'{limit_cause}: nessun altro riavvio automatico' + (f' — ultima causa: {cause[:300]}' if cause else ''), limit_cause)
+                    elif restart:
+                        if was_ready:
+                            self.runtime_restarts += 1
                         self.restarts += 1
                         self.log(f'[llmpod] {why} ({cause}): nuovo tentativo {self.restarts}/{self.cfg["max_restarts"]}')
                         if was_ready:
@@ -717,7 +729,7 @@ class Supervisor:
             'phase': self.phase, 'downloadedBytes': self.downloaded, 'totalBytes': self.cfg['model_bytes'],
             'idleSeconds': round(tracker.idle_seconds(now)) if tracker else None,
             'idleLimitSeconds': self.idle_seconds, 'uptimeSeconds': round(now - self.started_at),
-            'maxSeconds': self.max_seconds, 'restarts': self.restarts, 'lastError': self.last_error,
+            'maxSeconds': self.max_seconds, 'restarts': self.restarts, 'runtimeRestarts': self.runtime_restarts, 'lastError': self.last_error,
             'errorCause': self.error_cause, 'loadProgress': self.load_progress,
             'kvCacheTokens': self.kv_tokens, 'terminateReason': self.terminate_reason, 'args': self.args,
             'version': VERSION, 'features': ['watchdog', 'load-progress'],

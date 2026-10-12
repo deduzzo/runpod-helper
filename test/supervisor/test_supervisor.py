@@ -191,6 +191,9 @@ class PureFunctions(unittest.TestCase):
     def test_max_restarts_predefinito_uno(self):
         cfg = sv.env_config({'LLMPOD_MODEL': 'm', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k'})
         self.assertEqual(cfg['max_restarts'], 1)
+        self.assertEqual(cfg['max_runtime_restarts'], 2)
+        cfg = sv.env_config({'LLMPOD_MODEL': 'm', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k', 'LLMPOD_MAX_RUNTIME_RESTARTS': '5'})
+        self.assertEqual(cfg['max_runtime_restarts'], 5)
 
     def test_model_cache_bytes_conta_solo_il_modello_e_non_i_link(self):
         tmp = tempfile.mkdtemp()
@@ -359,6 +362,24 @@ class SupervisorIntegration(unittest.TestCase):
         self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
         self.assertEqual(self.sup.restarts, 1)  # nessun secondo riavvio consecutivo
         self.assertIn('nessun riavvio automatico', self.sup.last_error)
+
+    def test_limite_totale_dei_riavvii_a_runtime(self):
+        self.assertEqual(self.cfg['max_runtime_restarts'], 2)
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '1.5'
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error', timeout=40))
+        st = self.sup.status()
+        self.assertEqual(st['runtimeRestarts'], 2)
+        self.assertEqual(st['errorCause'], "vLLM si è bloccato 3 volte dopo l'avvio")
+        self.assertIsNotNone(self.sup.error_since)  # poi vale l'error-timeout
+
+    def test_reload_azzera_i_riavvii_a_runtime(self):
+        self.sup.runtime_restarts = 2
+        self.assertTrue(self.sup.try_begin_reload(['--max-model-len', '2048']))
+        self.assertEqual(self.sup.runtime_restarts, 0)
+        self.sup.runtime_restarts = 2
+        self.sup.reload(['--max-model-len', '2048'])
+        self.assertEqual(self.sup.runtime_restarts, 0)
 
     def test_restarts_si_azzera_quando_vllm_torna_pronto(self):
         os.environ['FAKE_VLLM_EXIT_AFTER'] = '2'
