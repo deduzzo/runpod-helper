@@ -129,5 +129,17 @@ non ancora pronto elimina il Pod; `down` resta l'unico modo esplicito per elimin
 tune. Nuovo `jobs.settlePending`. Test: tune in attesa annullato (2 ricariche, nessun DELETE), domanda di ritorno
 pendente, `down` durante un tune.
 
+**Rifiniture finali**:
+- `job_cancel` su un `up` elimina solo il Pod creato da quel job (`ops.terminatePod`), mai altri Pod del profilo;
+  prima della creazione annulla e basta. Anche la chiusura del server elimina solo i Pod creati dai job.
+- `job_cancel` su un tune: un secondo annullamento risponde "Annullamento già in corso"; durante il ritorno agli
+  argomenti precedenti (dopo un errore) risponde "Ritorno … già in corso" e non lo interrompe; un annullamento
+  arrivato durante una chiamata HTTP resta in sospeso e lo consuma la prima attesa successiva (o il controllo dopo
+  la ricarica). Questo chiude anche il dubbio precedente sul ritorno interrotto.
+- `ask` per `llmpod logs [* ]--follow…` e la forma `node src/cli/index.js`: verificato col matcher dei test che,
+  con l'ordine deny → ask → allow, prevale sull'allow di `logs *`.
+- Se l'eliminazione automatica di un `up` fallito non riesce, l'errore finale dice "il Pod <id> potrebbe essere
+  ancora acceso: eliminalo con down" (suggerimento `llmpod down <profilo>`).
+
 Dubbio: non ho potuto verificare quali permessi *Restricted* di Runpod coprano la query GraphQL del credito; il
 README lo dice in modo prudente.

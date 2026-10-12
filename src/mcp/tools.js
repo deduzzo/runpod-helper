@@ -56,7 +56,9 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
     assertNotBusy(profile);
     // interrupt: interruzione "morbida" (job_cancel su un tune): fa uscire dall'attesa in corso senza annullare il job,
     // che poi riporta vLLM agli argomenti precedenti; viene sostituito a ogni uso, così le attese successive funzionano.
-    const m = { kind, profile, podId: null, cancelRequested: false, interrupt: new AbortController() };
+    // interruptPending: un job_cancel arrivato mentre non c'era un'attesa in corso (es. durante una chiamata HTTP) non va
+    // perso: la prossima attesa lo consuma. reverting: il tune sta già tornando agli argomenti precedenti.
+    const m = { kind, profile, podId: null, cancelRequested: false, interrupt: new AbortController(), interruptPending: false, reverting: false };
     const job = jobs.start(`${kind}:${profile}`, async ({ ask, emit, signal }) => {
       const events = createEvents();
       events.on((e) => {
@@ -66,11 +68,27 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
       // Il Pod costa sempre durante tune e, in up, da quando è stato creato: domande brevi (3 min) col valore sicuro.
       const costly = () => kind === 'tune' || Boolean(m.podId);
       // Dopo job_cancel ogni domanda vale subito il suo valore sicuro (per tune: tornare agli argomenti precedenti).
-      const jobAsk = (text, defYes, opts = {}) => (m.cancelRequested
-        ? Promise.resolve(opts.timeoutValue ?? false)
-        : ask(text, defYes, { ...opts, ...(costly() ? { timeoutMs: COSTLY_QUESTION_TIMEOUT_MS } : {}) }));
+      // In un tune l'unica domanda è il ritorno agli argomenti precedenti: da lì in poi job_cancel non interrompe più.
+      const jobAsk = (text, defYes, opts = {}) => {
+        if (kind === 'tune') {
+          m.reverting = true;
+          m.interruptPending = false; // l'interruzione è già arrivata (siamo nel ritorno indietro): non deve fermarlo
+        }
+        return m.cancelRequested
+          ? Promise.resolve(opts.timeoutValue ?? false)
+          : ask(text, defYes, { ...opts, ...(costly() ? { timeoutMs: COSTLY_QUESTION_TIMEOUT_MS } : {}) });
+      };
       const hardSleep = abortableSleep(ctx.sleep, signal);
-      const sleep = (ms) => abortableSleep(hardSleep, m.interrupt.signal)(ms);
+      const sleep = async (ms) => {
+        if (m.interruptPending) { m.interruptPending = false; throw cancelledError(); }
+        const ctl = m.interrupt;
+        try {
+          await abortableSleep(hardSleep, ctl.signal)(ms);
+        } catch (err) {
+          if (ctl.signal.aborted) m.interruptPending = false; // interruzione consumata da questa attesa
+          throw err;
+        }
+      };
       const ops = ctx.makeOps({ ask: jobAsk, askChoice: null, events, sleep });
       return fn({ ops, ask: jobAsk, emit, m });
     });
@@ -108,7 +126,7 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
         if (m?.kind !== 'up' || !m.podId) continue;
         log(`chiusura: elimino il Pod ${m.podId} (${m.profile}), avviato ma non ancora pronto`);
         try {
-          await syncOps().down(m.profile, { yes: true });
+          await syncOps().terminatePod(m.profile, m.podId); // solo il Pod creato dal job
           terminated.push(m.podId);
         } catch (err) {
           log(`chiusura: eliminazione del Pod ${m.podId} non riuscita: ${err.message}. Controlla su https://www.runpod.io/console/pods`);
@@ -346,16 +364,28 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
         if (job.status !== 'running') throw new LlmpodError(Codes.INVALID_INPUT, `Il job ${jobId} non è in corso (${job.status})`, { hint: 'Per eliminare un Pod usa down, con il permesso dell\'utente' });
         if (m.kind === 'tune') {
           // Non si tocca il Pod: si esce dall'attesa e il job stesso torna agli argomenti precedenti.
+          const next = 'vLLM viene riportato agli argomenti precedenti (alcuni minuti): segui job_status / job_events; l\'esito è nell\'evento finale';
+          if (m.cancelRequested) return { jobId, ignored: true, message: 'Annullamento già in corso', next };
+          if (jobs.get(jobId).question) {
+            m.cancelRequested = true;
+            jobs.settlePending(jobId); // domanda di ritorno: sì
+            return { jobId, interrupted: true, podKept: true, next };
+          }
+          if (m.reverting) return { jobId, ignored: true, message: 'Ritorno agli argomenti precedenti già in corso', next };
           m.cancelRequested = true;
-          jobs.settlePending(jobId);
+          m.interruptPending = true;
           const old = m.interrupt;
           m.interrupt = new AbortController();
           old.abort();
-          return { jobId, interrupted: true, podKept: true, next: 'vLLM viene riportato agli argomenti precedenti (alcuni minuti): segui job_status / job_events; l\'esito è nell\'evento finale' };
+          return { jobId, interrupted: true, podKept: true, next };
         }
+        // up: si elimina SOLO il Pod creato da questo job (mai altri Pod del profilo); se non c'è ancora, si annulla e basta.
         jobs.cancel(jobId, 'Annullato con job_cancel');
         await jobs.wait(jobId, 60_000);
-        return downAndList(m.profile, [jobId]);
+        const ops = syncOps();
+        if (m.podId) await ops.terminatePod(m.profile, m.podId);
+        const after = await ops.status();
+        return { jobId, cancelled: true, terminatedPodId: m.podId, allPods: after.pods.map((p) => ({ profile: p.profile, podId: p.podId, state: p.state, hourlyUSD: p.hourlyUSD })) };
       },
     },
     {

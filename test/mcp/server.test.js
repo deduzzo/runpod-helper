@@ -417,6 +417,50 @@ describe('nessun Pod lasciato acceso da un job', () => {
     expect(t.runpod.deletePod).not.toHaveBeenCalled();
   });
 
+  it('secondo job_cancel sullo stesso tune: ignorato ("annullamento già in corso"), il ritorno indietro prosegue', async () => {
+    const t = setup({ onReload: (_a, n) => (n === 1 ? 'loading' : 'ready') }, { sleep: yieldSleep });
+    const r = await t.call('tune', TUNE);
+    await untilReloads(t, 1);
+    expect((await t.call('job_cancel', { jobId: r.data.jobId, confirm: true })).data.interrupted).toBe(true);
+    const again = await t.call('job_cancel', { jobId: r.data.jobId, confirm: true });
+    expect(again.data).toMatchObject({ ignored: true, message: 'Annullamento già in corso' });
+    const job = await t.settle(r.data.jobId);
+    expect(job.error.message).toMatch(/di nuovo attivo con gli argomenti precedenti/);
+    expect(t.calls('/reload', 'POST')).toHaveLength(2);
+    expect(t.runpod.deletePod).not.toHaveBeenCalled();
+  });
+
+  it('job_cancel arrivato durante una chiamata HTTP (nessuna attesa in corso) non va perso', async () => {
+    let gate = null;
+    let blocked = false;
+    const beforeStatus = async () => { if (gate) { blocked = true; await gate; } };
+    const t = setup({ onReload: (_a, n) => (n === 1 ? 'loading' : 'ready'), beforeStatus }, { sleep: yieldSleep });
+    const r = await t.call('tune', TUNE);
+    await untilReloads(t, 1);
+    let release;
+    gate = new Promise((res) => { release = res; });
+    for (let i = 0; i < 500 && !blocked; i++) await new Promise((res) => setTimeout(res, 2));
+    expect(blocked).toBe(true); // il job è dentro GET /status
+    expect((await t.call('job_cancel', { jobId: r.data.jobId, confirm: true })).data.interrupted).toBe(true);
+    gate = null;
+    release();
+    const job = await t.settle(r.data.jobId);
+    expect(job.error).toMatchObject({ code: 'CANCELLED', message: expect.stringMatching(/argomenti precedenti/) });
+    expect(t.calls('/reload', 'POST').at(-1)[2].json.args).toEqual(ACTIVE_ARGS);
+  });
+
+  it('job_cancel su un up prima della creazione del Pod: annulla e basta, nessun altro Pod del profilo toccato', async () => {
+    const t = setup({ pods: [{ id: 'old', name: 'llmpod-p', status: 'EXITED', cost: 0 }] });
+    const r = await t.call('up', UP);
+    const job = await t.settle(r.data.jobId);
+    expect(job.question.text).toMatch(/Pod spento/);
+    const c = await t.call('job_cancel', { jobId: r.data.jobId, confirm: true });
+    expect(c.data).toMatchObject({ cancelled: true, terminatedPodId: null });
+    expect(t.runpod.deletePod).not.toHaveBeenCalled();
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+    expect(c.data.allPods.map((p) => p.podId)).toEqual(['old']);
+  });
+
   it('down durante un tune (richiesta esplicita): annulla il job ed elimina il Pod', async () => {
     const t = setup({ onReload: () => 'loading' }, { sleep: yieldSleep });
     const r = await t.call('tune', TUNE);

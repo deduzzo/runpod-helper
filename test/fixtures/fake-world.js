@@ -37,6 +37,7 @@ export function createWorld({
   pods = [{ id: 'pod1', name: 'llmpod-p', status: 'RUNNING', cost: 1.5, gpu: { id: 'GPU80', count: 1 } }],
   profile = PROFILE, catalog = CATALOG, balance = 50, metrics = [metricsText(), metricsText({ gen: 1500, prompt: 3000, drafts: 200, draftTokens: 400, accepted: 250, pos: [170, 80] })],
   phase = 'ready', onReload = () => 'ready', reloadStatus = 202, smoke = [], logLines = null, config = {},
+  beforeStatus = null, // async () => {}: per simulare una chiamata HTTP lenta a /status
 } = {}) {
   clearSecrets();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-world-'));
@@ -68,6 +69,7 @@ export function createWorld({
       const sup = u.host.endsWith('-8001.proxy.runpod.net');
       if (sup && opts.headers?.authorization !== `Bearer ${KEY}`) return { ok: false, status: 401, data: { error: 'unauthorized' } };
       if (sup && u.pathname === '/status') {
+        if (beforeStatus) await beforeStatus();
         const data = { phase: sv.phase, args: [...sv.args], features: ['watchdog'], idleSeconds: 60, idleLimitSeconds: 1800, uptimeSeconds: 3600, maxSeconds: 28800, restarts: 0, lastError: sv.phase === 'error' ? 'vLLM terminato con codice 1' : null, kvCacheTokens: 500000 };
         if (sv.pending) { sv.phase = sv.pending; sv.pending = null; }
         return { ok: true, status: 200, data };

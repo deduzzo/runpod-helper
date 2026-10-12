@@ -214,6 +214,13 @@ describe('ops.upPreview e up con GPU scelta e prezzo atteso', () => {
     expect(t.runpod.deletePod).toHaveBeenCalledWith('pod1');
   });
 
+  it('autoTerminate non riuscito (DELETE fallito): l\'errore finale dice che il Pod potrebbe essere ancora acceso', async () => {
+    const t = setup({ pods: [], smoke: [false] });
+    t.runpod.deletePod.mockImplementation(async () => { throw new Error('HTTP 500'); });
+    await expect(t.ops.up('p', { gpu: { id: 'GPU80', count: 1 }, expectedHourlyUSD: 1.5, costConfirmed: true, autoTerminate: true }))
+      .rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED', message: expect.stringMatching(/il Pod pod1 potrebbe essere ancora acceso: eliminalo con down/), hint: expect.stringMatching(/llmpod down p/) });
+  });
+
   it('senza costConfirmed la conferma del costo resta una domanda', async () => {
     const t = setup(noPods, { answers: [false] });
     await expect(t.ops.up('p', { gpu: { id: 'GPU80', count: 1 }, expectedHourlyUSD: 1.5 })).rejects.toMatchObject({ code: 'CANCELLED' });

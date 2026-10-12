@@ -28,6 +28,10 @@
       "Bash(llmpod --help)"
     ],
     "ask": [
+      "Bash(llmpod logs --follow*)",
+      "Bash(llmpod logs * --follow*)",
+      "Bash(node src/cli/index.js logs --follow*)",
+      "Bash(node src/cli/index.js logs * --follow*)",
       "mcp__llmpod__up",
       "mcp__llmpod__tune",
       "mcp__llmpod__keep",

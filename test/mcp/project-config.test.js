@@ -46,6 +46,14 @@ describe('integrazione con Claude Code nel repository', () => {
     }
   });
 
+  it('logs --follow (non termina) chiede conferma anche se logs è consentito: ask prevale su allow', () => {
+    for (const cmd of ['logs --follow', 'logs p --follow', 'logs p --since 3 --follow', 'logs p --follow --json']) {
+      expect(decide(settings.permissions, `llmpod ${cmd}`), cmd).toBe('ask');
+      expect(decide(settings.permissions, `node src/cli/index.js ${cmd}`), cmd).toBe('ask');
+    }
+    expect(decide(settings.permissions, 'llmpod logs p --since 3')).toBe('allow');
+  });
+
   it('allow: i comandi CLI di sola lettura, anche senza argomenti', () => {
     for (const cmd of ['status', 'status --all', 'metrics p --json', 'logs p --since 3', 'search --set abliterated', '--help']) {
       expect(decide(settings.permissions, `llmpod ${cmd}`), cmd).toBe('allow');

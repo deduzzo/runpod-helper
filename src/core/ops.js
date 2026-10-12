@@ -180,15 +180,27 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     }
   }
 
+  // false se l'eliminazione è stata chiesta ma non è riuscita (il Pod potrebbe essere ancora acceso).
   async function offerTerminate(name, podId, yes) {
     let ok = true;
     try { ok = yes || await ask(`Terminare il Pod ${podId} per non continuare a pagare?`, true, { timeoutValue: true }); } catch { ok = true; } // Ctrl+C al prompt: meglio spegnere
-    if (!ok) return;
+    if (!ok) return true;
     try {
       await terminate(name, podId);
+      return true;
     } catch (e) {
       events.emit('warning', { message: `Terminazione del Pod ${podId} non riuscita: ${e.message}. Controlla su https://www.runpod.io/console/pods` });
+      return false;
     }
+  }
+
+  // L'errore finale di up dice chiaramente che il Pod potrebbe essere ancora acceso (e costare).
+  function strayPodError(err, name, podId) {
+    if (err instanceof Error) {
+      err.message = `${err.message} — il Pod ${podId} potrebbe essere ancora acceso: eliminalo con down`;
+      err.hint = `Elimina il Pod con: llmpod down ${name} (oppure su https://www.runpod.io/console/pods)`;
+    }
+    return err;
   }
 
   const REPAIRABLE = [Codes.OOM, Codes.VLLM_ERROR, Codes.SMOKE_TEST_FAILED];
@@ -418,7 +430,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
           const st = store.readState();
           st.pods[name] = { podId: stray.id, startedAt: new Date(startedAt).toISOString(), hourlyUSD: first.hourly, dataCenterId: first.dataCenterId, withVolume: first.withVolume };
           store.writeState(st);
-          await offerTerminate(name, stray.id, yes || autoTerminate);
+          if (!(await offerTerminate(name, stray.id, yes || autoTerminate))) throw strayPodError(err, name, stray.id);
         } else {
           events.emit('warning', { message: AMBIGUOUS_CREATE_WARNING });
         }
@@ -484,7 +496,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       };
     } catch (err) {
       events.emit('warning', { message: `Avvio non riuscito: ${err.message}` });
-      await offerTerminate(name, pod.id, yes || autoTerminate);
+      if (!(await offerTerminate(name, pod.id, yes || autoTerminate))) throw strayPodError(err, name, pod.id);
       throw err;
     }
   }
@@ -650,5 +662,6 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
   }
 
   const live = createLiveOps({ store, runpod, http, events, ask, now, sleep, findPod, keyOf, refreshZcode });
-  return { saveProfile, saveProfileArgs, up, upPreview, down, keep, status, endpoint, rotateKey, resolveProfile, ...live };
+  // terminatePod: elimina UN Pod preciso del profilo (server MCP: solo il Pod creato da un job annullato).
+  return { saveProfile, saveProfileArgs, up, upPreview, down, keep, status, endpoint, rotateKey, resolveProfile, terminatePod: terminate, ...live };
 }
