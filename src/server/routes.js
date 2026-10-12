@@ -70,7 +70,7 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     const b = await readJson(req);
     // <set>/<n> come nella CLI: revisione verificata e, senza context, il contesto consigliato dal set.
     const fromSet = resolveSetRef(String(b.model ?? ''));
-    const r = await runPlan({ ctx, modelRef: fromSet ? fromSet.modelRef : String(b.model ?? ''), context: intParam(b.context, fromSet?.recommendedContext ?? 65536, 1024, 1_048_576, 'context'), concurrency: intParam(b.concurrency, 2, 1, 256, 'concurrency'), set: Array.isArray(b.set) ? b.set.map(String) : [], extra: Array.isArray(b.extra) ? b.extra.map(String) : [], advisor: typeof b.advisor === 'boolean' ? b.advisor : undefined });
+    const r = await runPlan({ ctx, modelRef: fromSet ? fromSet.modelRef : String(b.model ?? ''), context: intParam(b.context, fromSet?.recommendedContext ?? 65536, 1024, 1_048_576, 'context'), concurrency: intParam(b.concurrency, 2, 1, 256, 'concurrency'), set: Array.isArray(b.set) ? b.set.map(String) : [], extra: Array.isArray(b.extra) ? b.extra.map(String) : [], ncclSafe: b.ncclSafe !== false, advisor: typeof b.advisor === 'boolean' ? b.advisor : undefined });
     ctx.store.writeJson('last-plan.json', r.plan);
     state.lastAdvice = r.advice && r.advice.accepted.length ? r.advice : null;
     state.lastAdvicePlanId = state.lastAdvice ? planId(r.plan) : null;

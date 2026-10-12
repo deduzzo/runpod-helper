@@ -7,7 +7,8 @@ import { createStore } from '../../src/core/config.js';
 import { createEvents } from '../../src/core/events.js';
 import { clearSecrets } from '../../src/core/secrets.js';
 import { LlmpodError, Codes } from '../../src/core/errors.js';
-import { waitForReady, readyTimeoutMs } from '../../src/core/pod/launcher.js';
+import { waitForReady, readyTimeoutMs, startupTimeoutMs } from '../../src/core/pod/launcher.js';
+import { estimateStartup } from '../../src/core/planner/startup.js';
 
 vi.mock('../../src/core/pod/launcher.js', async (orig) => {
   const m = await orig();
@@ -102,8 +103,11 @@ describe('ops', () => {
       await ops.up('qwen3-coder', { yes: true });
       return waitForReady.mock.calls[0][0].timeoutMs;
     };
-    expect(await run({ weightsGiB: 43.9, downloadBytes: DL })).toBe(readyTimeoutMs(DL));
-    expect(await run({ weightsGiB: 56.9 })).toBe(readyTimeoutMs(61066575656));
+    // il massimo tra il limite sui byte e 1,5 × la stima dell'avvio (qui: volume di rete, una GPU)
+    const est = (dl) => estimateStartup({ downloadBytes: dl, weightsBytes: 61066575656, count: 1, withVolume: true });
+    expect(await run({ weightsGiB: 43.9, downloadBytes: DL })).toBe(startupTimeoutMs(DL, est(DL)));
+    expect(await run({ weightsGiB: 56.9 })).toBe(startupTimeoutMs(61066575656, est(61066575656)));
+    expect(startupTimeoutMs(DL, est(DL))).toBeGreaterThan(readyTimeoutMs(DL));
   });
 
   it('up: smoke test fallito → propone di terminare e termina', async () => {

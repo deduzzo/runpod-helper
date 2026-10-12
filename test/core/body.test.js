@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPodBody, argsForCount, START_CMD } from '../../src/core/pod/body.js';
+import { assertWatchdogSettings } from '../../src/core/watchdog.js';
 
 const profile = {
   name: 'qwen3-coder', servedName: 'qwen3-coder', cloud: 'SECURE',
@@ -28,7 +29,8 @@ describe('buildPodBody', () => {
     expect(b.mounts).toBeUndefined();
     expect(b.env.HF_HOME).toBe('/root/.cache/huggingface');
     expect(b.disk).toBe(Math.ceil(61.066575656 * 1.2) + 20);
-    expect(JSON.parse(b.env.LLMPOD_VLLM_ARGS)).toEqual(['--max-model-len', '65536', '--tensor-parallel-size', '2']);
+    // GPU sconosciuta ×2: trattata come PCIe senza NVLink → modalità NCCL sicura
+    expect(JSON.parse(b.env.LLMPOD_VLLM_ARGS)).toEqual(['--max-model-len', '65536', '--tensor-parallel-size', '2', '--disable-custom-all-reduce']);
   });
 
   it('senza volume: disco e LLMPOD_MODEL_BYTES sul totale da scaricare (estimate.downloadBytes), non sui soli pesi in VRAM', () => {
@@ -40,6 +42,20 @@ describe('buildPodBody', () => {
     // profili vecchi senza il campo: ripiego su weightsBytes
     const old = buildPodBody({ profile: { ...profile, estimate: {} }, candidate: { id: 'GPU80', count: 1, dataCenterId: 'X', withVolume: false }, apiKey: 'k', minCudaVersion: '12.9' });
     expect(old.disk).toBe(Math.ceil(61.066575656 * 1.2) + 20);
+  });
+
+  it('LLMPOD_STALL_MINUTES dal profilo (watchdog.stallMinutes), predefinito 30', () => {
+    const c = { id: 'G', count: 1, dataCenterId: 'X', withVolume: false };
+    expect(buildPodBody({ profile, candidate: c, apiKey: 'k', minCudaVersion: '12.9' }).env.LLMPOD_STALL_MINUTES).toBe('30');
+    const p = { ...profile, watchdog: { ...profile.watchdog, stallMinutes: 45 } };
+    expect(buildPodBody({ profile: p, candidate: c, apiKey: 'k', minCudaVersion: '12.9' }).env.LLMPOD_STALL_MINUTES).toBe('45');
+  });
+
+  it('watchdog.stallMinutes validato: intero tra 5 e 240', () => {
+    expect(() => assertWatchdogSettings({ idleMinutes: 30, maxHours: 8, stallMinutes: 60 }, 'p')).not.toThrow();
+    for (const bad of [2, 241, 30.5, '30', null]) {
+      expect(() => assertWatchdogSettings({ stallMinutes: bad }, 'p'), String(bad)).toThrow(/stallMinutes/);
+    }
   });
 
   it('HF_TOKEN solo per modelli gated', () => {

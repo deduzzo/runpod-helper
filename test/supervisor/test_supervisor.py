@@ -24,6 +24,20 @@ def free_port():
         return s.getsockname()[1]
 
 
+def fake_proc(procs):
+    """Finta /proc: {pid: (comm, ppid)} con i file stat e comm."""
+    root = tempfile.mkdtemp()
+    for pid, (comm, ppid) in procs.items():
+        d = os.path.join(root, str(pid))
+        os.makedirs(d)
+        with open(os.path.join(d, 'stat'), 'w') as f:
+            f.write(f'{pid} ({comm}) S {ppid} 1 1 0 -1\n')
+        with open(os.path.join(d, 'comm'), 'w') as f:
+            f.write(comm + '\n')
+    os.makedirs(os.path.join(root, 'self'))
+    return root
+
+
 def wait_until(cond, timeout=15):
     end = time.time() + timeout
     while time.time() < end:
@@ -122,6 +136,83 @@ class PureFunctions(unittest.TestCase):
         self.assertEqual(sv.valid_reload_args({'args': ['--max-model-len', '4096', '--enable-prefix-caching']}),
                          ['--max-model-len', '4096', '--enable-prefix-caching'])
 
+    def test_parse_load_progress(self):
+        line = '(Worker_TP0 pid=231) Loading safetensors checkpoint shards:  66% Completed | 135/206 [14:39<08:15, 6.98s/it]'
+        self.assertEqual(sv.parse_load_progress(line), {'done': 135, 'total': 206, 'percent': 66, 'elapsedSeconds': 879, 'remainingSeconds': 495})
+        self.assertEqual(sv.parse_load_progress('Loading safetensors checkpoint shards:   0% Completed | 0/206 [00:00<?, ?it/s]'),
+                         {'done': 0, 'total': 206, 'percent': 0, 'elapsedSeconds': 0, 'remainingSeconds': None})
+        self.assertEqual(sv.parse_load_progress('Loading safetensors checkpoint shards: 10% Completed | 20/206 [1:02:03<9:00:00, 7s/it]')['remainingSeconds'], 32400)
+        self.assertIsNone(sv.parse_load_progress('INFO Loading weights took 12.3 seconds'))
+
+    def test_classify_line(self):
+        # i messaggi "contenitore" di EngineCore/APIServer non sono la causa: si classificano a parte
+        self.assertEqual(sv.classify_line("RuntimeError: Worker failed with error 'NCCL error: unhandled cuda error', please check the stack trace above for the root cause"), 'wrapper')
+        self.assertEqual(sv.classify_line('RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}'), 'wrapper')
+        self.assertEqual(sv.classify_line('(Worker_TP0 pid=231) ERROR 10-12 10:01:02 [multiproc_executor.py:654] RuntimeError: NCCL error: unhandled cuda error (run with NCCL_DEBUG=INFO for details)'), 'fatal')
+        self.assertEqual(sv.classify_line("transport/shm.cc:590 NCCL WARN Cuda failure 217 'peer access is not supported between these two devices'"), 'fatal')
+        self.assertIsNone(sv.classify_line('NCCL WARN NET/Plugin: Failed to open libibverbs.so'))
+        self.assertEqual(sv.classify_line('torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB'), 'fatal')
+        self.assertEqual(sv.classify_line('RuntimeError: CUDA error: an illegal memory access was encountered'), 'fatal')
+        self.assertEqual(sv.classify_line("requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='cas-bridge.xethub.hf.co')"), 'transient')
+        self.assertEqual(sv.classify_line('huggingface_hub.errors.HfHubHTTPError: 503 Server Error: Service Unavailable'), 'transient')
+        self.assertEqual(sv.classify_line('OSError: [Errno -3] Temporary failure in name resolution'), 'transient')
+        self.assertIsNone(sv.classify_line('INFO Started server process'))
+        self.assertIsNone(sv.classify_line('  File "/x/requests/exceptions.py", line 3, in ConnectionError'))
+
+    def test_cause_line(self):
+        self.assertEqual(sv.cause_line('(EngineCore_DP0 pid=120) RuntimeError: boom'), 'RuntimeError: boom')
+        self.assertIsNone(sv.cause_line('  File "/x.py", line 1, in f'))
+        self.assertIsNone(sv.cause_line('INFO tutto bene'))
+
+    def test_restart_decision(self):
+        # (riavviare?, motivo): solo errori transitori prima del caricamento dei pesi, entro max_restarts
+        self.assertTrue(sv.restart_decision(loading_started=False, fatal=False, transient=True, restarts=0, max_restarts=1)[0])
+        self.assertFalse(sv.restart_decision(loading_started=False, fatal=False, transient=True, restarts=1, max_restarts=1)[0])
+        self.assertIn('dopo 1 riavvi', sv.restart_decision(loading_started=False, fatal=False, transient=True, restarts=1, max_restarts=1)[1])
+        self.assertFalse(sv.restart_decision(loading_started=True, fatal=False, transient=True, restarts=0, max_restarts=1)[0])
+        self.assertIn('caricamento dei pesi', sv.restart_decision(loading_started=True, fatal=False, transient=False, restarts=0, max_restarts=1)[1])
+        self.assertFalse(sv.restart_decision(loading_started=False, fatal=True, transient=True, restarts=0, max_restarts=1)[0])
+        self.assertFalse(sv.restart_decision(loading_started=False, fatal=False, transient=False, restarts=0, max_restarts=1)[0])
+        # crash a runtime (vLLM era pronto): un riavvio, anche dopo il caricamento e con errore non transitorio
+        self.assertTrue(sv.restart_decision(loading_started=True, fatal=True, transient=False, restarts=0, max_restarts=1, was_ready=True)[0])
+        self.assertFalse(sv.restart_decision(loading_started=True, fatal=True, transient=False, restarts=1, max_restarts=1, was_ready=True)[0])
+
+    def test_compiling_descendants(self):
+        root = fake_proc({100: ('python3', 1), 101: ('python3', 100), 102: ('ninja', 101), 103: ('cicc', 102),
+                          200: ('nvcc', 1), 201: ('bash', 100)})
+        self.assertEqual(sorted(sv.compiling_descendants(100, root)), ['cicc', 'ninja'])
+        self.assertEqual(sv.compiling_descendants(201, root), [])
+        self.assertEqual(sv.compiling_descendants(100, os.path.join(root, 'assente')), [])
+
+    def test_stall_minutes_dall_ambiente(self):
+        cfg = sv.env_config({'LLMPOD_MODEL': 'm', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k', 'LLMPOD_STALL_MINUTES': '45'})
+        self.assertEqual(cfg['stall_seconds'], 45 * 60)
+
+    def test_max_restarts_predefinito_uno(self):
+        cfg = sv.env_config({'LLMPOD_MODEL': 'm', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k'})
+        self.assertEqual(cfg['max_restarts'], 1)
+        self.assertEqual(cfg['max_runtime_restarts'], 2)
+        cfg = sv.env_config({'LLMPOD_MODEL': 'm', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k', 'LLMPOD_MAX_RUNTIME_RESTARTS': '5'})
+        self.assertEqual(cfg['max_runtime_restarts'], 5)
+
+    def test_model_cache_bytes_conta_solo_il_modello_e_non_i_link(self):
+        tmp = tempfile.mkdtemp()
+        hub = os.path.join(tmp, 'hub')
+        mine = os.path.join(hub, 'models--org--modello')
+        os.makedirs(os.path.join(mine, 'blobs'))
+        os.makedirs(os.path.join(mine, 'snapshots', 'abc'))
+        with open(os.path.join(mine, 'blobs', 'h1'), 'wb') as f:
+            f.write(b'x' * 100)
+        with open(os.path.join(mine, 'blobs', 'h2.incomplete'), 'wb') as f:
+            f.write(b'x' * 30)
+        os.symlink(os.path.join('..', '..', 'blobs', 'h1'), os.path.join(mine, 'snapshots', 'abc', 'model.safetensors'))
+        other = os.path.join(hub, 'models--altro--modello', 'blobs')
+        os.makedirs(other)
+        with open(os.path.join(other, 'h'), 'wb') as f:
+            f.write(b'x' * 1000)
+        self.assertEqual(sv.model_cache_bytes(tmp, 'org/modello'), 130)
+        self.assertEqual(sv.model_cache_bytes(tmp, 'org/assente'), 0)
+
     def test_emergency_terminate(self):
         runpod = FakeRunpod()
         try:
@@ -143,6 +234,8 @@ class SupervisorIntegration(unittest.TestCase):
         os.environ['FAKE_VLLM_STATE'] = self.state
         os.environ['VLLM_API_KEY'] = KEY
         os.environ.pop('FAKE_VLLM_EXIT_AFTER', None)
+        os.environ.pop('FAKE_VLLM_LINES', None)
+        os.environ.pop('FAKE_VLLM_NOT_READY', None)
         self.cfg = sv.env_config({
             'LLMPOD_MODEL': 'org/modello', 'LLMPOD_SERVED_NAME': 'modello', 'VLLM_API_KEY': KEY,
             'LLMPOD_VLLM_ARGS': '["--max-model-len","4096"]', 'LLMPOD_IDLE_MINUTES': '1', 'LLMPOD_MAX_HOURS': '1',
@@ -186,13 +279,215 @@ class SupervisorIntegration(unittest.TestCase):
         self.now[0] += 3600
         self.assertEqual(self.sup.step(), 'max-duration')
 
-    def test_crash_riavvio_poi_errore(self):
+    def test_crash_senza_errore_transitorio_nessun_riavvio(self):
         os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.5'
+        os.environ['FAKE_VLLM_NOT_READY'] = '1'
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
+        self.assertEqual(self.sup.restarts, 0)
+        self.assertIn('codice 3', self.sup.last_error)
+        self.assertIn('nessun riavvio automatico', self.sup.last_error)
+        self.assertIsNotNone(self.sup.tracker)  # l'inattività continua a contare anche in errore
+
+    def test_crash_transitorio_prima_del_caricamento_un_solo_riavvio(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.5'
+        os.environ['FAKE_VLLM_NOT_READY'] = '1'
+        os.environ['FAKE_VLLM_LINES'] = json.dumps([
+            "requests.exceptions.ConnectionError: HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded",
+        ])
         self.sup.start_vllm()
         self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.restarts)[1] == 1))
         self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
-        self.assertIn('codice 3', self.sup.last_error)
-        self.assertIsNotNone(self.sup.tracker)  # l'inattività continua a contare anche in errore
+        self.assertEqual(self.sup.restarts, 1)
+        self.assertIn('dopo 1 riavvi', self.sup.last_error)
+        self.assertIn('ConnectionError', self.sup.status()['errorCause'])
+
+    def test_errore_nccl_durante_il_caricamento_nessun_riavvio(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.5'
+        os.environ['FAKE_VLLM_NOT_READY'] = '1'
+        os.environ['FAKE_VLLM_LINES'] = json.dumps([
+            '(Worker_TP0 pid=231) Loading safetensors checkpoint shards:  66% Completed | 135/206 [14:39<08:15, 6.98s/it]',
+            '(EngineCore_DP0 pid=120) WARNING SymmMemCommunicator: Device capability 12.0 not supported',
+            "(EngineCore_DP0 pid=120) RuntimeError: Worker failed with error 'NCCL error: unhandled cuda error (run with NCCL_DEBUG=INFO for details)', please check the stack trace above for the root cause",
+            '  File "/usr/lib/python3/site-packages/vllm/v1/engine/core.py", line 12, in run',
+        ])
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
+        self.assertEqual(self.sup.restarts, 0)
+        st = self.sup.status()
+        self.assertIn('caricamento dei pesi', st['lastError'])
+        self.assertIn('NCCL error: unhandled cuda error', st['lastError'])
+        self.assertTrue(st['errorCause'].startswith('RuntimeError: Worker failed'))
+        self.assertEqual(st['restarts'], 0)
+        self.assertEqual(st['loadProgress']['done'], 135)
+
+    def test_sequenza_reale_worker_enginecore_apiserver_vince_la_causa_specifica(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.5'
+        os.environ['FAKE_VLLM_NOT_READY'] = '1'
+        os.environ['FAKE_VLLM_LINES'] = json.dumps([
+            '(Worker_TP0 pid=231) Loading safetensors checkpoint shards:  66% Completed | 135/206 [14:39<08:15, 6.98s/it]',
+            '(Worker_TP1 pid=232) ERROR 10-12 10:01:02 [multiproc_executor.py:654] RuntimeError: NCCL error: unhandled cuda error (run with NCCL_DEBUG=INFO for details)',
+            "(EngineCore_DP0 pid=120) RuntimeError: Worker failed with error 'NCCL error: unhandled cuda error (run with NCCL_DEBUG=INFO for details)', please check the stack trace above for the root cause",
+            'RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}',
+        ])
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
+        cause = self.sup.status()['errorCause']
+        self.assertIn('[multiproc_executor.py:654] RuntimeError: NCCL error: unhandled cuda error', cause)
+        self.assertNotIn('Worker failed', cause)
+
+    def test_solo_wrapper_la_causa_e_il_primo_wrapper(self):
+        self.sup._observe("(EngineCore_DP0 pid=120) RuntimeError: Worker failed with error 'NCCL error: x', please check the stack trace above for the root cause")
+        self.sup._observe('RuntimeError: Engine core initialization failed. See root cause above.')
+        self.assertTrue(self.sup.current_cause().startswith('RuntimeError: Worker failed'))
+        self.assertIsNone(self.sup.fatal_cause)
+
+    def test_starting_to_load_model_non_conta_come_caricamento(self):
+        # il download avviene dentro load_model: un errore di rete dopo "Starting to load model" va ritentato
+        self.sup._observe('INFO [gpu_model_runner.py:3000] Starting to load model org/modello...')
+        self.assertFalse(self.sup.loading_started)
+        self.sup._observe('INFO Loading weights took 12.30 seconds')
+        self.assertTrue(self.sup.loading_started)
+
+    def test_last_cause_ignora_le_righe_warning(self):
+        self.sup._observe('(EngineCore_DP0 pid=120) WARNING 10-12 [symm_mem.py:60] SymmMemCommunicator: Device capability 12.0 not supported')
+        self.assertIsNone(self.sup.last_cause)
+
+    def test_crash_dopo_ready_un_riavvio_mai_due_consecutivi(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '2'
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'ready'))
+        os.environ['FAKE_VLLM_NOT_READY'] = '1'  # il processo riavviato muore prima di essere pronto
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.restarts)[1] == 1))
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
+        self.assertEqual(self.sup.restarts, 1)  # nessun secondo riavvio consecutivo
+        self.assertIn('nessun riavvio automatico', self.sup.last_error)
+
+    def test_limite_totale_dei_riavvii_a_runtime(self):
+        self.assertEqual(self.cfg['max_runtime_restarts'], 2)
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '1.5'
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error', timeout=40))
+        st = self.sup.status()
+        self.assertEqual(st['runtimeRestarts'], 2)
+        self.assertEqual(st['errorCause'], "vLLM si è bloccato 3 volte dopo l'avvio")
+        self.assertIsNotNone(self.sup.error_since)  # poi vale l'error-timeout
+
+    def test_reload_azzera_i_riavvii_a_runtime(self):
+        self.sup.runtime_restarts = 2
+        self.assertTrue(self.sup.try_begin_reload(['--max-model-len', '2048']))
+        self.assertEqual(self.sup.runtime_restarts, 0)
+        self.sup.runtime_restarts = 2
+        self.sup.reload(['--max-model-len', '2048'])
+        self.assertEqual(self.sup.runtime_restarts, 0)
+
+    def test_restarts_si_azzera_quando_vllm_torna_pronto(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '2'
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'ready'))
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.restarts)[1] == 1))
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'ready'))
+        self.assertEqual(self.sup.restarts, 0)  # un crash a runtime successivo ha di nuovo diritto a un riavvio
+
+    def test_errore_non_riscritto_a_ogni_controllo(self):
+        os.environ['FAKE_VLLM_EXIT_AFTER'] = '0.3'
+        os.environ['FAKE_VLLM_NOT_READY'] = '1'
+        self.sup.start_vllm()
+        self.assertTrue(wait_until(lambda: (self.sup.step(), self.sup.phase)[1] == 'error'))
+        seq = self.sup.log_seq
+        for _ in range(3):
+            self.sup.step()
+        self.assertEqual(self.sup.log_seq, seq)
+
+    def test_errore_da_15_minuti_termina_il_pod_anche_senza_inattivita(self):
+        self.sup.idle_seconds = 0  # inattività "mai"
+        self.sup.fail('vLLM terminato con codice 1', 'RuntimeError: boom')
+        self.assertEqual(self.sup.phase, 'error')
+        self.now[0] += 14 * 60
+        self.assertIsNone(self.sup.step())
+        self.now[0] += 61
+        self.assertEqual(self.sup.step(), 'error-timeout')
+
+    def test_reload_azzera_il_conto_dell_errore(self):
+        self.sup.fail('x')
+        self.assertTrue(self.sup.try_begin_reload(['--max-model-len', '2048']))
+        self.assertIsNone(self.sup.error_since)
+
+    def test_stallo_dopo_il_caricamento_dei_pesi(self):
+        self.assertEqual(self.cfg['stall_seconds'], 30 * 60)  # predefinito: 30 minuti
+        self.sup.phase = 'loading'
+        self.sup._observe('(Worker_TP0 pid=1) Loading safetensors checkpoint shards: 100% Completed | 206/206 [24:00<00:00, 7s/it]')
+        self.now[0] += 29 * 60
+        self.assertIsNone(self.sup.step())
+        self.assertEqual(self.sup.phase, 'loading')
+        self.now[0] += 61
+        self.sup.step()
+        st = self.sup.status()
+        self.assertEqual(st['phase'], 'error')
+        self.assertIn('vLLM fermo senza log da 30 minuti dopo il caricamento dei pesi', st['errorCause'])
+        self.assertIn('possibile blocco NCCL/P2P o compilazione molto lunga', st['errorCause'])
+
+    def test_stallo_con_compilazione_in_corso_rimanda_di_10_minuti(self):
+        root = fake_proc({100: ('python3', 1), 101: ('python3', 100), 102: ('ninja', 101), 103: ('nvcc', 102)})
+
+        class Proc:
+            pid = 100
+            def poll(self):
+                return None
+        self.sup.cfg['proc_root'] = root
+        self.sup.proc = Proc()
+        self.sup.expected_exit = True  # nessun rilevamento di crash su questo processo finto
+        self.sup.phase = 'loading'
+        self.sup._observe('INFO Loading weights took 1440.00 seconds')
+        self.now[0] += 30 * 60
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'loading')
+        self.assertTrue(any('compilazione in corso' in l['line'] for l in self.sup.logs_since(0)))
+        self.now[0] += 9 * 60
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'loading')
+        # compilazione finita: allo scadere del rinvio passa a 'error'
+        os.remove(os.path.join(root, '102', 'stat'))
+        os.remove(os.path.join(root, '103', 'stat'))
+        self.sup.proc = None
+        self.now[0] += 61
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'error')
+
+    def test_tick_di_emergenza_controlla_anche_error_timeout(self):
+        self.sup.idle_seconds = 0
+        self.sup.fail('x')
+        self.now[0] += 16 * 60
+
+        def boom():
+            raise RuntimeError('guasto simulato')
+        self.sup.step = boom
+        self.sup.terminate_pod = lambda: True
+        self.assertEqual(self.sup.tick(), 'error-timeout')
+
+    def test_nessuno_stallo_durante_il_caricamento_dei_pesi(self):
+        self.sup.phase = 'loading'
+        self.sup._observe('Loading safetensors checkpoint shards:  10% Completed | 20/206 [02:00<20:00, 7s/it]')
+        self.now[0] += 20 * 60
+        self.sup.step()
+        self.assertEqual(self.sup.phase, 'loading')
+
+    def test_avanzamento_del_caricamento_e_fase(self):
+        self.sup.phase = 'downloading'
+        self.sup.log('(Worker_TP0 pid=1) Loading safetensors checkpoint shards:  71% Completed | 147/206 [17:06<06:52, 6.99s/it]')
+        st = self.sup.status()
+        self.assertEqual(st['loadProgress'], {'done': 147, 'total': 206, 'percent': 71, 'elapsedSeconds': 1026, 'remainingSeconds': 412})
+        self.assertEqual(st['phase'], 'loading')  # vLLM sta leggendo i pesi: il download è finito
+        self.sup.log('[llmpod] Loading safetensors checkpoint shards: 1% Completed | 1/206 [00:01<00:10, 1s/it]')
+        self.assertEqual(self.sup.status()['loadProgress']['done'], 147)  # le righe del supervisore non contano
+
+    def test_variabili_nccl_nei_log_di_avvio(self):
+        os.environ['NCCL_P2P_DISABLE'] = '1'
+        try:
+            self.sup.start_vllm()
+        finally:
+            os.environ.pop('NCCL_P2P_DISABLE', None)
+        self.assertTrue(any('NCCL_P2P_DISABLE=1' in l['line'] for l in self.sup.logs_since(0)))
 
     def test_tick_sopravvive_a_eccezione_e_termina(self):
         def boom():

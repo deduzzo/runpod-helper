@@ -147,6 +147,18 @@ describe('CLI: search, plan, save', () => {
     expect(s.store.readProfile('qwen3-coder').servedName).toBe('qwen3-coder');
   });
 
+  it('plan: ncclSafe predefinito true; --no-nccl-safe lo disattiva nel piano e nel profilo', async () => {
+    const s = sandbox();
+    s.store.writeEnv(SECRETS);
+    s.store.writeConfig({ dataCenterId: 'EU-RO-1' });
+    expect(await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct', '--json'], { hf: hfFake(), runpod: runpodFake() })).toBe(0);
+    expect(s.store.readJson('last-plan.json').ncclSafe).toBe(true);
+    expect(await s.run(['plan', 'Qwen/Qwen3-Coder-30B-A3B-Instruct', '--json', '--no-nccl-safe'], { hf: hfFake(), runpod: runpodFake() })).toBe(0);
+    expect(s.store.readJson('last-plan.json').ncclSafe).toBe(false);
+    expect(await s.run(['save', 'senza-nccl'])).toBe(0);
+    expect(s.store.readProfile('senza-nccl').ncclSafe).toBe(false);
+  });
+
   it('plan --json produce JSON valido su stdout', async () => {
     const s = sandbox();
     s.store.writeConfig({ dataCenterId: 'EU-RO-1' });

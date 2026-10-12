@@ -7,13 +7,13 @@ import { makeFitsWith, markFits } from './advisor/advice.js';
 import { createRecipes } from './advisor/recipes.js';
 
 // advisor: true = forza il consulente, false = salta, undefined = regola unica di attivazione (ctx.advisor.active()).
-export async function runPlan({ ctx, modelRef, context = 65536, concurrency = 2, set = [], extra = [], image, allowTrustRemoteCode = false, advisor, gpu, onProgress = () => {} }) {
+export async function runPlan({ ctx, modelRef, context = 65536, concurrency = 2, set = [], extra = [], image, allowTrustRemoteCode = false, ncclSafe = true, advisor, gpu, onProgress = () => {} }) {
   const cfg = ctx.store.readConfig();
   if (!cfg.dataCenterId) throw new LlmpodError(Codes.INVALID_INPUT, 'Nessun datacenter configurato', { hint: 'Esegui: llmpod init' });
   const flags = loadFlags();
   const plan = await makePlan({
     hf: ctx.hf, runpod: ctx.runpod, modelRef, context, concurrency, cloud: cfg.cloud, dataCenterId: cfg.dataCenterId,
-    minCudaVersion: cfg.minCudaVersion, vllmImage: image ?? cfg.vllmImage, set, extra, flags, allowTrustRemoteCode, onProgress,
+    minCudaVersion: cfg.minCudaVersion, vllmImage: image ?? cfg.vllmImage, set, extra, flags, allowTrustRemoteCode, ncclSafe, onProgress,
   });
   // Scelta esplicita della GPU ('<id>[x<n>]' o { id, count }): prima del consulente, che ragiona sul numero di GPU scelto.
   if (gpu) applyGpuChoice(plan, typeof gpu === 'string' ? parseGpuSpec(gpu) : gpu);

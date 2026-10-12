@@ -149,7 +149,7 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
       hourlyUSD: o.hourly, availabilityHere: o.availabilityHere, availableElsewhere: (o.elsewhere ?? []).map((d) => d.id),
       available: o.available, fits: o.fits !== false, label: optionLabel(o, plan.dataCenterId),
     })),
-    vllmImage: plan.vllm.image, vllmArgs: plan.vllm.args, parsers: plan.parsers, mtp: plan.mtp, warnings: plan.warnings,
+    vllmImage: plan.vllm.image, vllmArgs: plan.vllm.args, parsers: plan.parsers, mtp: plan.mtp, ncclSafe: plan.ncclSafe !== false, warnings: plan.warnings,
     advisor: advice ? { rationale: advice.rationale, changes: advice.changes, rejected: advice.rejected, warnings: advice.warnings } : null,
     advisorError: advisorError ?? null,
     next: 'Proponi all\'utente le opzioni GPU disponibili con prezzo e disponibilità e fai scegliere; poi save_profile con la gpu scelta',
@@ -180,11 +180,12 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
         context: { type: 'integer', minimum: 1024, maximum: 1048576 }, concurrency: { type: 'integer', minimum: 1, maximum: 256 },
         set: { ...S.args, description: 'argomenti vLLM chiave=valore' }, extra: S.args,
         gpu: { type: 'string', minLength: 1, maxLength: 100, description: '<id>[x<numero>] tra le opzioni' },
+        ncclSafe: { type: 'boolean', description: 'predefinito true: modalità NCCL sicura (variabili NCCL e --disable-custom-all-reduce) sui Pod multi-GPU senza NVLink completo; false solo se l\'utente lo chiede' },
       }, ['model']),
       // Mai il consulente esterno: plan è consentito senza conferma e non deve inviare dati a servizi di terzi.
-      run: async ({ model, context, concurrency = 2, set = [], extra = [], gpu }) => {
+      run: async ({ model, context, concurrency = 2, set = [], extra = [], gpu, ncclSafe = true }) => {
         const fromSet = resolveSetRef(model);
-        const r = await runPlan({ ctx, modelRef: fromSet ? fromSet.modelRef : model, context: context ?? fromSet?.recommendedContext ?? 65536, concurrency, set, extra, gpu, advisor: false });
+        const r = await runPlan({ ctx, modelRef: fromSet ? fromSet.modelRef : model, context: context ?? fromSet?.recommendedContext ?? 65536, concurrency, set, extra, gpu, ncclSafe, advisor: false });
         ctx.store.writeJson('last-plan.json', r.plan);
         return planView(r.plan, { ...r, fromSet });
       },
@@ -241,7 +242,7 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
       },
     },
     {
-      name: 'up_preview', description: 'Anteprima dell\'avvio (nessuna spesa): rilegge la disponibilità e restituisce le GPU avviabili ora con costo orario e costo massimo secondo il watchdog. Da mostrare all\'utente prima di up.',
+      name: 'up_preview', description: 'Anteprima dell\'avvio (nessuna spesa): rilegge la disponibilità e restituisce le GPU avviabili ora con costo orario, costo massimo secondo il watchdog e stima del tempo e del costo dell\'avvio (startup: download + caricamento dei pesi, pagati prima che il modello sia pronto). Da mostrare all\'utente prima di up.',
       inputSchema: obj({ profile: S.profile, limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Numero massimo di opzioni (predefinito 12, una per GPU×numero×volume, in ordine di costo)' } }, ['profile']),
       run: ({ profile, limit }) => syncOps().upPreview(profile, { limit }),
     },

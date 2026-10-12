@@ -7,17 +7,19 @@ import { profileKeyVar } from './config.js';
 import { proxyUrl } from './runpod.js';
 import { confirmCost, confirmAction, fmtUSD } from './confirm.js';
 import { validateWatchdog, maxCostUSD, fmtHours, idleText, exceedsDefaults, DEFAULT_WATCHDOG, MIN_REMAINING_SECONDS } from './watchdog.js';
-import { buildPodBody, argsForCount } from './pod/body.js';
+import { buildPodBody, podArgs, profileArgs } from './pod/body.js';
 import { adviseRepair } from './advisor/advisor.js';
 import { diffArgs, fitsForOption } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
 import { profileDownloadBytes } from './planner/vram.js';
-import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs, waitReloadStarted } from './pod/launcher.js';
+import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, startupTimeoutMs, waitReloadStarted, progressOf } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
 import { applyGpuChoice, vramLabel } from './planner/gpu-choice.js';
 import { podState, STOPPED_STATUSES } from './pod-state.js';
+import { estimateStartup, startupText, weightsOnVolume, rememberWeightsOnVolume } from './planner/startup.js';
+import { needsNcclSafe } from './planner/nccl.js';
 import { createLiveOps } from './ops-live.js';
 
 // ACTIVE: Pod acceso (o in avvio). Un Pod EXITED (spento) non è attivo ma ESISTE ancora e costa lo spazio su disco:
@@ -35,6 +37,16 @@ function watchdogNote(wd, hourly) {
   if (!exceedsDefaults(wd)) return '';
   return `; ${idleText(wd.idleMinutes)}, massimo ${wd.maxHours} h → costo massimo ${fmtUSD(wd.maxHours * hourly)}`;
 }
+
+// Stima del tempo e del costo dell'avvio (download + caricamento dei pesi) su un candidato: il Pod costa anche prima di essere pronto.
+function startupOf(profile, c, state) {
+  const e = estimateStartup({
+    downloadBytes: profileDownloadBytes(profile), weightsBytes: profile.model?.weightsBytes, count: c.count, withVolume: Boolean(c.withVolume),
+    cached: weightsOnVolume(state, profile, c), hourlyUSD: c.hourly,
+  });
+  return { ...e, text: startupText(e) };
+}
+const ncclSafeFor = (profile, c) => profile.ncclSafe !== false && needsNcclSafe(c.id, c.count);
 
 export const AMBIGUOUS_CREATE_WARNING = 'Potrebbe essere stato creato un Pod non ancora visibile: controlla tra un minuto con "llmpod status" o su https://www.runpod.io/console/pods';
 
@@ -77,17 +89,11 @@ export function profileFromPlan(plan, { name, volume, watchdog }) {
     watchdog,
     estimate: { ...plan.estimate, hourlyUSD: plan.hourlyUSD },
     warnings: plan.warnings,
+    // modalità NCCL sicura sui Pod multi-GPU senza NVLink completo (vedi planner/nccl.js); false solo con plan --no-nccl-safe
+    ncclSafe: plan.ncclSafe !== false,
     advisor: plan.advisor ?? null,
     createdAt: new Date().toISOString(),
   };
-}
-
-function progressOf(st) {
-  if (st.phase === 'downloading' && st.totalBytes) {
-    const ratio = Math.min(1, st.downloadedBytes / st.totalBytes);
-    return { message: `Download dei pesi: ${Math.round(ratio * 100)}%`, ratio };
-  }
-  return { message: { loading: 'Caricamento del modello in GPU', ready: 'vLLM pronto' }[st.phase] ?? `Fase: ${st.phase}` };
 }
 
 function suggestContext(kvTokens, profile) {
@@ -207,6 +213,12 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
 
   async function repairWithAdvisor({ err, attempts, yes, endpoint, profile, currentArgs, sup, hourly }) {
     if (!advisor || yes || attempts >= 3 || err.details?.terminating || !REPAIRABLE.includes(err.code)) return null;
+    // Un errore NCCL dipende dall'ambiente del Pod (GPU, P2P), che il consulente non può cambiare, e una ricarica
+    // rileggerebbe tutti i pesi a pagamento: niente consultazione.
+    if (err.details?.nccl) {
+      events.emit('warning', { message: 'Errore NCCL tra le GPU: riparazione con il consulente saltata (non può cambiare l\'ambiente del Pod e una ricarica rileggerebbe tutti i pesi). Elimina il Pod e scegli una sola GPU più grande o GPU SXM con NVLink' });
+      return null;
+    }
     let provider;
     try {
       provider = advisor.provider(endpoint);
@@ -247,7 +259,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
 
   function saveProfileArgs(name, args) {
     const profile = store.readProfile(name);
-    profile.vllm.args = argsForCount(args, profile.gpu.count);
+    profile.vllm.args = profileArgs(args, profile.gpu.count);
     syncDerivedFields(profile);
     store.writeProfile(profile);
     return profile;
@@ -294,6 +306,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const { balance } = await runpod.getBalance();
     const { startable } = await launchCandidates(profile, cfg, { all: true });
     const wd = { ...DEFAULT_WATCHDOG, ...profile.watchdog };
+    const state = store.readState();
     return {
       profile: name, model: profile.model.id, context: profile.context, mtp: profile.mtp ?? null,
       watchdog: wd, balanceUSD: balance,
@@ -317,6 +330,10 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
             // Il watchdog elimina il Pod al più tardi dopo maxHours dall'avvio: è la spesa massima di un avvio.
             maxCostUSD: Math.round(c.hourly * wd.maxHours * 100) / 100,
             affordable: balance >= c.hourly,
+            // Tempo e costo stimati prima che il modello sia pronto (download + caricamento dei pesi).
+            startup: startupOf(profile, c, state),
+            // modalità NCCL sicura nel Pod (più GPU senza NVLink completo: variabili NCCL e --disable-custom-all-reduce)
+            ncclSafe: ncclSafeFor(profile, c),
           })),
           moreOptions: Math.max(0, unique.length - max),
         };
@@ -412,7 +429,8 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const buildBody = (c) => buildPodBody({ profile, candidate: c, apiKey, hfToken: env.HF_TOKEN, minCudaVersion: cfg.minCudaVersion });
     const conf = await confirmCost({
       hourlyUSD: first.hourly, yes: yes || costConfirmed, dryRun, ask,
-      description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`,
+      description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`
+        + `; ${startupOf(profile, first, store.readState()).text}${ncclSafeFor(profile, first) ? '; modalità NCCL sicura (più GPU senza NVLink completo)' : ''}`,
     });
     if (conf.dryRun) {
       const body = buildBody(first);
@@ -466,7 +484,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       const readyOpts = { sup, sleep, now, onStatus: (s) => events.emit('progress', progressOf(s)), onLog: (line) => events.emit('log', { line }) };
       const baseUrl = proxyUrl(pod.id, 8000);
       const endpoint = { baseUrl, apiKey, servedName: profile.servedName, context: profile.context, reasoning: Boolean(profile.parsers?.reasoning) };
-      let currentArgs = argsForCount(profile.vllm.args, candidate.count);
+      let currentArgs = podArgs(profile, candidate); // come nel corpo del Pod (anche la modalità NCCL sicura)
       let repairedArgs = null;
       let attempts = 0;
       let st;
@@ -474,7 +492,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       let cursor = 0; // cursore dei log del supervisore: dopo un riavvio non si rileggono i log del run precedente
       for (;;) {
         try {
-          let timeoutMs = readyTimeoutMs(profileDownloadBytes(profile));
+          let timeoutMs = startupTimeoutMs(profileDownloadBytes(profile), startupOf(profile, candidate, store.readState()));
           for (;;) {
             try {
               st = await waitForReady({ ...readyOpts, since: cursor, timeoutMs });
@@ -503,6 +521,8 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
           endpoint.reasoning = Boolean(syncDerivedFields({ vllm: { args: [...next] } }).parsers.reasoning);
         }
       }
+      // I pesi di questa revisione ora sono sul volume: il prossimo avvio con il volume non li riscarica.
+      if (candidate.withVolume && profile.volume?.id) store.writeState(rememberWeightsOnVolume(store.readState(), profile));
       await refreshZcode(endpoint);
       return {
         podId: pod.id, baseUrl, hourlyUSD: runningPod.cost ?? candidate.hourly, candidate,

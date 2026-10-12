@@ -218,6 +218,14 @@ Per chi sviluppa: [CLAUDE.md](CLAUDE.md) (regole dell'operatore Claude Code) e l
   li segnala e `llmpod down` li elimina.
 - Il **network volume** costa circa 0,07 $/GB al mese anche senza Pod (150 GB ≈ 10,50 $/mese); si elimina con
   `llmpod destroy-volume`.
+- **Anche l'avvio si paga**: per i modelli grandi download e caricamento dei pesi possono durare più di 40 minuti
+  (126 GiB su 2 GPU PCIe: ~25 minuti solo di caricamento). `llmpod up` mostra la stima di tempo e costo
+  dell'avvio prima della conferma.
+- Un errore di vLLM durante il caricamento dei pesi (NCCL, CUDA, memoria) **non** provoca riavvii automatici che
+  ricaricherebbero tutto: `up` si ferma subito e propone riparazione o eliminazione; un vLLM fermo dopo i pesi
+  (30 minuti senza log e nessuna compilazione in corso) passa in errore, e un Pod in errore da 15 minuti si elimina da solo. Sui Pod con più GPU
+  senza NVLink completo llmpod usa la **modalità NCCL sicura** (`NCCL_P2P_DISABLE=1` o `NCCL_P2P_LEVEL=NVL`,
+  `--disable-custom-all-reduce`; vedi [NCCL error](docs/GUIDA.md#risoluzione-dei-problemi)).
 
 Tabella dei prezzi e stima di una sessione: [Spegnere e costi](docs/GUIDA.md#spegnere-e-costi).
 
