@@ -4,7 +4,10 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { runCli } from '../../src/cli/program.js';
 import { createIo } from '../../src/cli/render.js';
+import fs from 'node:fs';
+import os from 'node:os';
 import { createWorld, KEY, RUNPOD_KEY, ACTIVE_ARGS } from '../fixtures/fake-world.js';
+import { missingProjectFiles, PROJECT_FILES } from '../../src/cli/commands/manage.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -40,6 +43,24 @@ describe('llmpod metrics', () => {
     expect(t.out()).toMatch(/Generazione: .*token\/s/);
     expect(t.out()).toMatch(/KV cache: 87,5 %|KV cache: 25 %/);
     expect(t.out()).toMatch(/Accettazione MTP/);
+  });
+});
+
+describe('llmpod status --all', () => {
+  it('elenca anche gli altri Pod dell\'account, solo con --all', async () => {
+    const pods = [
+      { id: 'pod1', name: 'llmpod-p', status: 'RUNNING', cost: 1.5, gpu: { id: 'GPU80', count: 1 } },
+      { id: 'x1', name: 'mio-notebook', status: 'RUNNING', cost: 0.4, gpu: { id: 'GPU24', count: 1 } },
+    ];
+    const t = setup({ pods });
+    expect(await t.go(['status'])).toBe(0);
+    expect(t.out()).not.toMatch(/mio-notebook/);
+    const a = setup({ pods });
+    expect(await a.go(['status', '--all'])).toBe(0);
+    expect(a.out()).toMatch(/Altri Pod dell'account[\s\S]*mio-notebook[\s\S]*0,40 \$\/h/);
+    const j = setup({ pods });
+    expect(await j.go(['status', '--all', '--json'])).toBe(0);
+    expect(JSON.parse(j.out()).otherPods).toEqual([expect.objectContaining({ podId: 'x1' })]);
   });
 });
 
@@ -104,6 +125,14 @@ describe('llmpod manage', () => {
     expect(args.join(" ")).toMatch(/profilo llmpod "p"/);
     expect(JSON.stringify(opts.env ?? {})).not.toContain(RUNPOD_KEY);
     expect(JSON.stringify(opts.env ?? {})).not.toContain(KEY);
+  });
+
+  it('la cartella del progetto contiene CLAUDE.md, permessi, skill e .mcp.json; il pacchetto npm li include', () => {
+    expect(missingProjectFiles()).toEqual([]);
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-manage-'));
+    expect(missingProjectFiles(empty)).toEqual(PROJECT_FILES);
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    for (const f of PROJECT_FILES) expect(pkg.files, f).toContain(f);
   });
 
   it('claude assente → istruzioni di installazione', async () => {

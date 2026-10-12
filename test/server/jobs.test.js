@@ -219,3 +219,43 @@ describe('jobs: chiusura (spegnimento di llmpod ui)', () => {
     expect(jobs.events(c.id).some((e) => e.type === 'question')).toBe(false);
   });
 });
+
+describe('jobs: annullamento e scadenze per domanda', () => {
+  it('timeoutMs della singola domanda sostituisce la scadenza predefinita', async () => {
+    vi.useFakeTimers();
+    try {
+      const jobs = createJobs({ questionTimeoutMs: 600_000 });
+      const job = jobs.start('up:p', async ({ ask }) => ({ ok: await ask('Aspettare?', true, { timeoutValue: false, timeoutMs: 180_000 }) }));
+      await vi.advanceTimersByTimeAsync(180_001);
+      expect(jobs.get(job.id)).toMatchObject({ status: 'done', result: { ok: false } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancel: chiude la domanda col valore sicuro, segnala l\'annullamento al lavoro, lo stato resta "cancelled"', async () => {
+    const jobs = createJobs();
+    let aborted = false;
+    let answerSeen;
+    const job = jobs.start('up:p', async ({ ask, signal }) => {
+      signal.addEventListener('abort', () => { aborted = true; });
+      answerSeen = await ask('Terminare?', true, { timeoutValue: true });
+      const again = await ask('Altra domanda?', true, { timeoutValue: false });
+      return { again };
+    });
+    await tick();
+    expect(jobs.cancel(job.id, 'annullato da down')).toBe(true);
+    expect(await jobs.wait(job.id, 1000)).toBe(true);
+    expect(aborted).toBe(true);
+    expect(answerSeen).toBe(true);
+    expect(jobs.get(job.id)).toMatchObject({ status: 'cancelled', error: { code: 'CANCELLED' }, question: null, result: null });
+    expect(jobs.events(job.id).some((e) => e.type === 'cancelled')).toBe(true);
+    expect(jobs.cancel(job.id)).toBe(false);
+  });
+
+  it('wait: false se il lavoro non finisce entro il limite', async () => {
+    const jobs = createJobs();
+    const job = jobs.start('up:p', () => new Promise(() => {}));
+    expect(await jobs.wait(job.id, 20)).toBe(false);
+  });
+});

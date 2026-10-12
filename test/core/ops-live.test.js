@@ -141,6 +141,24 @@ describe('ops.tunePreview / ops.tune', () => {
     expect(t.ask.mock.calls[0][0]).toMatch(/Tornare agli argomenti precedenti/);
   });
 
+  it('vLLM in errore: tune non parte (il ritorno indietro tornerebbe ad argomenti rotti) e suggerisce down', async () => {
+    const t = setup({ phase: 'error' });
+    await expect(t.ops.tune('p', { set: ['max-num-seqs=4'], yes: true })).rejects.toMatchObject({ code: 'INVALID_INPUT', hint: expect.stringMatching(/llmpod down p/) });
+    expect(t.calls('/reload')).toHaveLength(0);
+  });
+
+  it('expectedArgs diversi dagli argomenti attivi → rifiuto, nessun reload', async () => {
+    const t = setup();
+    await expect(t.ops.tune('p', { set: ['max-num-seqs=4'], confirmed: true, expectedArgs: ['--max-model-len', '1024'] })).rejects.toThrow(/cambiati dall'anteprima/);
+    expect(t.calls('/reload')).toHaveLength(0);
+    await expect(t.ops.tune('p', { set: ['max-num-seqs=4'], confirmed: true, expectedArgs: ACTIVE_ARGS })).resolves.toMatchObject({ podId: 'pod1' });
+  });
+
+  it('errore dopo la ricarica: il messaggio propone down come passo successivo', async () => {
+    const t = setup({ onReload: () => 'error' }, { answers: [true, false] });
+    await expect(t.ops.tune('p', { set: ['max-num-seqs=4'] })).rejects.toMatchObject({ hint: expect.stringMatching(/llmpod down p/) });
+  });
+
   it('il supervisore rifiuta il reload (409) → errore, nessun ritorno necessario', async () => {
     const t = setup({ reloadStatus: 409 });
     await expect(t.ops.tune('p', { set: ['max-num-seqs=4'], yes: true })).rejects.toMatchObject({ code: 'HTTP' });
@@ -186,6 +204,14 @@ describe('ops.upPreview e up con GPU scelta e prezzo atteso', () => {
     const t = setup(noPods);
     await expect(t.ops.up('p', { gpu: { id: 'GPU141', count: 1 }, expectedHourlyUSD: 3.9, costConfirmed: true })).rejects.toMatchObject({ code: 'NO_GPU_AVAILABLE' });
     expect(t.runpod.createPod).not.toHaveBeenCalled();
+  });
+
+  it('autoTerminate: avvio fallito (smoke test) → il Pod creato si elimina subito, senza domanda', async () => {
+    const t = setup({ pods: [], smoke: [false] });
+    await expect(t.ops.up('p', { gpu: { id: 'GPU80', count: 1 }, expectedHourlyUSD: 1.5, costConfirmed: true, autoTerminate: true })).rejects.toMatchObject({ code: 'SMOKE_TEST_FAILED' });
+    // nessuna domanda (né di terminazione né al consulente: non configurato)
+    expect(t.ask).not.toHaveBeenCalled();
+    expect(t.runpod.deletePod).toHaveBeenCalledWith('pod1');
   });
 
   it('senza costConfirmed la conferma del costo resta una domanda', async () => {

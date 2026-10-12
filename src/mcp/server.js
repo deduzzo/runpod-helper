@@ -9,16 +9,16 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createContext, VERSION } from '../cli/context.js';
 import { createJobs } from '../server/jobs.js';
 import { redact } from '../core/secrets.js';
-import { createTools, READ_ONLY_TOOLS } from './tools.js';
+import { createTools, READ_ONLY_TOOLS, ASK_TOOLS } from './tools.js';
 import { validateInput } from './schema.js';
 
-export { READ_ONLY_TOOLS };
+export { READ_ONLY_TOOLS, ASK_TOOLS };
 
 const INSTRUCTIONS = [
   'llmpod: LLM self-hosted su Runpod con vLLM. Rispondi in italiano.',
   'Prima di ogni operazione che costa mostra le opzioni (GPU, varianti) con prezzo e disponibilità e fai scegliere l\'utente; preferisci varianti con MTP/decodifica speculativa.',
   'Spesa: up richiede up_preview, la scelta dell\'utente, confirm: true ed expectedHourlyUSD; tune/keep/down richiedono confirm: true dopo l\'anteprima.',
-  'I Pod si ELIMINANO sempre (down), mai fermati; a fine lavoro verifica con status l\'elenco completo dei Pod.',
+  'I Pod si ELIMINANO sempre (down), mai fermati; a fine lavoro verifica l\'elenco completo dei Pod con status { all: true }.',
   'Le domande pendenti dei job (job_status) vanno mostrate all\'utente prima di rispondere con job_answer.',
   'Non leggere né stampare mai chiavi o token; per i client usa client_commands (llmpod run …). Non toccare Pod che l\'utente sta usando senza permesso.',
 ].join('\n');
@@ -31,10 +31,10 @@ function silentIo() {
 
 const textResult = (value, isError = false) => ({ content: [{ type: 'text', text: redact(JSON.stringify(value, null, 2)) }], ...(isError ? { isError: true } : {}) });
 
-export function createMcpServer({ env = process.env, overrides = {}, questionTimeoutMs = 30 * 60_000 } = {}) {
+export function createMcpServer({ env = process.env, overrides = {}, questionTimeoutMs = 30 * 60_000, log } = {}) {
   const ctx = createContext({ env, io: silentIo(), overrides });
   const jobs = createJobs({ questionTimeoutMs });
-  const tools = createTools({ ctx, jobs });
+  const { tools, shutdown: stopJobs } = createTools({ ctx, jobs, ...(log ? { log } : {}) });
   const byName = new Map(tools.map((t) => [t.name, t]));
 
   async function callTool(name, args = {}) {
@@ -55,21 +55,32 @@ export function createMcpServer({ env = process.env, overrides = {}, questionTim
   for (const tool of tools) {
     mcp.registerTool(tool.name, { description: tool.description, inputSchema: z.fromJSONSchema(tool.inputSchema), annotations: tool.annotations }, (args) => callTool(tool.name, args ?? {}));
   }
-  return { server: mcp, tools, jobs, callTool, ctx };
+  // Chiusura: annulla i job e, per gli up con un Pod creato e non ancora pronto, lo elimina (max timeoutMs).
+  async function shutdown(opts) {
+    const r = await stopJobs(opts);
+    jobs.close();
+    return r;
+  }
+  return { server: mcp, tools, jobs, callTool, ctx, shutdown };
 }
 
-export async function startStdioServer({ env = process.env } = {}) {
-  const { server, jobs } = createMcpServer({ env });
+export async function startStdioServer({ env = process.env, exit = (code) => process.exit(code) } = {}) {
+  const { server, shutdown } = createMcpServer({ env });
   const transport = new StdioServerTransport();
-  // Fine sessione: chiusura del trasporto o dello stdin (il client MCP è uscito).
+  // Fine sessione: chiusura del trasporto o dello stdin (il client MCP è uscito), SIGINT o SIGTERM.
   const closed = new Promise((resolve) => {
-    transport.onclose = resolve;
-    process.stdin.once('end', resolve);
-    process.stdin.once('close', resolve);
+    transport.onclose = () => resolve('trasporto chiuso');
+    process.stdin.once('end', () => resolve('stdin chiuso'));
+    process.stdin.once('close', () => resolve('stdin chiuso'));
+    process.once('SIGINT', () => resolve('SIGINT'));
+    process.once('SIGTERM', () => resolve('SIGTERM'));
   });
   await server.connect(transport);
-  await closed;
-  jobs.close();
+  const why = await closed;
+  process.stderr.write(`[llmpod-mcp] chiusura (${why})\n`);
+  await shutdown({ timeoutMs: 60_000 });
+  await server.close().catch(() => {});
+  exit(0);
 }
 
 // Avvio diretto: node src/mcp/server.js

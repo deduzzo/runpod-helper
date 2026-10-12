@@ -297,7 +297,9 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     };
   }
 
-  async function up(name, { yes = false, dryRun = false, gpu = null, expectedHourlyUSD = null, costConfirmed = false } = {}) {
+  // autoTerminate (server MCP): se l'avvio fallisce il Pod creato si elimina subito, senza domanda (nessuno deve restare a
+  // pagare un Pod rotto in attesa di una risposta).
+  async function up(name, { yes = false, dryRun = false, gpu = null, expectedHourlyUSD = null, costConfirmed = false, autoTerminate = false } = {}) {
     const profile = store.readProfile(name);
     const cfg = store.readConfig();
     const env = store.readEnv();
@@ -416,7 +418,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
           const st = store.readState();
           st.pods[name] = { podId: stray.id, startedAt: new Date(startedAt).toISOString(), hourlyUSD: first.hourly, dataCenterId: first.dataCenterId, withVolume: first.withVolume };
           store.writeState(st);
-          await offerTerminate(name, stray.id, yes);
+          await offerTerminate(name, stray.id, yes || autoTerminate);
         } else {
           events.emit('warning', { message: AMBIGUOUS_CREATE_WARNING });
         }
@@ -482,7 +484,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       };
     } catch (err) {
       events.emit('warning', { message: `Avvio non riuscito: ${err.message}` });
-      await offerTerminate(name, pod.id, yes);
+      await offerTerminate(name, pod.id, yes || autoTerminate);
       throw err;
     }
   }
@@ -582,7 +584,8 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     };
   }
 
-  async function status() {
+  // all: anche i Pod dell'account che non sono di llmpod (nome diverso da llmpod-*), in sola lettura.
+  async function status({ all = false } = {}) {
     const [pods, balance] = await Promise.all([runpod.listPods(), runpod.getBalance().catch(() => null)]);
     const state = store.readState();
     const env = store.readEnv();
@@ -608,7 +611,14 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       };
     }));
     const volume = cfg.volume ? { ...cfg.volume, monthlyUSD: Math.round(cfg.volume.size * cfg.volumePricePerGbMonth * 100) / 100 } : null;
-    return { pods: rows, balance, volume };
+    const result = { pods: rows, balance, volume };
+    if (all) {
+      result.otherPods = pods.filter((p) => !p.name?.startsWith('llmpod-') && EXISTS(p)).map((p) => {
+        const { state, label } = podState(p.status);
+        return { podId: p.id, name: p.name ?? null, status: p.status, state, stateLabel: label, gpu: p.gpu ?? null, hourlyUSD: STOPPED_STATUSES.includes(p.status) ? null : (p.cost ?? 0) };
+      });
+    }
+    return result;
   }
 
   async function endpoint(name) {

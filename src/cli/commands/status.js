@@ -14,10 +14,11 @@ function shutdownLabel(s) {
 export function register(program, getCtx) {
   program.command('status')
     .description('Pod (avviati e spenti), costi, credito residuo, volume')
+    .option('--all', 'elenca anche gli altri Pod dell\'account Runpod (non creati da llmpod), in sola lettura')
     .option('--json', 'output JSON')
     .action(async (opts) => {
       const ctx = getCtx();
-      const s = await ctx.ops.status();
+      const s = await ctx.ops.status({ all: Boolean(opts.all) });
       if (opts.json) return ctx.io.raw(JSON.stringify(s, null, 2));
       const { io } = ctx;
       if (!s.pods.length) io.out('Nessun Pod llmpod.');
@@ -36,6 +37,20 @@ export function register(program, getCtx) {
           io.out(`⚠ ${p.profile} (${p.podId}): ${STOPPED_WARNING(p.profile, p.diskGB)}`);
         }
         if (s.pods.some((p) => p.orphan)) io.out('⚠ Pod "orfani": non risultano avviati da questo computer. Terminali con: llmpod down <profilo>');
+      }
+      if (s.otherPods) {
+        io.out('');
+        if (!s.otherPods.length) io.out('Altri Pod dell\'account: nessuno.');
+        else {
+          io.out('Altri Pod dell\'account (non gestiti da llmpod, solo lettura):');
+          io.out(table(s.otherPods, [
+            { key: 'name', label: 'Nome' },
+            { key: 'podId', label: 'Pod' },
+            { key: 'stateLabel', label: 'Stato' },
+            { label: 'GPU', value: (p) => (p.gpu ? `${p.gpu.id} ×${p.gpu.count}` : '?') },
+            { label: 'Costo', align: 'right', value: (p) => (p.hourlyUSD == null ? '—' : `${fmtUSD(p.hourlyUSD)}/h`) },
+          ]));
+        }
       }
       io.out(`Credito residuo: ${s.balance ? fmtUSD(s.balance.balance) : 'non disponibile'}`);
       if (s.volume) io.out(`Volume: ${s.volume.name} (${s.volume.size} GB, ${s.volume.dataCenterId}) — ${fmtUSD(s.volume.monthlyUSD)} al mese`);

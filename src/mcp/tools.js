@@ -11,9 +11,24 @@ import { listSets, getSet, filterSetModels, resolveSetRef } from '../core/model-
 
 const PROJECT_DIR = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, '');
 const denyAsk = async () => false; // strumenti sincroni: nessuna domanda deve restare senza risposta (vale "no")
+// Mentre un Pod costa (tune, oppure up dopo la creazione del Pod) le domande dei job scadono presto col valore sicuro.
+export const COSTLY_QUESTION_TIMEOUT_MS = 3 * 60_000;
+const cancelledError = () => new LlmpodError(Codes.CANCELLED, 'Operazione annullata');
 
 // Strumenti di sola lettura (nessuna spesa, nessuna modifica ai Pod): permessi senza conferma in .claude/settings.json.
 export const READ_ONLY_TOOLS = ['status', 'metrics', 'logs', 'search', 'plan', 'model_sets', 'profiles', 'job_status', 'job_events', 'up_preview', 'tune_preview', 'keep_preview', 'client_commands'];
+// Strumenti che spendono, modificano o distruggono: sempre con domanda all'utente ("ask" in .claude/settings.json).
+export const ASK_TOOLS = ['up', 'tune', 'keep', 'down', 'save_profile', 'job_answer', 'job_cancel'];
+
+// sleep annullabile: un job annullato (down, job_cancel, chiusura del server) esce dalle attese invece di continuare.
+function abortableSleep(base, signal) {
+  return (ms) => new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(cancelledError()); return; }
+    const onAbort = () => reject(cancelledError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(base(ms)).then(() => { signal.removeEventListener('abort', onAbort); resolve(); }, reject);
+  });
+}
 
 const S = {
   profile: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,40}$', description: 'Nome del profilo llmpod' },
@@ -27,8 +42,9 @@ const S = {
 };
 const obj = (properties = {}, required = []) => ({ type: 'object', additionalProperties: false, properties, required });
 
-export function createTools({ ctx, jobs }) {
+export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llmpod-mcp] ${m}\n`) }) {
   const syncOps = () => ctx.makeOps({ ask: denyAsk, events: createEvents() });
+  const meta = new Map(); // jobId → { kind, profile, podId }
 
   // Un solo job per profilo (up, tune) e niente keep/down/save mentre è in corso.
   const assertNotBusy = (profile) => {
@@ -38,12 +54,65 @@ export function createTools({ ctx, jobs }) {
 
   function startJob(kind, profile, fn) {
     assertNotBusy(profile);
-    const job = jobs.start(`${kind}:${profile}`, async ({ ask, emit }) => {
+    const m = { kind, profile, podId: null };
+    const job = jobs.start(`${kind}:${profile}`, async ({ ask, emit, signal }) => {
       const events = createEvents();
-      events.on((e) => emit(e));
-      return fn({ ops: ctx.makeOps({ ask, askChoice: null, events }), ask, emit });
+      events.on((e) => {
+        if (e.type === 'pod') m.podId = e.podId;
+        emit(e);
+      });
+      // Il Pod costa sempre durante tune e, in up, da quando è stato creato: domande brevi (3 min) col valore sicuro.
+      const costly = () => kind === 'tune' || Boolean(m.podId);
+      const jobAsk = (text, defYes, opts = {}) => ask(text, defYes, { ...opts, ...(costly() ? { timeoutMs: COSTLY_QUESTION_TIMEOUT_MS } : {}) });
+      const ops = ctx.makeOps({ ask: jobAsk, askChoice: null, events, sleep: abortableSleep(ctx.sleep, signal) });
+      return fn({ ops, ask: jobAsk, emit });
     });
-    return { jobId: job.id, status: job.status, next: 'Segui l\'avanzamento con job_status / job_events; se compare una domanda, mostrala all\'utente e rispondi con job_answer solo con la sua risposta' };
+    meta.set(job.id, m);
+    return { jobId: job.id, status: job.status, next: 'Segui l\'avanzamento con job_status / job_events; se compare una domanda, mostrala all\'utente e rispondi con job_answer solo con la sua risposta (scade in expiresAt)' };
+  }
+
+  // Annulla i job in corso del profilo (domanda pendente chiusa col valore sicuro) e attende che escano (max 60 s).
+  async function cancelJobsOf(profile, reason) {
+    const running = jobs.list().filter((j) => j.status === 'running' && j.kind.endsWith(`:${profile}`));
+    for (const j of running) jobs.cancel(j.id, reason);
+    await Promise.all(running.map((j) => jobs.wait(j.id, 60_000)));
+    return running.map((j) => j.id);
+  }
+
+  async function downAndList(profile, cancelledJobs = []) {
+    const ops = syncOps();
+    const r = await ops.down(profile, { yes: true });
+    const after = await ops.status();
+    return { ...r, cancelledJobs, allPods: after.pods.map((p) => ({ profile: p.profile, podId: p.podId, state: p.state, hourlyUSD: p.hourlyUSD })) };
+  }
+
+  // Chiusura del server: annulla i job; per gli up in corso con un Pod già creato (quindi non ancora pronto) elimina il Pod.
+  // Tempo massimo complessivo `timeoutMs`.
+  async function shutdown({ timeoutMs = 60_000 } = {}) {
+    const running = jobs.list().filter((j) => j.status === 'running');
+    if (!running.length) return { terminated: [] };
+    log(`chiusura: annullo ${running.length} operazioni in corso`);
+    const terminated = [];
+    const work = (async () => {
+      for (const j of running) jobs.cancel(j.id, 'Server MCP in chiusura');
+      await Promise.all(running.map((j) => jobs.wait(j.id, timeoutMs)));
+      for (const j of running) {
+        const m = meta.get(j.id);
+        if (m?.kind !== 'up' || !m.podId) continue;
+        log(`chiusura: elimino il Pod ${m.podId} (${m.profile}), avviato ma non ancora pronto`);
+        try {
+          await syncOps().down(m.profile, { yes: true });
+          terminated.push(m.podId);
+        } catch (err) {
+          log(`chiusura: eliminazione del Pod ${m.podId} non riuscita: ${err.message}. Controlla su https://www.runpod.io/console/pods`);
+        }
+      }
+    })();
+    let timer;
+    const finished = await Promise.race([work.then(() => true), new Promise((r) => { timer = setTimeout(() => r(false), timeoutMs); timer.unref?.(); })]);
+    clearTimeout(timer);
+    if (!finished) log(`chiusura: tempo massimo (${Math.round(timeoutMs / 1000)} s) superato; controlla i Pod su https://www.runpod.io/console/pods`);
+    return { terminated };
   }
 
   const planView = (plan, { advice, advisorError, fromSet }) => ({
@@ -86,21 +155,26 @@ export function createTools({ ctx, jobs }) {
         context: { type: 'integer', minimum: 1024, maximum: 1048576 }, concurrency: { type: 'integer', minimum: 1, maximum: 256 },
         set: { ...S.args, description: 'argomenti vLLM chiave=valore' }, extra: S.args,
         gpu: { type: 'string', minLength: 1, maxLength: 100, description: '<id>[x<numero>] tra le opzioni' },
-        advisor: { type: 'boolean', description: 'consulta anche il consulente esterno configurato (predefinito: no)' },
       }, ['model']),
-      run: async ({ model, context, concurrency = 2, set = [], extra = [], gpu, advisor = false }) => {
+      // Mai il consulente esterno: plan è consentito senza conferma e non deve inviare dati a servizi di terzi.
+      run: async ({ model, context, concurrency = 2, set = [], extra = [], gpu }) => {
         const fromSet = resolveSetRef(model);
-        const r = await runPlan({ ctx, modelRef: fromSet ? fromSet.modelRef : model, context: context ?? fromSet?.recommendedContext ?? 65536, concurrency, set, extra, gpu, advisor });
+        const r = await runPlan({ ctx, modelRef: fromSet ? fromSet.modelRef : model, context: context ?? fromSet?.recommendedContext ?? 65536, concurrency, set, extra, gpu, advisor: false });
         ctx.store.writeJson('last-plan.json', r.plan);
         return planView(r.plan, { ...r, fromSet });
       },
     },
     {
-      name: 'save_profile', description: 'Salva l\'ultimo piano come profilo con la GPU scelta dall\'utente. Genera la chiave vLLM del profilo (mai mostrata).',
-      inputSchema: obj({ name: S.profile, gpu: S.gpu }, ['name', 'gpu']),
-      run: ({ name, gpu }) => {
+      name: 'save_profile', description: 'Salva l\'ultimo piano come profilo con la GPU scelta dall\'utente. model: il modello del piano mostrato (org/modello o <set>/<id>): se l\'ultimo piano è di un altro modello, rifiuta. Genera la chiave vLLM del profilo (mai mostrata).',
+      inputSchema: obj({ name: S.profile, model: { type: 'string', minLength: 1, maxLength: 300 }, gpu: S.gpu }, ['name', 'model', 'gpu']),
+      run: ({ name, model, gpu }) => {
         assertProfileName(name);
         assertNotBusy(name);
+        const plan = ctx.store.readJson('last-plan.json', null);
+        const wanted = (resolveSetRef(model)?.model.id ?? model.split('@')[0]).toLowerCase();
+        if (plan && plan.model?.id?.toLowerCase() !== wanted) {
+          throw new LlmpodError(Codes.INVALID_INPUT, `L'ultimo piano è di ${plan.model?.id}, non di ${model}`, { hint: 'Ricalcola il piano del modello scelto (plan) e mostralo di nuovo all\'utente' });
+        }
         const p = syncOps().saveProfile(name, { gpu: { id: gpu.id, count: gpu.count ?? null } });
         return { profile: { name: p.name, model: p.model.id, gpu: p.gpu, alternatives: p.alternatives, context: p.context, hourlyUSD: p.estimate?.hourlyUSD ?? null, volume: Boolean(p.volume), watchdog: p.watchdog }, next: `Avvio: up_preview { profile: "${name}" }` };
       },
@@ -117,12 +191,13 @@ export function createTools({ ctx, jobs }) {
     },
     {
       name: 'status', description: 'Tutti i Pod llmpod raggruppati: avviati, in avvio, spenti (costano ancora il disco), in eliminazione; credito, volume, job in corso.',
-      inputSchema: obj(),
-      run: async () => {
-        const s = await syncOps().status();
+      inputSchema: obj({ all: { type: 'boolean', description: 'anche gli altri Pod dell\'account (non llmpod-*), in sola lettura' } }),
+      run: async ({ all = false }) => {
+        const s = await syncOps().status({ all });
         const by = (state) => s.pods.filter((p) => p.state === state);
         return {
           running: by('running'), starting: by('starting'), stopped: by('stopped'), terminating: by('terminating'), other: by('unknown'),
+          ...(all ? { otherAccountPods: s.otherPods } : { note: 'Solo i Pod llmpod-*: con all: true anche gli altri Pod dell\'account' }),
           balanceUSD: s.balance?.balance ?? null, volume: s.volume, jobs: jobs.list().filter((j) => j.status === 'running'),
         };
       },
@@ -161,7 +236,7 @@ export function createTools({ ctx, jobs }) {
         }
         const choice = { ...chosen.gpu };
         return startJob('up', profile, async ({ ops, ask, emit }) => {
-          const r = await ops.up(profile, { gpu: choice, expectedHourlyUSD, costConfirmed: true });
+          const r = await ops.up(profile, { gpu: choice, expectedHourlyUSD, costConfirmed: true, autoTerminate: true });
           if (r?.contextSuggestion) emit({ type: 'info', message: `La KV cache consente fino a ${r.contextSuggestion} token per richiesta: si può rigenerare il profilo con un contesto maggiore` });
           if (r?.repairedArgs && await ask('Salvare nel profilo gli argomenti corretti dal consulente?', true)) {
             ops.saveProfileArgs(profile, r.repairedArgs);
@@ -210,12 +285,12 @@ export function createTools({ ctx, jobs }) {
     },
     {
       name: 'tune', description: 'Applica il tuning: ricarica vLLM sul Pod (interruzione di alcuni minuti, il Pod resta e continua a costare), attende ready ed esegue lo smoke test. Richiede confirm: true. In background: jobId. Se fallisce, chiede (domanda pendente) se tornare agli argomenti precedenti.',
-      inputSchema: obj({ profile: S.profile, set: S.args, extra: S.args, confirm: S.confirm, save: { type: 'boolean', description: 'salva gli argomenti nel profilo' } }, ['profile', 'confirm']),
+      inputSchema: obj({ profile: S.profile, set: S.args, extra: S.args, expectedArgs: { ...S.args, maxItems: 200, description: 'il campo "before" di tune_preview: se gli argomenti attivi sono cambiati, rifiuta' }, confirm: S.confirm, save: { type: 'boolean', description: 'salva gli argomenti nel profilo' } }, ['profile', 'expectedArgs', 'confirm']),
       annotations: { destructiveHint: true },
-      run: async ({ profile, set = [], extra = [], save = false }) => {
+      run: async ({ profile, set = [], extra = [], expectedArgs, save = false }) => {
         assertNotBusy(profile);
-        await syncOps().tunePreview(profile, { set, extra }); // errori subito (flag vietati, memoria) invece che nel job
-        return startJob('tune', profile, ({ ops }) => ops.tune(profile, { set, extra, confirmed: true, save }));
+        await syncOps().tunePreview(profile, { set, extra, expectedArgs }); // errori subito (flag, memoria, argomenti cambiati)
+        return startJob('tune', profile, ({ ops }) => ops.tune(profile, { set, extra, expectedArgs, confirmed: true, save }));
       },
     },
     {
@@ -232,15 +307,26 @@ export function createTools({ ctx, jobs }) {
       },
     },
     {
-      name: 'down', description: 'ELIMINA (mai ferma) tutti i Pod del profilo, accesi o spenti; il network volume resta. Richiede confirm: true. Restituisce poi l\'elenco completo dei Pod per la verifica finale.',
+      name: 'down', description: 'ELIMINA (mai ferma) tutti i Pod del profilo, accesi o spenti; il network volume resta. Se è in corso un up o un tune del profilo, lo annulla (domanda pendente chiusa col valore sicuro). Richiede confirm: true. Restituisce l\'elenco dei Pod llmpod per la verifica finale.',
       inputSchema: obj({ profile: S.profile, confirm: S.confirm }, ['profile', 'confirm']),
       annotations: { destructiveHint: true },
       run: async ({ profile }) => {
-        assertNotBusy(profile);
-        const ops = syncOps();
-        const r = await ops.down(profile, { yes: true });
-        const after = await ops.status();
-        return { ...r, allPods: after.pods.map((p) => ({ profile: p.profile, podId: p.podId, state: p.state, hourlyUSD: p.hourlyUSD })) };
+        assertProfileName(profile);
+        return downAndList(profile, await cancelJobsOf(profile, 'Annullato: Pod eliminato con down'));
+      },
+    },
+    {
+      name: 'job_cancel', description: 'Annulla un job up/tune in corso ed ELIMINA il Pod del suo profilo (come down). Richiede confirm: true.',
+      inputSchema: obj({ jobId: S.jobId, confirm: S.confirm }, ['jobId', 'confirm']),
+      annotations: { destructiveHint: true },
+      run: async ({ jobId }) => {
+        const job = jobs.get(jobId);
+        const m = meta.get(jobId);
+        if (!job || !m) throw new LlmpodError(Codes.NOT_FOUND, `Job ${jobId} non trovato`);
+        if (job.status !== 'running') throw new LlmpodError(Codes.INVALID_INPUT, `Il job ${jobId} non è in corso (${job.status})`, { hint: 'Per eliminare il Pod usa down' });
+        jobs.cancel(jobId, 'Annullato con job_cancel');
+        await jobs.wait(jobId, 60_000);
+        return downAndList(m.profile, [jobId]);
       },
     },
     {
@@ -257,8 +343,11 @@ export function createTools({ ctx, jobs }) {
       },
     },
   ];
-  return tools.map((t) => ({
-    ...t,
-    annotations: { title: t.name, readOnlyHint: READ_ONLY_TOOLS.includes(t.name), destructiveHint: false, openWorldHint: true, ...t.annotations },
-  }));
+  return {
+    tools: tools.map((t) => ({
+      ...t,
+      annotations: { title: t.name, readOnlyHint: READ_ONLY_TOOLS.includes(t.name), destructiveHint: false, openWorldHint: true, ...t.annotations },
+    })),
+    shutdown,
+  };
 }

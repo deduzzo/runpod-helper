@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer, READ_ONLY_TOOLS } from '../../src/mcp/server.js';
+import { COSTLY_QUESTION_TIMEOUT_MS } from '../../src/mcp/tools.js';
 import { validateInput } from '../../src/mcp/schema.js';
 import { createWorld, KEY, RUNPOD_KEY, HF_TOKEN, ACTIVE_ARGS } from '../fixtures/fake-world.js';
 
@@ -23,11 +24,14 @@ const noSecrets = (value) => {
   for (const s of SECRETS) expect(text).not.toContain(s);
 };
 
-function setup(worldOpts = {}, { questionTimeoutMs } = {}) {
+// sleep "lento" (cede il ciclo degli eventi): per i job che restano in attesa (vLLM mai pronto).
+const yieldSleep = () => new Promise((r) => setTimeout(r, 1));
+
+function setup(worldOpts = {}, { questionTimeoutMs, sleep = vi.fn(async () => {}) } = {}) {
   const w = createWorld(worldOpts);
   const hf = hfFake();
-  const sleep = vi.fn(async () => {});
-  const mcp = createMcpServer({ env: w.env, overrides: { runpod: w.runpod, http: w.http, hf, sleep }, questionTimeoutMs });
+  const logs = [];
+  const mcp = createMcpServer({ env: w.env, overrides: { runpod: w.runpod, http: w.http, hf, sleep }, questionTimeoutMs, log: (m) => logs.push(m) });
   const call = async (name, args = {}) => {
     const r = await mcp.callTool(name, args);
     noSecrets(r);
@@ -42,7 +46,16 @@ function setup(worldOpts = {}, { questionTimeoutMs } = {}) {
     }
     throw new Error('job non concluso');
   };
-  return { ...w, hf, mcp, call, settle };
+  // Attende un evento del job (es. 'pod').
+  const until = async (jobId, type) => {
+    for (let i = 0; i < 500; i++) {
+      const { data } = await call('job_events', { jobId });
+      if (data.events.some((e) => e.type === type)) return;
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    throw new Error(`evento ${type} non arrivato`);
+  };
+  return { ...w, hf, mcp, call, settle, until, logs };
 }
 
 describe('validateInput (JSON Schema essenziale)', () => {
@@ -59,12 +72,13 @@ describe('server MCP: elenco strumenti', () => {
   it('tutti gli strumenti richiesti, con JSON Schema e annotazioni di sola lettura coerenti con i permessi', () => {
     const t = setup();
     const names = t.mcp.tools.map((x) => x.name).sort();
-    expect(names).toEqual(['client_commands', 'down', 'job_answer', 'job_events', 'job_status', 'keep', 'keep_preview', 'logs', 'metrics', 'model_sets', 'plan', 'profiles', 'save_profile', 'search', 'status', 'tune', 'tune_preview', 'up', 'up_preview'].sort());
+    expect(names).toEqual(['client_commands', 'down', 'job_answer', 'job_cancel', 'job_events', 'job_status', 'keep', 'keep_preview', 'logs', 'metrics', 'model_sets', 'plan', 'profiles', 'save_profile', 'search', 'status', 'tune', 'tune_preview', 'up', 'up_preview'].sort());
     for (const tool of t.mcp.tools) {
       expect(tool.inputSchema.type, tool.name).toBe('object');
       expect(tool.annotations.readOnlyHint, tool.name).toBe(READ_ONLY_TOOLS.includes(tool.name));
     }
-    for (const name of ['up', 'tune', 'keep', 'down']) {
+    expect(t.mcp.tools.find((x) => x.name === 'plan').inputSchema.properties.advisor).toBeUndefined();
+    for (const name of ['up', 'tune', 'keep', 'down', 'job_cancel']) {
       expect(t.mcp.tools.find((x) => x.name === name).inputSchema.required).toContain('confirm');
     }
   });
@@ -224,7 +238,7 @@ describe('up: nessuna spesa senza conferma esplicita e al prezzo mostrato', () =
     const first = await t.call('up', args);
     await t.settle(first.data.jobId);
     expect((await t.call('up', args)).isError).toBe(true);
-    expect((await t.call('tune', { profile: 'p', set: ['max-num-seqs=4'], confirm: true })).isError).toBe(true);
+    expect((await t.call('tune', { profile: 'p', set: ['max-num-seqs=4'], expectedArgs: ACTIVE_ARGS, confirm: true })).isError).toBe(true);
   });
 });
 
@@ -233,13 +247,17 @@ describe('tune, keep, down', () => {
     const t = setup();
     const p = await t.call('tune_preview', { profile: 'p', set: ['max-num-seqs=4'] });
     expect(p.data.changes.added).toEqual(['--max-num-seqs 4']);
-    expect((await t.call('tune', { profile: 'p', set: ['max-num-seqs=4'] })).isError).toBe(true);
+    expect((await t.call('tune', { profile: 'p', set: ['max-num-seqs=4'], expectedArgs: p.data.before })).isError).toBe(true);
+    // argomenti attivi diversi da quelli dell'anteprima → rifiuto prima del job
+    const changed = await t.call('tune', { profile: 'p', set: ['max-num-seqs=4'], expectedArgs: ['--max-model-len', '1024'], confirm: true });
+    expect(changed.isError).toBe(true);
+    expect(changed.data.error.message).toMatch(/cambiati dall'anteprima/);
     expect(t.calls('/reload')).toHaveLength(0);
   });
 
   it('tune con confirm: job in background che ricarica e salva', async () => {
     const t = setup();
-    const r = await t.call('tune', { profile: 'p', set: ['max-model-len=32768'], confirm: true, save: true });
+    const r = await t.call('tune', { profile: 'p', set: ['max-model-len=32768'], expectedArgs: ACTIVE_ARGS, confirm: true, save: true });
     const job = await t.settle(r.data.jobId);
     expect(job.status).toBe('done');
     expect(t.calls('/reload', 'POST')[0][2].json.args).toEqual(expect.arrayContaining(['--max-model-len', '32768']));
@@ -248,9 +266,13 @@ describe('tune, keep, down', () => {
 
   it('tune fallito: il ritorno agli argomenti precedenti è una domanda pendente', async () => {
     const t = setup({ onReload: (_a, n) => (n === 1 ? 'error' : 'ready') });
-    const r = await t.call('tune', { profile: 'p', set: ['max-num-seqs=4'], confirm: true });
+    const r = await t.call('tune', { profile: 'p', set: ['max-num-seqs=4'], expectedArgs: ACTIVE_ARGS, confirm: true });
     const job = await t.settle(r.data.jobId);
     expect(job.question.text).toMatch(/Tornare agli argomenti precedenti/);
+    // il Pod costa: la domanda scade in 3 minuti (poi vale il valore sicuro: tornare indietro)
+    const left = Date.parse(job.question.expiresAt) - Date.now();
+    expect(left).toBeGreaterThan(COSTLY_QUESTION_TIMEOUT_MS - 10_000);
+    expect(left).toBeLessThanOrEqual(COSTLY_QUESTION_TIMEOUT_MS);
     await t.call('job_answer', { jobId: r.data.jobId, questionId: job.question.id, answer: true });
     const end = await t.settle(r.data.jobId);
     expect(end.status).toBe('failed');
@@ -281,9 +303,114 @@ describe('tune, keep, down', () => {
   it('save_profile salva l\'ultimo piano con la GPU scelta', async () => {
     const t = setup();
     await t.call('plan', { model: 'Qwen/Qwen3-Coder-30B-A3B-Instruct', context: 32768 });
-    const r = await t.call('save_profile', { name: 'coder', gpu: { id: 'GPU80', count: 1 } });
+    const wrong = await t.call('save_profile', { name: 'coder', model: 'org/altro-modello', gpu: { id: 'GPU80', count: 1 } });
+    expect(wrong.isError).toBe(true);
+    expect(wrong.data.error.message).toMatch(/ultimo piano è di Qwen\/Qwen3-Coder-30B-A3B-Instruct/);
+    const r = await t.call('save_profile', { name: 'coder', model: 'Qwen/Qwen3-Coder-30B-A3B-Instruct', gpu: { id: 'GPU80', count: 1 } });
     expect(r.data.profile).toMatchObject({ name: 'coder', gpu: { id: 'GPU80', count: 1 } });
     expect(t.store.readEnv().LLMPOD_KEY_CODER).toBeTruthy();
+  });
+});
+
+describe('nessun Pod lasciato acceso da un job', () => {
+  const UP = { profile: 'p', gpu: { id: 'GPU80', count: 1 }, confirm: true, expectedHourlyUSD: 1.5 };
+
+  it('up fallito (smoke test): il Pod si elimina subito, senza domanda pendente', async () => {
+    const t = setup({ pods: [], smoke: [false] });
+    const r = await t.call('up', UP);
+    const job = await t.settle(r.data.jobId);
+    expect(job.status).toBe('failed');
+    expect(job.question).toBeNull();
+    expect(t.runpod.deletePod).toHaveBeenCalledWith('pod1');
+  });
+
+  it('domanda durante un up con il Pod già creato: scade in 3 minuti', async () => {
+    // vLLM mai pronto entro il limite → "Aspettare altri 15 minuti?"
+    let clock = 0;
+    const t = setup({ pods: [], phase: 'loading' }, { sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)); } });
+    const realNow = Date.now;
+    const start = realNow();
+    Date.now = () => start + clock;
+    try {
+      const r = await t.call('up', UP);
+      const job = await t.settle(r.data.jobId);
+      expect(job.question.text).toMatch(/Aspettare altri 15 minuti/);
+      const left = Date.parse(job.question.expiresAt) - Date.now();
+      expect(left).toBeLessThanOrEqual(COSTLY_QUESTION_TIMEOUT_MS);
+      await t.call('job_answer', { jobId: r.data.jobId, questionId: job.question.id, answer: false });
+      const end = await t.settle(r.data.jobId);
+      expect(end.status).toBe('failed');
+      expect(t.runpod.deletePod).toHaveBeenCalledWith('pod1');
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('down durante un up in corso: annulla il job ed elimina il Pod', async () => {
+    const t = setup({ pods: [], phase: 'loading' }, { sleep: yieldSleep });
+    const r = await t.call('up', UP);
+    await t.until(r.data.jobId, 'pod');
+    const d = await t.call('down', { profile: 'p', confirm: true });
+    expect(d.isError).toBe(false);
+    expect(d.data.cancelledJobs).toEqual([r.data.jobId]);
+    expect(t.runpod.deletePod).toHaveBeenCalledWith('pod1');
+    expect(d.data.allPods).toEqual([]);
+    const job = (await t.call('job_status', { jobId: r.data.jobId })).data.job;
+    expect(job.status).toBe('cancelled');
+  });
+
+  it('down durante un up con domanda pendente: la domanda si chiude col valore sicuro', async () => {
+    const t = setup({ pods: [{ id: 'old', name: 'llmpod-p', status: 'EXITED', cost: 0 }] });
+    const r = await t.call('up', UP);
+    const job = await t.settle(r.data.jobId);
+    expect(job.question).toBeTruthy();
+    await t.call('down', { profile: 'p', confirm: true });
+    const after = (await t.call('job_status', { jobId: r.data.jobId })).data.job;
+    expect(after).toMatchObject({ status: 'cancelled', question: null });
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+    expect(t.runpod.deletePod).toHaveBeenCalledWith('old');
+  });
+
+  it('job_cancel: senza confirm errore; con confirm annulla ed elimina il Pod', async () => {
+    const t = setup({ pods: [], phase: 'loading' }, { sleep: yieldSleep });
+    const r = await t.call('up', UP);
+    await t.until(r.data.jobId, 'pod');
+    expect((await t.call('job_cancel', { jobId: r.data.jobId })).isError).toBe(true);
+    const c = await t.call('job_cancel', { jobId: r.data.jobId, confirm: true });
+    expect(c.isError).toBe(false);
+    expect(t.runpod.deletePod).toHaveBeenCalledWith('pod1');
+    expect((await t.call('job_cancel', { jobId: r.data.jobId, confirm: true })).isError).toBe(true);
+  });
+
+  it('chiusura del server con un up in corso e Pod creato: elimina il Pod e lo scrive nel log', async () => {
+    const t = setup({ pods: [], phase: 'loading' }, { sleep: yieldSleep });
+    const r = await t.call('up', UP);
+    await t.until(r.data.jobId, 'pod');
+    const res = await t.mcp.shutdown({ timeoutMs: 5000 });
+    expect(res.terminated).toEqual(['pod1']);
+    expect(t.runpod.deletePod).toHaveBeenCalledWith('pod1');
+    expect(t.logs.join('\n')).toMatch(/elimino il Pod pod1/);
+  });
+
+  it('chiusura senza job in corso: nessuna azione', async () => {
+    const t = setup();
+    expect(await t.mcp.shutdown({ timeoutMs: 100 })).toEqual({ terminated: [] });
+    expect(t.runpod.deletePod).not.toHaveBeenCalled();
+  });
+});
+
+describe('status con all', () => {
+  it('elenca anche gli altri Pod dell\'account, in sola lettura', async () => {
+    const t = setup({ pods: [
+      { id: 'pod1', name: 'llmpod-p', status: 'RUNNING', cost: 1.5, gpu: { id: 'GPU80', count: 1 } },
+      { id: 'x1', name: 'mio-notebook', status: 'RUNNING', cost: 0.4, gpu: { id: 'GPU24', count: 1 } },
+    ] });
+    const base = await t.call('status');
+    expect(base.data.otherAccountPods).toBeUndefined();
+    expect(base.data.note).toMatch(/all: true/);
+    const all = await t.call('status', { all: true });
+    expect(all.data.otherAccountPods).toEqual([expect.objectContaining({ podId: 'x1', name: 'mio-notebook', hourlyUSD: 0.4 })]);
+    expect(t.runpod.deletePod).not.toHaveBeenCalled();
   });
 });
 
