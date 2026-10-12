@@ -1,4 +1,5 @@
 import { LlmpodError, Codes } from '../../core/errors.js';
+import { resolveCwd } from '../cwd.js';
 import { prepareClient } from '../../core/clients/prepare.js';
 import { piDir } from '../../core/clients/pi.js';
 import { updateZcode, zcodeDir } from '../../core/clients/zcode.js';
@@ -14,6 +15,7 @@ async function runClient(client, opts, getCtx, result) {
   if (!['claude', 'opencode', 'pi', 'zcode'].includes(client)) {
     throw new LlmpodError(Codes.INVALID_INPUT, `Client sconosciuto: ${client}`, { hint: 'Client supportati: claude, opencode, pi, zcode' });
   }
+  const cwd = resolveCwd(opts.cwd); // verificata prima di toccare Runpod; per zcode non ha effetto
   const ep = await ctx.ops.endpoint(await ctx.ops.resolveProfile(opts.profile));
 
   if (client === 'zcode') {
@@ -24,7 +26,7 @@ async function runClient(client, opts, getCtx, result) {
   }
 
   const prep = prepareClient(client, ep, { configDir: ctx.store.dir, piDir: piDir(ctx.env) });
-  const child = ctx.spawn(prep.command, prep.args, { stdio: 'inherit', env: { ...process.env, ...prep.env } });
+  const child = ctx.spawn(prep.command, prep.args, { ...(cwd ? { cwd } : {}), stdio: 'inherit', env: { ...process.env, ...prep.env } });
   result.code = await new Promise((resolve, reject) => {
     child.on('error', (err) => reject(err.code === 'ENOENT'
       ? new LlmpodError(Codes.INVALID_INPUT, `Comando "${prep.command}" non trovato`, { hint: INSTALL[client] })
@@ -37,11 +39,13 @@ export function register(program, getCtx, result) {
   program.command('run <client>')
     .description('Avvia o configura un client sul Pod attivo: claude, opencode, pi, zcode')
     .option('--profile <nome>', 'profilo')
+    .option('--cwd <cartella>', 'cartella di lavoro in cui avviare il client (default: la cartella corrente)')
     .option('--no-open', 'ZCode: non aprire l\'app dopo la configurazione')
     .action((client, opts) => runClient(client, opts, getCtx, result));
 
   program.command('claude')
     .description('Alias di "run claude"')
     .option('--profile <nome>', 'profilo')
+    .option('--cwd <cartella>', 'cartella di lavoro in cui avviare Claude Code (default: la cartella corrente)')
     .action((opts) => runClient('claude', opts, getCtx, result));
 }

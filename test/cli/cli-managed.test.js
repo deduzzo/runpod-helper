@@ -127,6 +127,97 @@ describe('llmpod manage', () => {
     expect(JSON.stringify(opts.env ?? {})).not.toContain(KEY);
   });
 
+  it('senza --cwd: cwd = cartella del progetto e nessun flag di configurazione aggiuntivo', async () => {
+    const t = setup();
+    const spawn = fakeSpawn(0);
+    expect(await t.go(['manage'], { spawn })).toBe(0);
+    const [, args, opts] = spawn.mock.calls[0];
+    expect(opts.cwd).toBe(ROOT);
+    expect(args).toEqual([]);
+    expect(opts.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD).toBeUndefined();
+  });
+
+  describe('--cwd', () => {
+    const mkdir = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-work-')));
+
+    it('avvia claude nella cartella indicata con --mcp-config (JSON inline, server.js assoluto), --settings e --add-dir', async () => {
+      const t = setup();
+      const dir = mkdir();
+      const spawn = fakeSpawn(0);
+      expect(await t.go(['manage', '--cwd', dir], { spawn })).toBe(0);
+      const [cmd, args, opts] = spawn.mock.calls[0];
+      expect(cmd).toBe('claude');
+      expect(opts.cwd).toBe(dir);
+      const i = args.indexOf('--mcp-config');
+      expect(i).toBeGreaterThanOrEqual(0);
+      const mcp = JSON.parse(args[i + 1]);
+      expect(mcp.mcpServers.llmpod.command).toBe('node');
+      expect(mcp.mcpServers.llmpod.args).toEqual([path.join(ROOT, 'src/mcp/server.js')]);
+      expect(path.isAbsolute(mcp.mcpServers.llmpod.args[0])).toBe(true);
+      expect(mcp.mcpServers.llmpod.env).toEqual({ LLMPOD_CONFIG_DIR: t.env.LLMPOD_CONFIG_DIR, ZCODE_DIR: t.env.ZCODE_DIR, PI_CODING_AGENT_DIR: t.env.PI_CODING_AGENT_DIR });
+      expect(args[args.indexOf('--settings') + 1]).toBe(path.join(ROOT, '.claude/settings.json'));
+      expect(args[args.indexOf('--add-dir') + 1]).toBe(ROOT);
+      expect(args).not.toContain('--strict-mcp-config');
+      expect(opts.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD).toBe('1');
+      expect(t.err()).toContain(dir);
+    });
+
+    it('nessun segreto nei flag né nell\'ambiente; --dir è un alias; il prompt del profilo precede i flag (--add-dir accetta più valori)', async () => {
+      const t = setup();
+      const dir = mkdir();
+      const spawn = fakeSpawn(0);
+      expect(await t.go(['manage', '--dir', dir, '--profile', 'p'], { spawn })).toBe(0);
+      const [, args, opts] = spawn.mock.calls[0];
+      expect(opts.cwd).toBe(dir);
+      expect(args[0]).toMatch(/profilo llmpod "p"/);
+      expect(args.findIndex((a) => a.startsWith('--'))).toBe(1);
+      const all = JSON.stringify([args, opts.env]);
+      expect(all).not.toContain(RUNPOD_KEY);
+      expect(all).not.toContain(KEY);
+    });
+
+    it('un percorso con spazi e caratteri di shell resta un solo valore (nessuna shell)', async () => {
+      const t = setup();
+      const dir = path.join(mkdir(), 'mio progetto; $(rm -rf x)');
+      fs.mkdirSync(dir);
+      const spawn = fakeSpawn(0);
+      expect(await t.go(['manage', '--cwd', dir], { spawn })).toBe(0);
+      expect(spawn.mock.calls[0][2].cwd).toBe(dir);
+      expect(spawn.mock.calls[0][2].shell).toBeUndefined();
+    });
+
+    it('percorso relativo risolto in assoluto', async () => {
+      const t = setup();
+      const dir = mkdir();
+      const spawn = fakeSpawn(0);
+      expect(await t.go(['manage', '--cwd', path.relative(process.cwd(), dir)], { spawn })).toBe(0);
+      expect(spawn.mock.calls[0][2].cwd).toBe(dir);
+    });
+
+    it('cartella inesistente o file: INVALID_INPUT con hint, senza avviare claude', async () => {
+      const t = setup();
+      const spawn = fakeSpawn(0);
+      const missing = path.join(mkdir(), 'non-esiste');
+      expect(await t.go(['manage', '--cwd', missing], { spawn })).toBe(1);
+      expect(t.err()).toMatch(/INVALID_INPUT/);
+      expect(t.err()).toMatch(/non esiste/);
+      const file = path.join(mkdir(), 'f.txt');
+      fs.writeFileSync(file, 'x');
+      expect(await t.go(['manage', '--cwd', file], { spawn })).toBe(1);
+      expect(t.err()).toMatch(/non è una cartella/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('--cwd uguale alla cartella del progetto: comportamento senza --cwd', async () => {
+      const t = setup();
+      const spawn = fakeSpawn(0);
+      expect(await t.go(['manage', '--cwd', ROOT], { spawn })).toBe(0);
+      const [, args, opts] = spawn.mock.calls[0];
+      expect(opts.cwd).toBe(ROOT);
+      expect(args).toEqual([]);
+    });
+  });
+
   it('la cartella del progetto contiene CLAUDE.md, permessi, skill e .mcp.json; il pacchetto npm li include', () => {
     expect(missingProjectFiles()).toEqual([]);
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-manage-'));

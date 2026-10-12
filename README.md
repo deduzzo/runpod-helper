@@ -165,7 +165,7 @@ llmpod ti fa a ogni passo, è nella [guida](docs/GUIDA.md#avviare-il-pod).
 | `llmpod plan <modello>` | Stima VRAM, propone le GPU e gli argomenti di vLLM (`--context`, `--gpu`, `--set chiave=valore`, `--no-advisor`) |
 | `llmpod save <nome>` | Salva l'ultimo piano come profilo |
 | `llmpod up <profilo>` | Crea il Pod, attende vLLM ed esegue lo smoke test (`--dry-run` per vedere la richiesta) |
-| `llmpod run <client>` | Avvia `claude`, `opencode` o `pi`, oppure configura `zcode`, sul Pod attivo (`--profile`) |
+| `llmpod run <client>` | Avvia `claude`, `opencode` o `pi`, oppure configura `zcode`, sul Pod attivo (`--profile`, `--cwd <cartella>` per lavorare in un'altra cartella) |
 | `llmpod claude` | Alias di `llmpod run claude` |
 | `llmpod env` | Stampa gli `export` per altri client (**contiene la chiave**; `--format sh\|ps1\|json`) |
 | `llmpod chat` | Apre Open WebUI collegato al Pod, per una prova veloce |
@@ -179,7 +179,7 @@ llmpod ti fa a ogni passo, è nella [guida](docs/GUIDA.md#avviare-il-pod).
 | `llmpod destroy-volume` | Elimina il network volume con i pesi (doppia conferma) |
 | `llmpod advisor` | Configura il consulente IA esterno (`--preset`, `--test`, `--disable`) |
 | `llmpod ui` | Interfaccia web locale e proxy per Open WebUI (`--port`, `--no-open`, `--no-proxy`) |
-| `llmpod manage` | Modalità Claude Code managed: avvia Claude Code nella cartella di llmpod (`--profile`) |
+| `llmpod manage` | Modalità Claude Code managed: avvia Claude Code nella cartella di llmpod o, con `--cwd <cartella>`, nella tua (`--profile`) |
 | `llmpod mcp` | Server MCP di llmpod su stdio (equivale a `llmpod-mcp`) |
 | `llmpod prepare <client>` | Uso interno del wrapper Docker: prepara il client e stampa lo script per avviarlo sull'host |
 
