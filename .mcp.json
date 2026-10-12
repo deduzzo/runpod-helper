@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "llmpod": {
+      "command": "node",
+      "args": ["src/mcp/server.js"]
+    }
+  }
+}

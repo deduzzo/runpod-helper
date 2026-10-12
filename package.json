@@ -5,7 +5,8 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "llmpod": "src/cli/index.js"
+    "llmpod": "src/cli/index.js",
+    "llmpod-mcp": "src/mcp/server.js"
   },
   "engines": {
     "node": ">=20"
