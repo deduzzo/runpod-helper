@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Continue'
 # docker compose sulla cartella del progetto, senza cambiare la cartella corrente.
 function Invoke-Compose { docker compose --project-directory $Root -f (Join-Path $Root 'compose.yaml') @args }
 
-# Avviso sui Pod ancora attivi (a pagamento). Se il controllo non riesce (nessuna chiave, rete, immagine assente) si prosegue.
+# Avviso sui Pod ancora esistenti, accesi o spenti (un Pod spento costa ancora il disco). Se il controllo non riesce (nessuna chiave, rete, immagine assente) si prosegue.
 $envFile = Join-Path $env:LLMPOD_CONFIG_DIR '.env'
 if ((Test-Path $envFile) -and ((Get-Content $envFile) -match '^RUNPOD_API_KEY=.')) {
   docker image inspect llmpod:local *> $null
@@ -21,7 +21,11 @@ if ((Test-Path $envFile) -and ((Get-Content $envFile) -match '^RUNPOD_API_KEY=.'
     if ($LASTEXITCODE -eq 0) {
       try {
         foreach ($p in @(($statusJson | ConvertFrom-Json).pods)) {
-          [Console]::Error.WriteLine("⚠ Il Pod $($p.podId) del profilo $($p.profile) resta acceso e a pagamento: fermalo con bin\llmpod down $($p.profile)")
+          if ($p.state -eq 'stopped') {
+            [Console]::Error.WriteLine("⚠ Il Pod $($p.podId) del profilo $($p.profile) è spento ma costa ancora lo spazio su disco: eliminalo con bin\llmpod down $($p.profile)")
+          } else {
+            [Console]::Error.WriteLine("⚠ Il Pod $($p.podId) del profilo $($p.profile) resta acceso e a pagamento: eliminalo con bin\llmpod down $($p.profile)")
+          }
         }
       } catch { }
     }
@@ -31,5 +35,5 @@ if ((Test-Path $envFile) -and ((Get-Content $envFile) -match '^RUNPOD_API_KEY=.'
 Invoke-Compose --profile openwebui down
 $code = $LASTEXITCODE
 if ($code -ne 0) { exit $code }
-Write-Host "llmpod fermato (configurazione e dati di Open WebUI conservati). I Pod su Runpod non vengono fermati: si fermano con bin\llmpod down o da soli dopo l'inattività"
+Write-Host "llmpod fermato (configurazione e dati di Open WebUI conservati). I Pod su Runpod non vengono toccati: si eliminano con bin\llmpod down o da soli dopo l'inattività"
 exit 0
