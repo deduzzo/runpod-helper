@@ -19,6 +19,17 @@ Branch `feat/scelta-gpu` (da `origin/main` c25a1ed). `npm test` e `npm run build
 - `scripts/stop.sh` e `stop.ps1`: avvisano anche dei Pod spenti ("è spento ma costa ancora lo spazio su disco: eliminalo con bin/llmpod down"); il messaggio per quelli accesi ora dice "eliminalo" invece di "fermalo". Si basano sull'ordine delle chiavi di `status --json` (profile, podId, status, state), coperto da test.
 - README aggiornato (tabella comandi, sezione sulla scelta GPU, riga "llmpod elimina sempre i Pod, non li ferma", sezione stop).
 
+## Correzioni della revisione (round 3)
+1. `up` in modalità scelta: una sola opzione disponibile ora diventa l'unico candidato (la conferma del costo mostra la GPU che verrà creata, niente tentativi su GPU NONE né ripieghi); zero opzioni → `NO_GPU_AVAILABLE` con l'elenco e "Riprova più tardi", nessuna creazione.
+2. Opzioni e VRAM: `makeFitsWith` cerca in `plan.options`; nuove `fitsForOption` e `markFits` (advice.js). `applyAdvice` (CLI e `/api/plan/apply-advice`) marca `fits:false` le opzioni che con i nuovi argomenti non entrano; `findOption`, `applyGpuChoice`, tabella CLI, PlanView e `up` le escludono (in `up` si ricontrolla anche con gli argomenti salvati del profilo).
+3. `up` in modalità scelta propone sempre anche le opzioni di altri datacenter, etichettate "(senza volume, <dc>)"; predefinita: GPU del profilo nel datacenter del volume se disponibile, altrimenti la più economica. Niente domanda di ripiego in questa modalità (la scelta è il consenso). Con `--yes` comportamento precedente.
+11. Pod spento del profilo: `up` chiede di eliminarlo (predefinito sì, timeout = no); se rifiutato o scaduto si ferma con "Elimina prima il Pod spento <id> (llmpod down <profilo>)" e non crea nulla; con `--yes` lo elimina.
+4. Status.jsx: a eliminazione finita il pannello sparisce (e lo stato si ricarica); se fallisce resta l'errore e Elimina torna attivo.
+5. Pod spento: costo orario, uptime e sessione "—" in CLI e web (`hourlyUSD`/`sessionUSD` null nei dati); il disco è nell'avviso.
+6. Tolto il "?" prima di ". Confermi?" nelle conferme di `down`.
+7. `down` cita tutti i Pod eliminati. 8. `stop.sh`: un Pod senza `state` è trattato come acceso (awk con flush per Pod). 9. PlanView riallinea la scelta al cambio di `planId` (resta se ancora selezionabile); un piano senza `options` non ha tabella selezionabile. 10. `aria-describedby` sul radio disabilitato, clic sulla riga, QuestionModal usa la prima opzione se `defaultId` non è tra le opzioni. 12. Etichetta VRAM "2×80 GB" (CLI, web, domanda di `up`).
+Test nuovi: ops-pods.test.js (modalità scelta, altri datacenter, fits, Pod spento), plan-flow-fits.test.js, advisor-advice.test.js (makeFitsWith/markFits), gpu-choice.test.js, cli-pods-stopped.test.js, start.test.js (stop.sh), test web gpu-choice e pods-stopped.
+
 ## Test aggiunti
 test/core/gpu-choice.test.js, plan.test.js (options), ops-pods.test.js (up scelta, saveProfile, status/down/up con Pod spenti), no-stop.test.js, test/server/jobs-choice.test.js, api-choice.test.js, test/cli/cli-gpu-choice.test.js (plan), cli-up-choice.test.js, cli-pods-stopped.test.js, test/scripts/start.test.js (Pod spenti), test/web/gpu-choice.test.jsx (QuestionModal, JobPanel, PlanView), pods-stopped.test.jsx. Test esistenti modificati solo dove cambia il comportamento voluto: testo di Stato senza Pod, messaggi di stop ("eliminalo"), dati di PlanView con `options: []`.
 

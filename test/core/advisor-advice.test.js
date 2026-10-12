@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAdvice, reviewAdvice, diffArgs, makeFitsWith, LOCKED, ADVISOR_ALLOWED, FLAG_TYPES } from '../../src/core/advisor/advice.js';
+import { parseAdvice, reviewAdvice, diffArgs, makeFitsWith, markFits, LOCKED, ADVISOR_ALLOWED, FLAG_TYPES } from '../../src/core/advisor/advice.js';
 import { loadFlags } from '../../src/core/planner/vllm-args.js';
 
 const flags = loadFlags();
@@ -143,6 +143,49 @@ describe('diffArgs e makeFitsWith', () => {
     const fits = makeFitsWith(mk('auto', 'fp8'));
     expect(fits(['--kv-cache-dtype', 'fp8'])).toBe(true);
     expect(fits(['--kv-cache-dtype', 'auto'])).toBe(true);
+  });
+});
+
+describe('opzioni e VRAM', () => {
+  // Piano in BF16: pesi 40 GiB, KV 20 GiB, per GPU (1 GPU) = 40 + 2 + 20 = 62; con 2 GPU = 20 + 2 + 10 = 32.
+  const mkPlan = (extra = {}) => ({
+    gpu: { id: 'G80', count: 1 }, kvCacheDtype: null, estimate: { weightsGiB: 40, kvGiB: 20, perGpuGiB: 62 },
+    vllm: { args: ['--tensor-parallel-size', '1'] },
+    candidates: [],
+    options: [
+      { id: 'G80', name: 'G80', count: 1, memoryGiB: 80, perGpuGiB: 62 },
+      { id: 'G70', name: 'G70', count: 1, memoryGiB: 70, perGpuGiB: 62 },
+      { id: 'G40', name: 'G40', count: 2, memoryGiB: 40, perGpuGiB: 32 },
+    ],
+    ...extra,
+  });
+
+  it('makeFitsWith trova la GPU scelta tra le opzioni, anche se non è nei candidates', () => {
+    const fits = makeFitsWith(mkPlan());
+    expect(fits([])).toBe(true);
+    expect(fits(['--gpu-memory-utilization', '0.7'])).toBe(false); // 62 > 80 × 0,7 = 56
+  });
+
+  it('markFits: dopo un consiglio che riduce il margine l\'opzione stretta non entra più', () => {
+    const plan = mkPlan();
+    markFits(plan);
+    expect(plan.options.map((o) => o.fits)).toEqual([true, true, true]);
+    // il consiglio porta l'utilizzo della memoria a 0,85: 62 ≤ 80 × 0,85 = 68, ma 62 > 70 × 0,85 = 59,5 e 32 ≤ 40 × 0,85 = 34
+    plan.vllm.args = ['--tensor-parallel-size', '1', '--gpu-memory-utilization', '0.85'];
+    markFits(plan);
+    expect(plan.options.map((o) => [o.id, o.count, o.fits])).toEqual([['G80', 1, true], ['G70', 1, false], ['G40', 2, true]]);
+  });
+
+  it('markFits: kv-cache-dtype fp8 libera memoria, auto la riprende', () => {
+    const plan = mkPlan();
+    plan.vllm.args = ['--kv-cache-dtype', 'fp8', '--gpu-memory-utilization', '0.8'];
+    markFits(plan);
+    // fp8: 42 + 10 = 52 ≤ 70 × 0,8 = 56 sì; G40×2: 22 + 5 = 27 ≤ 32 sì
+    expect(plan.options.map((o) => o.fits)).toEqual([true, true, true]);
+  });
+
+  it('markFits senza opzioni non fa nulla', () => {
+    expect(markFits({ vllm: { args: [] } })).toEqual({ vllm: { args: [] } });
   });
 });
 

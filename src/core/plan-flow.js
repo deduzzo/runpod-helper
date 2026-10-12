@@ -3,7 +3,7 @@ import { makePlan, syncDerivedFields } from './planner/plan.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { advisePlan } from './advisor/advisor.js';
 import { applyGpuChoice, parseGpuSpec } from './planner/gpu-choice.js';
-import { makeFitsWith } from './advisor/advice.js';
+import { makeFitsWith, markFits } from './advisor/advice.js';
 import { createRecipes } from './advisor/recipes.js';
 
 // advisor: true = forza il consulente, false = salta, undefined = regola unica di attivazione (ctx.advisor.active()).
@@ -42,6 +42,7 @@ export async function runPlan({ ctx, modelRef, context = 65536, concurrency = 2,
 export function applyAdvice(plan, advice) {
   plan.vllm.args = advice.args;
   syncDerivedFields(plan);
+  markFits(plan); // le opzioni che con i nuovi argomenti non entrano in memoria non sono più selezionabili
   if (plan.advisor) plan.advisor.applied = true;
   return plan;
 }

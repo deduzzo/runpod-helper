@@ -45,6 +45,11 @@ describe('QuestionModal: domanda a scelta', () => {
     expect(screen.getAllByRole('radio').map((r) => r.checked)).toEqual([false, true]);
   });
 
+  it('se defaultId non è tra le opzioni vale la prima', () => {
+    render(<QuestionModal question={{ ...choice, defaultId: 'inesistente' }} onAnswer={() => {}} />);
+    expect(screen.getAllByRole('radio').map((r) => r.checked)).toEqual([true, false]);
+  });
+
   it('una domanda sì/no (senza kind o con kind confirm) resta com\'era', () => {
     render(<QuestionModal question={{ id: 'q', kind: 'confirm', text: 'Confermi?', defYes: true }} onAnswer={() => {}} />);
     expect(screen.getByRole('button', { name: 'Sì' })).toBeTruthy();
@@ -149,9 +154,60 @@ describe('PlanView: tabella delle GPU selezionabile', () => {
     expect(JSON.parse(call[1].body).gpu).toEqual({ id: 'GPU-C', count: 1 });
   });
 
-  it('un piano vecchio con solo "candidates" continua a mostrarsi', () => {
+  it('un piano vecchio senza "options": nessuna tabella selezionabile, vale solo la GPU del piano (e si salva senza gpu)', async () => {
+    const fetchMock = mockApi({ 'GET /api/overview': { profiles: [] }, 'POST /api/profiles': { profile: { name: 'qwen' } } });
     const old = { ...plan, options: undefined, candidates: [{ gpuId: 'GPU-A', name: 'GPU-A', count: 1, memoryGiB: 80, perGpuGiB: 70.9, headroomGiB: 1, hourly: 1.5, availabilityHere: 'HIGH' }] };
     render(<PlanView data={{ ...data, plan: old }} onPlanChange={() => {}} />);
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
+    expect(screen.getByText(/Scelta:/).parentElement.textContent).toMatch(/GPU-A ×1 a 1,50 \$\/h/);
+    fireEvent.change(screen.getByLabelText(/Nome del profilo/), { target: { value: 'qwen' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salva come profilo' }));
+    await screen.findByText(/Profilo salvato/);
+    const call = fetchMock.mock.calls.find(([p, i]) => p === '/api/profiles' && i?.method === 'POST');
+    expect(JSON.parse(call[1].body)).toEqual({ name: 'qwen', planId: 'piano-1' });
+  });
+
+  it('etichetta VRAM "2×80 GB" per più GPU', () => {
+    render(<PlanView data={data} onPlanChange={() => {}} />);
+    expect(screen.getByRole('radio', { name: 'Usa GPU-B ×2' }).closest('tr').textContent).toContain('2×80 GB');
+    expect(screen.getByRole('radio', { name: 'Usa GPU-A ×1' }).closest('tr').textContent).toContain('80 GB');
+    expect(screen.getByRole('radio', { name: 'Usa GPU-A ×1' }).closest('tr').textContent).not.toContain('×80');
+  });
+
+  it('un\'opzione con fits:false (dopo un consiglio) non è selezionabile e lo spiega', () => {
+    const narrow = { ...plan, options: plan.options.map((o) => (o.id === 'GPU-B' ? { ...o, fits: false } : o)) };
+    render(<PlanView data={{ ...data, plan: narrow }} onPlanChange={() => {}} />);
+    const radio = screen.getByRole('radio', { name: 'Usa GPU-B ×2' });
+    expect(radio.disabled).toBe(true);
+    expect(screen.getByText('non entra con gli argomenti attuali')).toBeTruthy();
+    expect(radio.getAttribute('aria-describedby')).toBeTruthy();
+    expect(document.getElementById(radio.getAttribute('aria-describedby')).textContent).toContain('non entra con gli argomenti attuali');
+  });
+
+  it('il radio disabilitato "non disponibile ora" è collegato al suo badge con aria-describedby', () => {
+    render(<PlanView data={data} onPlanChange={() => {}} />);
+    const radio = screen.getByRole('radio', { name: 'Usa GPU-NOW ×1' });
+    expect(document.getElementById(radio.getAttribute('aria-describedby')).textContent).toContain('non disponibile ora');
+    expect(screen.getByRole('radio', { name: 'Usa GPU-A ×1' }).getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('un clic sulla riga seleziona il radio; sulla riga non selezionabile non fa nulla', () => {
+    render(<PlanView data={data} onPlanChange={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Usa GPU-B ×2' }).closest('tr'));
+    expect(screen.getByRole('radio', { name: 'Usa GPU-B ×2' }).checked).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: 'Usa GPU-NOW ×1' }).closest('tr'));
+    expect(screen.getByRole('radio', { name: 'Usa GPU-B ×2' }).checked).toBe(true);
+  });
+
+  it('quando cambia planId la scelta si riallinea: resta se ancora selezionabile, altrimenti torna alla GPU del piano', () => {
+    const { rerender } = render(<PlanView data={data} onPlanChange={() => {}} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Usa GPU-B ×2' }));
+    // stesso piano, nuovo id (es. proposta applicata): GPU-B resta scelta
+    rerender(<PlanView data={{ ...data, planId: 'piano-2' }} onPlanChange={() => {}} />);
+    expect(screen.getByRole('radio', { name: 'Usa GPU-B ×2' }).checked).toBe(true);
+    // il consiglio ha reso GPU-B non più adatta: la scelta torna a GPU-A
+    const narrow = { ...plan, options: plan.options.map((o) => (o.id === 'GPU-B' ? { ...o, fits: false } : o)) };
+    rerender(<PlanView data={{ ...data, plan: narrow, planId: 'piano-3' }} onPlanChange={() => {}} />);
     expect(screen.getByRole('radio', { name: 'Usa GPU-A ×1' }).checked).toBe(true);
   });
 });

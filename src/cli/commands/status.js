@@ -18,9 +18,9 @@ export function register(program, getCtx) {
           { key: 'podId', label: 'Pod' },
           { key: 'stateLabel', label: 'Stato' },
           { label: 'GPU', value: (p) => (p.gpu ? `${p.gpu.id} ×${p.gpu.count}` : '?') },
-          { label: 'Costo', align: 'right', value: (p) => `${fmtUSD(p.hourlyUSD)}/h` },
-          { label: 'Uptime', align: 'right', value: (p) => fmtDuration(p.uptimeSeconds) },
-          { label: 'Sessione', align: 'right', value: (p) => fmtUSD(p.sessionUSD) },
+          { label: 'Costo', align: 'right', value: (p) => (p.hourlyUSD == null ? '—' : `${fmtUSD(p.hourlyUSD)}/h`) },
+          { label: 'Uptime', align: 'right', value: (p) => (p.state === 'stopped' ? '—' : fmtDuration(p.uptimeSeconds)) },
+          { label: 'Sessione', align: 'right', value: (p) => (p.sessionUSD == null ? '—' : fmtUSD(p.sessionUSD)) },
           { label: 'Spegnimento', value: (p) => (p.supervisor?.idleSeconds != null
             ? `inattivo da ${fmtDuration(p.supervisor.idleSeconds)} su ${fmtDuration(p.supervisor.idleLimitSeconds)}; massimo tra ${fmtDuration(p.supervisor.maxSeconds - p.supervisor.uptimeSeconds)}`
             : p.supervisor?.phase ?? '—') },

@@ -182,6 +182,88 @@ describe('up: tutte le opzioni del piano', () => {
   });
 });
 
+describe('up in modalità scelta: disponibilità, altri datacenter, memoria', () => {
+  const dcGpu = (id, price, dcs, memory = 80) => gpu(id, memory, price, dcs);
+  const opts = [opt('GPU80', 1, 1.5, 'HIGH'), opt('GPUY', 1, 1.8, 'HIGH'), opt('GPU96', 1, 2.5, 'LOW')];
+  const run = (catalog, extra = {}) => setup({ catalog: { 1: catalog }, planPatch: { options: opts }, ...extra });
+
+  it('unica GPU disponibile diversa da quella del profilo: la conferma e createPod riguardano quella', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+    await t.ops.up('p');
+    expect(t.choose).not.toHaveBeenCalled();
+    expect(t.ask.mock.calls[0][0]).toMatch(/GPUY ×1.*1,80 \$\/h/);
+    expect(t.runpod.createPod).toHaveBeenCalledTimes(1);
+    expect(t.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPUY');
+  });
+
+  it('unica disponibile più cara della GPU del profilo (e caso più economica): sempre quella, mai una GPU NONE', async () => {
+    const dearer = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async () => 'x' });
+    await dearer.ops.up('p');
+    expect(dearer.runpod.createPod).toHaveBeenCalledTimes(1);
+    expect(dearer.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPU96');
+    expect(dearer.ask.mock.calls[0][0]).toMatch(/GPU96 ×1.*2,50 \$\/h/);
+    const cheaper = run([dcGpu('GPU80', 1.5, [['EU-A', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+    cheaper.store.writeProfile({ ...cheaper.store.readProfile('p'), gpu: { id: 'GPU96', count: 1 } });
+    await cheaper.ops.up('p');
+    expect(cheaper.choose).not.toHaveBeenCalled();
+    expect(cheaper.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPU80');
+    expect(cheaper.ask.mock.calls[0][0]).toMatch(/GPU80 ×1.*1,50 \$\/h/);
+  });
+
+  it('nessuna GPU disponibile: NO_GPU_AVAILABLE con l\'elenco delle opzioni, nessuna creazione e nessuna conferma', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+    const err = await t.ops.up('p').catch((e) => e);
+    expect(err).toMatchObject({ code: 'NO_GPU_AVAILABLE', message: expect.stringMatching(/GPU80.*GPUY.*GPU96/), hint: 'Riprova più tardi' });
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+    expect(t.ask).not.toHaveBeenCalled();
+  });
+
+  it('propone anche le opzioni disponibili in altri datacenter, etichettate "(senza volume, <dc>)"; predefinita: la GPU del profilo nel datacenter del volume', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE'], ['US-1', 'MEDIUM']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async (_t, _o, def) => def });
+    await t.ops.up('p');
+    const [, options, def] = t.choose.mock.calls[0];
+    expect(options.map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPUY|1|US-1', 'GPU96|1|EU-A']);
+    expect(options[1].label).toBe('GPUY ×1 · 80 GB · 1,80 $/h · (senza volume, US-1) · MEDIUM');
+    expect(options[0].label).toBe('GPU80 ×1 · 80 GB · 1,50 $/h · EU-A · HIGH');
+    expect(def).toBe('GPU80|1|EU-A');
+  });
+
+  it('se la GPU del profilo non è nel datacenter del volume la predefinita è la più economica; scegliendo un altro datacenter il Pod parte senza volume', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE'], ['US-1', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async (_t, o) => o.find((x) => x.id.includes('US-1')).id });
+    await t.ops.up('p');
+    const [, options, def] = t.choose.mock.calls[0];
+    expect(def).toBe('GPU80|1|US-1'); // la più economica
+    expect(options[0].label).toMatch(/\(senza volume, US-1\)/);
+    const body = t.runpod.createPod.mock.calls[0][0];
+    expect(body.dataCenterIds).toEqual(['US-1']);
+    expect(body.mounts).toBeUndefined();
+    expect(t.ask.mock.calls[0][0]).toMatch(/\(senza volume\)/); // la conferma del costo lo dice
+    expect(t.runpod.createPod).toHaveBeenCalledTimes(1);
+  });
+
+  it('con yes: comportamento precedente (volume, ripieghi, nessuna domanda)', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE'], ['US-1', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async () => 'x' });
+    await t.ops.up('p', { yes: true });
+    expect(t.choose).not.toHaveBeenCalled();
+    // GPU80 non è disponibile nel datacenter del volume ma lo sono le alternative: si parte dalla prima voce del profilo
+    expect(t.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPU80');
+  });
+
+  it('esclude le opzioni che con gli argomenti salvati del profilo non entrano in memoria', async () => {
+    const narrow = [opt('GPU80', 1, 1.5, 'HIGH'), { ...opt('GPUY', 1, 1.8, 'HIGH'), memoryGiB: 76 }, opt('GPU96', 1, 2.5, 'LOW')]; // 70,9 > 76 × 0,9
+    const t = setup({ catalog: { 1: [dcGpu('GPU80', 1.5, [['EU-A', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])] }, planPatch: { options: narrow }, askChoice: async (_t, _o, def) => def });
+    await t.ops.up('p');
+    expect(t.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPU96|1|EU-A']);
+  });
+
+  it('esclude le opzioni marcate fits:false nel profilo (consiglio che riduce il margine)', async () => {
+    const marked = [opt('GPU80', 1, 1.5, 'HIGH'), { ...opt('GPUY', 1, 1.8, 'HIGH'), fits: false }, opt('GPU96', 1, 2.5, 'LOW')];
+    const t = setup({ catalog: { 1: [dcGpu('GPU80', 1.5, [['EU-A', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])] }, planPatch: { options: marked }, askChoice: async (_t, _o, def) => def });
+    await t.ops.up('p');
+    expect(t.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPU96|1|EU-A']);
+  });
+});
+
 describe('saveProfile con la GPU scelta', () => {
   it('applica la scelta alla copia del piano: profilo con la GPU scelta, last-plan.json invariato', () => {
     const t = setup();
@@ -208,7 +290,7 @@ describe('Pod spenti: status, down, up', () => {
     const t = setup({ pods: [running, starting, stopped, dead, { id: 'x', name: 'altro-pod', status: 'EXITED' }] });
     const s = await t.ops.status();
     expect(s.pods.map((p) => [p.profile, p.state, p.stateLabel])).toEqual([['p', 'running', 'avviato'], ['q', 'starting', 'in avvio'], ['z', 'stopped', 'spento']]);
-    expect(s.pods[2]).toMatchObject({ podId: 'e1', status: 'EXITED', hourlyUSD: 0, sessionUSD: 0, uptimeSeconds: 0, diskGB: 44 });
+    expect(s.pods[2]).toMatchObject({ podId: 'e1', status: 'EXITED', hourlyUSD: null, sessionUSD: null, uptimeSeconds: 0, diskGB: 44 });
     expect(s.pods[0]).toMatchObject({ hourlyUSD: 1.5, diskGB: null });
     expect(s.pods[2]).not.toHaveProperty('storageUSD');
   });
@@ -223,7 +305,7 @@ describe('Pod spenti: status, down, up', () => {
     const r = await t.ops.down('p');
     expect(t.runpod.deletePod).toHaveBeenCalledWith('e1');
     expect(r).toMatchObject({ podId: 'e1', stopped: true });
-    expect(t.ask.mock.calls[0][0]).toMatch(/Eliminare il Pod spento e1.*spazio su disco/);
+    expect(t.ask.mock.calls[0][0]).toMatch(/^Eliminare il Pod spento e1 \(p\), che costa ancora lo spazio su disco\. Confermi\?$/);
   });
 
   it('down con un Pod acceso e uno spento elimina entrambi', async () => {
@@ -261,12 +343,14 @@ describe('Pod spenti: status, down, up', () => {
     expect(t.ask).not.toHaveBeenCalled();
   });
 
-  it('up: se l\'utente rifiuta, il Pod spento resta con un avviso e il nuovo Pod viene creato', async () => {
+  it('up: se l\'utente rifiuta il Pod spento (o la domanda scade) up si ferma e non crea nulla', async () => {
     const t = setup({ pods: [{ id: 'e1', name: 'llmpod-p', status: 'EXITED' }], askAnswers: [false] });
-    await t.ops.up('p');
-    expect(t.runpod.deletePod).not.toHaveBeenCalledWith('e1');
-    expect(t.runpod.createPod).toHaveBeenCalled();
-    expect(t.seen.find((e) => e.type === 'warning' && /e1.*costare lo spazio su disco.*llmpod down p/.test(e.message))).toBeTruthy();
+    await expect(t.ops.up('p')).rejects.toMatchObject({ code: 'INVALID_INPUT', message: 'Elimina prima il Pod spento e1 (llmpod down p)' });
+    expect(t.runpod.deletePod).not.toHaveBeenCalled();
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+    // la domanda ha predefinito sì ma, senza risposta, vale no: nessun Pod nuovo
+    expect(t.ask.mock.calls[0][1]).toBe(true);
+    expect(t.ask.mock.calls[0][2]).toEqual({ timeoutValue: false });
   });
 
   it('up --dry-run non elimina il Pod spento ma lo segnala', async () => {

@@ -2,7 +2,7 @@ import { runPlan, applyAdvice } from '../../core/plan-flow.js';
 import { fmtUSD } from '../../core/confirm.js';
 import { shellQuoteArgs } from '../../core/planner/shell-quote.js';
 import { mtpLabel } from '../../core/planner/mtp-label.js';
-import { optionLabel, applyGpuChoice } from '../../core/planner/gpu-choice.js';
+import { optionLabel, applyGpuChoice, isUsable, vramLabel } from '../../core/planner/gpu-choice.js';
 import { table, fmtGiB, attachRenderer, renderAdvice } from '../render.js';
 
 const toInt = (v) => Number.parseInt(v, 10);
@@ -11,7 +11,7 @@ const collect = (v, acc) => [...acc, v];
 // Chiede quale GPU usare tra le opzioni disponibili ora (predefinita: la scelta del piano) e salva il piano.
 async function chooseGpu(ctx, plan) {
   const { io } = ctx;
-  const available = (plan.options ?? []).filter((o) => o.available);
+  const available = (plan.options ?? []).filter(isUsable);
   if (available.length) {
     const key = (o) => `${o.id}|${o.count}`;
     const picked = await io.askChoice('Quale GPU usare?', available.map((o) => ({ id: key(o), label: optionLabel(o, plan.dataCenterId) })), plan.gpu ? key(plan.gpu) : null);
@@ -70,11 +70,11 @@ export function register(program, getCtx) {
       io.out(table(plan.options ?? plan.candidates, [
         { key: 'name', label: 'GPU' },
         { key: 'count', label: 'N', align: 'right' },
-        { label: 'VRAM', align: 'right', value: (c) => `${c.memoryGiB} GB` },
+        { label: 'VRAM', align: 'right', value: (c) => vramLabel(c) },
         { label: 'Per GPU', align: 'right', value: (c) => fmtGiB(c.perGpuGiB) },
         { label: 'Margine', align: 'right', value: (c) => fmtGiB(c.headroomGiB) },
         { label: 'Costo', align: 'right', value: (c) => `${fmtUSD(c.hourly)}/h` },
-        { label: `In ${plan.dataCenterId}`, value: (c) => (c.available === false ? 'non disponibile ora' : c.availabilityHere) },
+        { label: `In ${plan.dataCenterId}`, value: (c) => (c.available === false ? 'non disponibile ora' : c.fits === false ? 'non entra più' : c.availabilityHere) },
       ]));
       io.out('');
       if (askGpu) await chooseGpu(ctx, plan);

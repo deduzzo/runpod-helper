@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { optionOf, parseGpuSpec, findOption, applyGpuChoice, optionLabel } from '../../src/core/planner/gpu-choice.js';
+import { optionOf, parseGpuSpec, findOption, applyGpuChoice, optionLabel, vramLabel } from '../../src/core/planner/gpu-choice.js';
 
 const opt = (id, count, hourly, availabilityHere, elsewhere = [], extra = {}) => optionOf({
   gpuId: id, name: id, count, memoryGiB: 80, hourly, perGpuGiB: 40 / count, headroomGiB: 10, availabilityHere, elsewhere, ...extra,
@@ -97,9 +97,30 @@ describe('applyGpuChoice', () => {
   });
 });
 
+describe('opzioni che non entrano più (fits:false) dopo un consiglio', () => {
+  const withFits = () => { const p = makePlan(); p.options[1].fits = false; return p; };
+
+  it('findOption le esclude, con un messaggio sulla memoria', () => {
+    expect(() => findOption(withFits(), { id: 'B', count: 1 })).toThrow(/non entra in memoria/);
+    expect(findOption(withFits(), { id: 'B', count: 2 })).toMatchObject({ count: 2 });
+  });
+
+  it('applyGpuChoice non le mette tra le alternative', () => {
+    const plan = applyGpuChoice(withFits(), { id: 'B', count: 2 });
+    expect(plan.alternatives).toEqual([{ id: 'A', count: 1, hourly: 1 }]);
+  });
+});
+
+describe('vramLabel', () => {
+  it('"2×80 GB" per più GPU', () => {
+    expect(vramLabel({ count: 1, memoryGiB: 80 })).toBe('80 GB');
+    expect(vramLabel({ count: 2, memoryGiB: 80 })).toBe('2×80 GB');
+  });
+});
+
 describe('optionLabel', () => {
   it('riassume nome, numero, VRAM, costo e disponibilità', () => {
-    expect(optionLabel(opt('A', 2, 3.5, 'HIGH'), 'EU-1')).toBe('A ×2 · 80 GB · 3,50 $/h · HIGH in EU-1');
+    expect(optionLabel(opt('A', 2, 3.5, 'HIGH'), 'EU-1')).toBe('A ×2 · 2×80 GB · 3,50 $/h · HIGH in EU-1');
     expect(optionLabel(opt('C', 1, 3, 'NONE', [{ id: 'US-1', availability: 'MEDIUM' }]), 'EU-1')).toBe('C ×1 · 80 GB · 3,00 $/h · solo altrove (US-1)');
     expect(optionLabel(opt('D', 1, 4, 'NONE'), 'EU-1')).toBe('D ×1 · 80 GB · 4,00 $/h · non disponibile ora');
   });

@@ -37,8 +37,8 @@ Ogni operazione che costa denaro mostra il **costo orario stimato e chiede confe
 **llmpod elimina sempre i Pod, non li ferma**: un Pod spento (stato `EXITED`) continua a costare lo spazio
 su disco finché esiste. `llmpod status` e la pagina "Stato e costi" mostrano i Pod avviati, in avvio e spenti
 (questi ultimi con un avviso e il pulsante "Elimina"); `llmpod down` elimina anche quelli spenti, e `llmpod up`
-propone di eliminare un Pod spento dello stesso profilo prima di crearne uno nuovo (con `--yes` lo elimina
-senza chiedere).
+chiede di eliminare un Pod spento dello stesso profilo prima di crearne uno nuovo (predefinito sì; con `--yes` lo elimina
+senza chiedere). Se rifiuti, o la domanda nell'interfaccia web scade, `up` si ferma e non crea nulla.
 
 ## Installazione con Docker (consigliata)
 
@@ -150,7 +150,10 @@ VRAM, margine, costo e disponibilità (nel datacenter del volume e altrove; quel
 sono marcate "non disponibile ora"). In un terminale interattivo `llmpod plan` chiede "Quale GPU usare?"
 (predefinita: la più economica disponibile); `--gpu "NVIDIA A100 80GB PCIe"` o `--gpu "…x2"` la imposta senza
 domanda, e `--yes` o `--json` non chiedono nulla. Il profilo salvato conserva tutte le configurazioni compatibili: `llmpod up` rilegge la disponibilità dal catalogo e propone
-quelle disponibili ora, per costo (predefinita quella del profilo, se disponibile); dopo la scelta usa solo quella, senza ripieghi
+quelle disponibili ora, per costo, comprese quelle di altri datacenter (etichettate "senza volume, <datacenter>": i pesi vanno
+scaricati a ogni avvio). La predefinita è la GPU del profilo nel datacenter del volume, se disponibile, altrimenti la più economica.
+Se ne resta una sola la usa direttamente (la conferma del costo mostra quella), se non ce n'è nessuna si ferma con
+`NO_GPU_AVAILABLE`. Dopo la scelta usa solo quella, senza ripieghi
 silenziosi (con `--yes` vale la GPU del profilo con le sue alternative); i profili vecchi, senza elenco, usano GPU e alternative.
 La conferma del costo resta. Nell'interfaccia
 web la tabella del piano è selezionabile (la scelta viene salvata nel profilo) e l'avvio dalla scheda Profili

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, fmtUSD, fmtGiB } from '../lib/api.js';
 import { shellQuoteArgs } from '../../../src/core/planner/shell-quote.js';
 import { mtpLabel } from '../../../src/core/planner/mtp-label.js';
@@ -8,6 +8,9 @@ const AVAIL = { HIGH: 'green', MEDIUM: 'cyan', LOW: 'amber', NONE: 'red' };
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
 const keyOf = (g) => `${g.id}|${g.count}`;
+// Selezionabile: disponibile ora e, dopo un consiglio, ancora in grado di contenere il modello.
+const usable = (o) => o.available && o.fits !== false;
+const vram = (o) => `${o.count > 1 ? `${o.count}×` : ''}${o.memoryGiB} GB`;
 // Opzioni scelte dal server (plan.options); un piano senza `options` (salvato da una versione precedente) si ricava da `candidates`.
 function planOptions(plan) {
   if (plan.options) return plan.options;
@@ -34,7 +37,13 @@ export function PlanView({ data, onPlanChange }) {
   const [busy, setBusy] = useState(null);
   const [confirmName, setConfirmName] = useState(null);
   const options = planOptions(plan);
+  // Un piano senza `options` (salvato da una versione precedente) non offre scelta: vale solo la GPU del piano.
+  const selectable = Boolean(plan.options);
   const [selected, setSelected] = useState(plan.gpu ? keyOf(plan.gpu) : null);
+  // Se cambia il piano (es. dopo "Applica la proposta") la scelta si riallinea: resta solo se è ancora selezionabile.
+  useEffect(() => {
+    setSelected((prev) => (selectable && options.some((o) => keyOf(o) === prev && usable(o)) ? prev : (plan.gpu ? keyOf(plan.gpu) : null)));
+  }, [planId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Un piano la cui GPU non è tra le opzioni (piani salvati da versioni precedenti) conserva comunque la sua scelta.
   const chosen = options.find((o) => keyOf(o) === selected) ?? (plan.gpu && keyOf(plan.gpu) === selected ? { ...plan.gpu, name: plan.gpu.id, hourly: plan.hourlyUSD } : null);
   // La GPU viaggia al salvataggio solo se l'utente ha cambiato la scelta del piano.
@@ -92,23 +101,31 @@ export function PlanView({ data, onPlanChange }) {
           </div>
         )}
         <div className="mt-4 overflow-x-auto">
-          <p id="gpu-table-label" className="mb-1 text-sm text-gray-400">Scegli la GPU da usare</p>
+          <p id="gpu-table-label" className="mb-1 text-sm text-gray-400">{selectable ? 'Scegli la GPU da usare' : 'GPU adatte'}</p>
           <table className="w-full text-left text-sm" aria-labelledby="gpu-table-label">
-            <thead className="text-gray-400"><tr><th className="py-1"><span className="sr-only">Usa</span></th><th>GPU</th><th>N</th><th>VRAM</th><th>Per GPU</th><th>Margine</th><th>Costo</th><th>Disponibilità in {plan.dataCenterId}</th></tr></thead>
+            <thead className="text-gray-400"><tr>{selectable && <th className="py-1"><span className="sr-only">Usa</span></th>}<th className="py-1">GPU</th><th>N</th><th>VRAM</th><th>Per GPU</th><th>Margine</th><th>Costo</th><th>Disponibilità in {plan.dataCenterId}</th></tr></thead>
             <tbody>
-              {options.map((o) => {
+              {options.map((o, i) => {
                 const k = keyOf(o);
                 const label = `Usa ${o.name ?? o.id} ×${o.count}`;
+                const ok = selectable && usable(o);
                 return (
-                  <tr key={k} className={`border-t border-white/5 transition ${selected === k ? 'bg-cyan-400/10' : 'hover:bg-white/5'} ${o.available ? '' : 'opacity-60'}`}>
-                    <td className="py-1 pr-2">
-                      <input type="radio" name="gpu-choice" aria-label={label} checked={selected === k} disabled={!o.available} onChange={() => setSelected(k)} />
-                    </td>
-                    <td>{o.name ?? o.id}</td><td>{o.count}</td><td>{o.memoryGiB} GB</td><td>{fmtGiB(o.perGpuGiB)}</td><td>{fmtGiB(o.headroomGiB)}</td><td>{fmtUSD(o.hourly)}/h</td>
-                    <td className="space-x-1">
+                  <tr
+                    key={k}
+                    className={`border-t border-white/5 transition ${ok ? 'cursor-pointer' : ''} ${selected === k ? 'bg-cyan-400/10' : 'hover:bg-white/5'} ${usable(o) ? '' : 'opacity-60'}`}
+                    onClick={ok ? () => setSelected(k) : undefined}
+                  >
+                    {selectable && (
+                      <td className="py-1 pr-2">
+                        <input type="radio" name="gpu-choice" aria-label={label} aria-describedby={ok ? undefined : `gpu-note-${i}`} checked={selected === k} disabled={!ok} onChange={() => setSelected(k)} />
+                      </td>
+                    )}
+                    <td className="py-1">{o.name ?? o.id}</td><td>{o.count}</td><td>{vram(o)}</td><td>{fmtGiB(o.perGpuGiB)}</td><td>{fmtGiB(o.headroomGiB)}</td><td>{fmtUSD(o.hourly)}/h</td>
+                    <td id={`gpu-note-${i}`} className="space-x-1">
                       {o.availableHere && o.availabilityHere && <Badge tone={AVAIL[o.availabilityHere] ?? 'red'}>{o.availabilityHere}</Badge>}
                       {!o.availableHere && o.elsewhere?.length > 0 && <Badge tone="amber">solo altrove ({o.elsewhere.map((d) => d.id).join(', ')})</Badge>}
                       {!o.available && <Badge tone="red">non disponibile ora</Badge>}
+                      {o.available && o.fits === false && <Badge tone="red">non entra con gli argomenti attuali</Badge>}
                     </td>
                   </tr>
                 );
@@ -149,7 +166,7 @@ export function PlanView({ data, onPlanChange }) {
           </Field>
           <Button onClick={() => save()} loading={busy === 'save'} disabled={busy !== null || !chosen || !nameValid}>Salva come profilo</Button>
         </div>
-        {!chosen && <p className="mt-2 text-xs text-amber-300">{options.some((o) => o.available) ? 'Scegli una GPU dalla tabella per salvare il profilo.' : 'Nessuna GPU disponibile: non è possibile salvare il profilo.'}</p>}
+        {!chosen && <p className="mt-2 text-xs text-amber-300">{options.some(usable) ? 'Scegli una GPU dalla tabella per salvare il profilo.' : 'Nessuna GPU disponibile: non è possibile salvare il profilo.'}</p>}
         {chosen && !nameValid && <p className="mt-2 text-xs text-gray-500">Il nome usa solo minuscole, cifre e trattini (massimo 41 caratteri) e inizia con una lettera o una cifra.</p>}
         {confirmName && confirmName === name && (
           <div className="fade-up mt-3 space-y-2 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-sm" role="alert">

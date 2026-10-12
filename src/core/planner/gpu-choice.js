@@ -24,7 +24,10 @@ export function parseGpuSpec(spec) {
 
 const sameId = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 const spec = (o) => `${o.id}${o.count > 1 ? `x${o.count}` : ''}`;
-const availableList = (options) => `Opzioni disponibili: ${options.filter((o) => o.available).map(spec).join(', ') || 'nessuna'}`;
+// Selezionabile: disponibile ora (qui o altrove) e, dopo un consiglio, ancora in grado di contenere il modello.
+export const isUsable = (o) => o.available && o.fits !== false;
+export const vramLabel = (o) => `${o.count > 1 ? `${o.count}×` : ''}${o.memoryGiB} GB`;
+const availableList = (options) => `Opzioni disponibili: ${options.filter(isUsable).map(spec).join(', ') || 'nessuna'}`;
 
 export function findOption(plan, { id, count = null }) {
   const options = plan.options ?? [];
@@ -33,8 +36,11 @@ export function findOption(plan, { id, count = null }) {
   if (!found.length) {
     throw new LlmpodError(Codes.INVALID_INPUT, `${id}${count != null ? ` ×${count}` : ''} non è tra le opzioni del piano`, { hint: availableList(options) });
   }
-  const usable = found.filter((o) => o.available);
+  const usable = found.filter(isUsable);
   if (!usable.length) {
+    if (found.some((o) => o.available)) {
+      throw new LlmpodError(Codes.INVALID_INPUT, `${found[0].name} ×${found[0].count} non entra in memoria con gli argomenti attuali del piano`, { hint: availableList(options) });
+    }
     throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `${found[0].name} ×${found[0].count} non disponibile ora in nessun datacenter`, { hint: availableList(options) });
   }
   // Le opzioni sono ordinate per costo: senza numero vale la prima disponibile, preferendo il datacenter del volume.
@@ -48,7 +54,7 @@ export function applyGpuChoice(plan, wanted) {
   const same = (o) => o.id === choice.id && o.count === choice.count;
   plan.gpu = { id: choice.id, count: choice.count };
   plan.hourlyUSD = choice.hourly;
-  plan.alternatives = plan.options.filter((o) => o.availableHere && !same(o)).slice(0, ALT_LIMIT).map((o) => ({ id: o.id, count: o.count, hourly: o.hourly }));
+  plan.alternatives = plan.options.filter((o) => o.availableHere && o.fits !== false && !same(o)).slice(0, ALT_LIMIT).map((o) => ({ id: o.id, count: o.count, hourly: o.hourly }));
   if (plan.vllm?.args) plan.vllm.args = argsForCount(plan.vllm.args, choice.count);
   if (plan.estimate) plan.estimate.perGpuGiB = choice.perGpuGiB;
   if (Array.isArray(plan.warnings)) plan.warnings = plan.warnings.filter((w) => !w.startsWith('NO_GPU_AVAILABLE'));
@@ -60,5 +66,5 @@ export function optionLabel(o, dataCenterId) {
   if (o.availableHere) where = `${o.availabilityHere} in ${dataCenterId}`;
   else if (o.elsewhere?.length) where = `solo altrove (${o.elsewhere.map((d) => d.id).join(', ')})`;
   else where = 'non disponibile ora';
-  return `${o.name} ×${o.count} · ${o.memoryGiB} GB · ${fmtUSD(o.hourly)}/h · ${where}`;
+  return `${o.name} ×${o.count} · ${vramLabel(o)} · ${fmtUSD(o.hourly)}/h · ${where}`;
 }

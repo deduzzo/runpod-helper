@@ -11,7 +11,9 @@ export function QuestionModal({ question, onAnswer }) {
   const isChoice = question?.kind === 'choice';
   // La scelta dell'utente vale solo per la domanda in cui è stata fatta: una domanda nuova riparte dalla sua predefinita.
   const [picked, setPicked] = useState({ q: null, id: null });
-  const selected = picked.q === questionId && picked.id != null ? picked.id : (question?.defaultId ?? question?.options?.[0]?.id ?? null);
+  // Se la predefinita non è tra le opzioni (dato incoerente) vale la prima.
+  const hasOption = (id) => question?.options?.some((o) => o.id === id);
+  const selected = picked.q === questionId && hasOption(picked.id) ? picked.id : (hasOption(question?.defaultId) ? question.defaultId : (question?.options?.[0]?.id ?? null));
   useEffect(() => { if (questionId) defaultRef.current?.focus(); }, [questionId]);
   useEffect(() => {
     if (!questionId) return undefined;

@@ -15,6 +15,7 @@ export function register(program, getCtx) {
         const r = await ctx.ops.down(profile, { yes: opts.yes, dryRun: opts.dryRun });
         if (!r.podId) ctx.io.out(`Nessun Pod per ${profile}`);
         else if (r.dryRun) ctx.io.out(`[dry-run] verrebbe eliminato il Pod ${(r.podIds ?? [r.podId]).join(', ')}`);
+        else if (r.podIds?.length > 1) ctx.io.out(`✓ Pod eliminati: ${r.podIds.join(', ')}${r.sessionUSD ? ` (costo della sessione circa ${fmtUSD(r.sessionUSD)})` : ''}`);
         else if (r.stopped && !r.sessionUSD) ctx.io.out(`✓ Pod ${r.podId} eliminato (era spento: ora non costa più nulla)`);
         else ctx.io.out(`✓ Pod ${r.podId} terminato (costo della sessione circa ${fmtUSD(r.sessionUSD)})`);
       } finally {

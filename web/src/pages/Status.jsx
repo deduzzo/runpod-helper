@@ -30,6 +30,7 @@ export default function Status() {
   const [deleting, setDeleting] = useState({}); // profilo -> jobId del job "down" avviato da qui
   const [deleteErrors, setDeleteErrors] = useState({});
   const deleteLock = useRef(false);
+  const [jobStatus, setJobStatus] = useState({}); // jobId -> running | done | failed
 
   // L'eliminazione passa dal job "down" (con la conferma come domanda), come "Spegni" nella scheda Profili.
   async function remove(profile) {
@@ -89,16 +90,16 @@ export default function Status() {
                     <td className="pr-2">{p.podId}</td>
                     <td className="pr-2"><Badge tone={st.tone}>{st.label}</Badge></td>
                     <td className="pr-2">{p.gpu ? `${p.gpu.id} ×${p.gpu.count}` : '?'}</td>
-                    <td className="pr-2">{fmtUSD(p.hourlyUSD)}/h</td>
-                    <td className="pr-2">{fmtDuration(p.uptimeSeconds)}</td>
-                    <td className="pr-2">{fmtUSD(p.sessionUSD)}</td>
+                    <td className="pr-2">{p.hourlyUSD == null || st.state === 'stopped' ? '—' : `${fmtUSD(p.hourlyUSD)}/h`}</td>
+                    <td className="pr-2">{st.state === 'stopped' ? '—' : fmtDuration(p.uptimeSeconds)}</td>
+                    <td className="pr-2">{p.sessionUSD == null || st.state === 'stopped' ? '—' : fmtUSD(p.sessionUSD)}</td>
                     <td className="text-gray-300">
                       {st.state === 'stopped' ? (
                         <div className="space-y-1">
                           <p className="text-orange-300">
                             {`Spento: occupa ancora ${p.diskGB != null ? `${p.diskGB} GB di disco` : 'disco'} e continua a costare — eliminalo con llmpod down ${p.profile}`}
                           </p>
-                          <Button variant="danger" aria-label={`Elimina il Pod spento ${p.podId}`} onClick={() => remove(p.profile)} disabled={Boolean(deleting[p.profile])}>Elimina</Button>
+                          <Button variant="danger" aria-label={`Elimina il Pod spento ${p.podId}`} onClick={() => remove(p.profile)} disabled={Boolean(deleting[p.profile]) && !['done', 'failed'].includes(jobStatus[deleting[p.profile]])}>Elimina</Button>
                           {deleteErrors[p.profile] && <div role="alert"><ErrorBox error={deleteErrors[p.profile]} /></div>}
                         </div>
                       ) : shutdown(p)}
@@ -112,7 +113,13 @@ export default function Status() {
         )}
       </Card>
       {Object.entries(deleting).map(([profile, jobId]) => (
-        <Card key={jobId} title={`Eliminazione di ${profile}`}><JobPanel jobId={jobId} onFinished={load} /></Card>
+        <Card key={jobId} title={`Eliminazione di ${profile}`}>
+          <JobPanel
+            jobId={jobId}
+            onFinished={() => { load(); setDeleting((d) => (d[profile] === jobId ? Object.fromEntries(Object.entries(d).filter(([k]) => k !== profile)) : d)); }}
+            onStatus={(st) => setJobStatus((x) => (x[jobId] === st ? x : { ...x, [jobId]: st }))}
+          />
+        </Card>
       ))}
       <div className="grid gap-4 sm:grid-cols-2">
         <Card title="Credito Runpod"><p className="text-2xl font-semibold neon-text">{status.balance ? fmtUSD(status.balance.balance) : 'non disponibile'}</p></Card>

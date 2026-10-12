@@ -60,6 +60,16 @@ describe('CLI status: Pod avviati e spenti', () => {
     expect(Object.keys(s.pods[1]).slice(0, 4)).toEqual(['profile', 'podId', 'status', 'state']);
   });
 
+  it('un Pod spento ha costo orario, uptime e sessione "—" (non 0,00), con il disco nell\'avviso', async () => {
+    const t = setup([EXITED]);
+    await t.go(['status']);
+    expect(t.out()).toMatch(/altro \(orfano\)\s+pod2\s+spento\s+\?\s+—\s+—\s+—/);
+    expect(t.out()).not.toContain('0,00 $');
+    const j = setup([EXITED]);
+    await j.go(['status', '--json']);
+    expect(JSON.parse(j.out()).pods[0]).toMatchObject({ hourlyUSD: null, sessionUSD: null, diskGB: 44 });
+  });
+
   it('un Pod in avvio è "in avvio"', async () => {
     const t = setup([{ id: 'pod3', name: 'llmpod-x', status: 'CREATED', cost: 1 }]);
     await t.go(['status']);
@@ -80,6 +90,13 @@ describe('CLI down e up con Pod spenti', () => {
     expect(await t.go(['down', 'qwen3-coder', '--dry-run'])).toBe(0);
     expect(t.runpod.deletePod).not.toHaveBeenCalled();
     expect(t.out()).toContain('[dry-run] verrebbe eliminato il Pod pod2');
+  });
+
+  it('down cita tutti i Pod eliminati', async () => {
+    const t = setup([{ id: 'pod2', name: 'llmpod-qwen3-coder', status: 'EXITED' }, { id: 'pod1', name: 'llmpod-qwen3-coder', status: 'RUNNING', cost: 1, runtime: { uptime: 3600 } }]);
+    expect(await t.go(['down', 'qwen3-coder', '--yes'])).toBe(0);
+    expect(t.out()).toContain('✓ Pod eliminati: pod1, pod2');
+    expect(t.runpod.deletePod).toHaveBeenCalledTimes(2);
   });
 
   it('down senza Pod dice che non ce ne sono', async () => {

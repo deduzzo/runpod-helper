@@ -13,7 +13,7 @@ const statusBody = {
   pods: [
     { ...base, profile: 'acceso', podId: 'p1', status: 'RUNNING', state: 'running', stateLabel: 'avviato', hourlyUSD: 1.79, uptimeSeconds: 3900, sessionUSD: 1.94, diskGB: 44 },
     { ...base, profile: 'nuovo', podId: 'p2', status: 'CREATED', state: 'starting', stateLabel: 'in avvio', hourlyUSD: 1.79, uptimeSeconds: 10, sessionUSD: 0, diskGB: 20 },
-    { ...base, profile: 'spento', podId: 'p3', status: 'EXITED', state: 'stopped', stateLabel: 'spento', hourlyUSD: 0, uptimeSeconds: 0, sessionUSD: 0, diskGB: 44 },
+    { ...base, profile: 'spento', podId: 'p3', status: 'EXITED', state: 'stopped', stateLabel: 'spento', hourlyUSD: null, uptimeSeconds: 0, sessionUSD: null, diskGB: 44 },
   ],
   balance: { balance: 42.5 }, volume: null,
 };
@@ -38,6 +38,43 @@ describe('Stato e costi: Pod avviati e spenti', () => {
     expect(screen.getByText('Spento: occupa ancora 44 GB di disco e continua a costare — eliminalo con llmpod down spento')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: /^Elimina/ })).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Elimina il Pod spento p3' })).toBeTruthy();
+  });
+
+  it('il Pod spento ha costo orario, uptime e sessione "—" (non 0,00)', async () => {
+    mockApi({ 'GET /api/status': statusBody });
+    mount();
+    await screen.findByText('p3');
+    const cells = within(screen.getByText('p3').closest('tr')).getAllByRole('cell').map((c) => c.textContent);
+    expect(cells.slice(4, 7)).toEqual(['—', '—', '—']);
+    expect(screen.getByText('p3').closest('tr').textContent).not.toContain('0,00 $');
+  });
+
+  it('a eliminazione finita il pannello del job sparisce e lo stato si ricarica; se fallisce il pulsante torna attivo', async () => {
+    let calls = 0;
+    const fetchMock = mockApi({
+      'GET /api/status': () => { calls += 1; return calls === 1 ? statusBody : { ...statusBody, pods: statusBody.pods.slice(0, 2) }; },
+      'POST /api/jobs': { job: { id: 'j8', kind: 'down:spento', status: 'running' } },
+      'GET /api/jobs/j8': { job: { id: 'j8', kind: 'down:spento', status: 'done', question: null, result: {} }, events: [{ seq: 0, type: 'phase', message: 'Terminazione del Pod p3' }, { seq: 1, type: 'done', result: {} }] },
+    });
+    mount();
+    await screen.findByText('p3');
+    fireEvent.click(screen.getByRole('button', { name: 'Elimina il Pod spento p3' }));
+    await vi.waitFor(() => expect(screen.queryByText('p3')).toBeNull());
+    expect(screen.queryByText(/Eliminazione di spento/)).toBeNull();
+    expect(fetchMock.mock.calls.filter(([p]) => p === '/api/status').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('se l\'eliminazione fallisce il pannello resta con l\'errore e Elimina è di nuovo attivo', async () => {
+    mockApi({
+      'GET /api/status': statusBody,
+      'POST /api/jobs': { job: { id: 'j9', kind: 'down:spento', status: 'running' } },
+      'GET /api/jobs/j9': { job: { id: 'j9', kind: 'down:spento', status: 'failed', question: null, error: { message: 'Runpod non risponde' } }, events: [{ seq: 0, type: 'failed', error: { message: 'Runpod non risponde' } }] },
+    });
+    mount();
+    await screen.findByText('p3');
+    fireEvent.click(screen.getByRole('button', { name: 'Elimina il Pod spento p3' }));
+    await screen.findByText('Runpod non risponde');
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Elimina il Pod spento p3' }).disabled).toBe(false));
   });
 
   it('Elimina avvia il job down del profilo; la conferma passa dalla domanda del job', async () => {
