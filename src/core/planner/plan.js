@@ -3,7 +3,7 @@ import { parseModelRef, summarizeModel } from '../hf.js';
 import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes, hasMtp, draftKind, GiB } from './vram.js';
 import { detectParsers, buildArgs, applyOverrides, validateArgs, MTP_SPEC, DSPARK_SPEC } from './vllm-args.js';
 import { selectGpus } from './gpu-select.js';
-import { optionOf, refreshNvfp4Warning } from './gpu-choice.js';
+import { optionOf, refreshGpuWarnings } from './gpu-choice.js';
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 // Riserva per lo stato del draft MTP (KV del suo strato e buffer): approssimazione per eccesso, i pesi MTP sono già nei file.
@@ -55,7 +55,7 @@ export function syncDerivedFields(target) {
 
 export async function makePlan({
   hf, runpod, modelRef, context = 65536, concurrency = 2, cloud = 'SECURE', dataCenterId,
-  minCudaVersion, vllmImage, set = [], extra = [], flags, allowTrustRemoteCode = false, onProgress = () => {},
+  minCudaVersion, vllmImage, set = [], extra = [], flags, allowTrustRemoteCode = false, ncclSafe = true, onProgress = () => {},
 }) {
   const { id, revision } = parseModelRef(modelRef);
   const warnings = [];
@@ -143,7 +143,7 @@ export async function makePlan({
   if (unknown.length) warnings.push(`Flag non riconosciuti da vLLM ${'v0.30.0'}: ${unknown.join(', ')}`);
 
   const est = estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp), extraGiB });
-  return refreshNvfp4Warning(syncDerivedFields({
+  return refreshGpuWarnings(syncDerivedFields({
     model: { id, revision: sha, requestedRevision: revision, gated: summary.gated, license: summary.license, params: summary.params, weightsBytes: wBytes, maxContext: maxCtx ?? null, quantization: quantizationOf(config) },
     context: ctx,
     concurrency,
@@ -162,5 +162,6 @@ export async function makePlan({
     cloud,
     kvCacheDtype,
     warnings,
+    ncclSafe: ncclSafe !== false, // false (--no-nccl-safe): niente NCCL_P2P_DISABLE sui Pod multi-GPU senza NVLink
   }));
 }

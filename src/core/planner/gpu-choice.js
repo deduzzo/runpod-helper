@@ -1,6 +1,7 @@
 import { LlmpodError, Codes } from '../errors.js';
 import { fmtUSD } from '../confirm.js';
 import { argsForCount } from '../pod/body.js';
+import { refreshNcclWarning } from './nccl.js';
 
 const ALT_LIMIT = 4;
 
@@ -16,6 +17,9 @@ export function refreshNvfp4Warning(plan) {
   }
   return plan;
 }
+
+// Avvisi che dipendono dalla GPU scelta: si rigenerano a ogni cambio di GPU.
+export const refreshGpuWarnings = (plan) => refreshNcclWarning(refreshNvfp4Warning(plan));
 
 // Voce dell'elenco `plan.options` a partire da un candidato di selectGpus.
 export function optionOf(c) {
@@ -71,7 +75,7 @@ export function applyGpuChoice(plan, wanted) {
   if (plan.vllm?.args) plan.vllm.args = argsForCount(plan.vllm.args, choice.count);
   if (plan.estimate) plan.estimate.perGpuGiB = choice.perGpuGiB;
   if (Array.isArray(plan.warnings)) plan.warnings = plan.warnings.filter((w) => !w.startsWith('NO_GPU_AVAILABLE'));
-  return refreshNvfp4Warning(plan);
+  return refreshGpuWarnings(plan);
 }
 
 export function optionLabel(o, dataCenterId) {

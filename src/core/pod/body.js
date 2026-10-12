@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { LlmpodError, Codes } from '../errors.js';
 import { applyOverrides } from '../planner/vllm-args.js';
 import { profileDownloadBytes } from '../planner/vram.js';
+import { ncclEnv } from '../planner/nccl.js';
 
 const SUPERVISOR = fs.readFileSync(new URL('./supervisor.py', import.meta.url));
 export const START_CMD = 'echo "$LLMPOD_SUPERVISOR_B64" | base64 -d > /tmp/supervisor.py && exec python3 -u /tmp/supervisor.py';
@@ -21,6 +22,8 @@ export function buildPodBody({ profile, candidate, apiKey, hfToken, minCudaVersi
     LLMPOD_MODEL_BYTES: String(profileDownloadBytes(profile)),
     HF_HOME: withVolume ? '/workspace/hf' : '/root/.cache/huggingface',
     VLLM_API_KEY: apiKey,
+    // Multi-GPU senza NVLink: il supervisore avvia vLLM con l'ambiente del Pod, quindi NCCL le legge da qui.
+    ...ncclEnv({ gpuId: candidate.id, count: candidate.count, ncclSafe: profile.ncclSafe }),
   };
   if (profile.model.gated && hfToken) env.HF_TOKEN = hfToken;
 

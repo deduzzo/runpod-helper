@@ -31,6 +31,7 @@ export function register(program, getCtx) {
     .option('--extra-arg <arg>', 'aggiunge un argomento di vLLM (ripetibile)', collect, [])
     .option('--image <immagine>', 'immagine vLLM (default da config.json)')
     .option('--allow-trust-remote-code', 'consente --trust-remote-code')
+    .option('--no-nccl-safe', 'multi-GPU senza NVLink: non impostare NCCL_P2P_DISABLE=1 nel Pod (sconsigliato)')
     .option('--advisor', 'usa il consulente anche se disattivato nella configurazione')
     .option('--no-advisor', 'non usare il consulente')
     .option('--gpu <id>', 'usa questa GPU, nella forma <id>[x<numero>] (senza domanda)')
@@ -48,7 +49,7 @@ export function register(program, getCtx) {
       try {
         result = await runPlan({
           ctx, modelRef, context, concurrency: opts.concurrency, set: opts.set, extra: opts.extraArg,
-          image: opts.image, allowTrustRemoteCode: Boolean(opts.allowTrustRemoteCode), advisor: opts.advisor, gpu: opts.gpu,
+          image: opts.image, allowTrustRemoteCode: Boolean(opts.allowTrustRemoteCode), ncclSafe: opts.ncclSafe !== false, advisor: opts.advisor, gpu: opts.gpu,
           onProgress: (message) => ctx.events.emit('phase', { message }),
         });
       } finally {

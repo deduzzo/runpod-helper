@@ -77,6 +77,8 @@ export function profileFromPlan(plan, { name, volume, watchdog }) {
     watchdog,
     estimate: { ...plan.estimate, hourlyUSD: plan.hourlyUSD },
     warnings: plan.warnings,
+    // NCCL_P2P_DISABLE=1 sui Pod multi-GPU senza NVLink (vedi planner/nccl.js); false solo con plan --no-nccl-safe
+    ncclSafe: plan.ncclSafe !== false,
     advisor: plan.advisor ?? null,
     createdAt: new Date().toISOString(),
   };
