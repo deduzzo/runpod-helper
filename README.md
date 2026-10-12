@@ -19,20 +19,26 @@ self-hosted su [Runpod](https://www.runpod.io)**, da usare come backend di codin
 |---|---|
 | `llmpod init` | Configurazione guidata: credenziali, datacenter preferito, network volume per i pesi |
 | `llmpod search <query>` | Cerca su Hugging Face modelli adatti all'uso agentico (chat template, tool calling) |
-| `llmpod plan <modello>` | Stima VRAM (pesi + KV cache + margine), sceglie la GPU, propone gli argomenti di `vllm serve` |
+| `llmpod plan <modello>` | Stima VRAM (pesi + KV cache + margine), elenca le GPU adatte e te le fa scegliere (`--gpu <id>[x<n>]` per indicarla), propone gli argomenti di `vllm serve` |
 | `llmpod save <nome>` | Salva il piano come profilo riutilizzabile |
-| `llmpod up <profilo>` | Crea il Pod, attende vLLM, esegue uno smoke test con chiamata a strumento |
+| `llmpod up <profilo>` | Ti propone le GPU disponibili ora, crea il Pod, attende vLLM, esegue uno smoke test con chiamata a strumento |
 | `llmpod run <client>` | Avvia Claude Code / OpenCode / pi, o configura ZCode, puntandoli al Pod |
 | `llmpod env` | Stampa gli `export` per altri client |
 | `llmpod chat` | Prova veloce con Open WebUI locale (Docker) collegato al Pod |
-| `llmpod status` | Pod attivi, uptime, costo della sessione, credito residuo, costo del volume |
-| `llmpod down` | Termina il Pod (il volume con i pesi resta) |
+| `llmpod status` | Pod avviati, in avvio e spenti, uptime, costo della sessione, credito residuo, costo del volume |
+| `llmpod down` | Elimina il Pod, acceso o spento (il volume con i pesi resta) |
 | `llmpod rotate-key` | Rigenera la chiave API di vLLM del profilo |
 | `llmpod destroy-volume` | Elimina il network volume (doppia conferma) |
 | `llmpod ui` | Interfaccia web locale (React + Vite + Tailwind, installabile come PWA) |
 
 Ogni operazione che costa denaro mostra il **costo orario stimato e chiede conferma**
 (`--yes` per saltarla); tutti i comandi che creano o distruggono risorse supportano `--dry-run`.
+
+**llmpod elimina sempre i Pod, non li ferma**: un Pod spento (stato `EXITED`) continua a costare lo spazio
+su disco finché esiste. `llmpod status` e la pagina "Stato e costi" mostrano i Pod avviati, in avvio e spenti
+(questi ultimi con un avviso e il pulsante "Elimina"); `llmpod down` elimina anche quelli spenti, e `llmpod up`
+propone di eliminare un Pod spento dello stesso profilo prima di crearne uno nuovo (con `--yes` lo elimina
+senza chiedere).
 
 ## Installazione con Docker (consigliata)
 
@@ -66,10 +72,11 @@ avvio**: finché non esiste, chiunque raggiunga `127.0.0.1:3000` dal tuo compute
 volume Docker di Open WebUI. La porta si cambia con `LLMPOD_OPENWEBUI_PORT` (predefinita 3000).
 
 Per fermare tutto: `scripts/stop.sh` (o `scripts\stop.bat`); configurazione e dati di Open WebUI
-restano. **`stop` ferma i container locali, non i Pod su Runpod**: i Pod si fermano con
-`bin/llmpod down <profilo>` o da soli dopo l'inattività. Se alla chiusura risultano Pod attivi
-(e c'è la chiave Runpod), lo script stampa un avviso con l'ID del Pod e il comando per fermarlo,
-senza spegnerlo da solo.
+restano. **`stop` ferma i container locali, non tocca i Pod su Runpod**: i Pod si eliminano con
+`bin/llmpod down <profilo>` o si eliminano da soli dopo l'inattività. Se alla chiusura risultano Pod
+(e c'è la chiave Runpod), lo script stampa un avviso con l'ID del Pod e il comando per eliminarlo:
+per un Pod acceso "resta acceso e a pagamento", per uno spento "è spento ma costa ancora lo spazio su
+disco". Non elimina nulla da solo.
 
 La CLI dall'host passa dal wrapper `bin/llmpod` (macOS/Linux) o `bin\llmpod` (Windows: è
 `bin\llmpod.cmd`, che lancia `llmpod.ps1` con `-ExecutionPolicy Bypass`, così non serve cambiare
@@ -137,6 +144,15 @@ llmpod run claude                             # oppure: opencode, pi, zcode
 llmpod status
 llmpod down                                   # il volume con i pesi resta
 ```
+
+Scelta della GPU: il piano elenca tutte le configurazioni che entrano in memoria, dalla più economica, con
+VRAM, margine, costo e disponibilità (nel datacenter del volume e altrove; quelle non disponibili ovunque
+sono marcate "non disponibile ora"). In un terminale interattivo `llmpod plan` chiede "Quale GPU usare?"
+(predefinita: la più economica disponibile); `--gpu "NVIDIA A100 80GB PCIe"` o `--gpu "…x2"` la imposta senza
+domanda, e `--yes` o `--json` non chiedono nulla. Anche `llmpod up` rilegge la disponibilità e propone le GPU
+disponibili ora (predefinita quella del profilo, se disponibile); la conferma del costo resta. Nell'interfaccia
+web la tabella del piano è selezionabile (la scelta viene salvata nel profilo) e l'avvio dalla scheda Profili
+mostra la domanda come scelta tra opzioni; senza risposta il job si annulla e non spende nulla.
 
 Modelli e piano: vLLM carica solo pesi safetensors (anche quantizzati AWQ/GPTQ/FP8); un repository GGUF viene
 rifiutato subito con l'indicazione del modello base. Per le architetture ibride (Qwen3.5: attenzione lineare + completa)

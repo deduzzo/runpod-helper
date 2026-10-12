@@ -75,7 +75,7 @@ function JobPanelInner({ jobId, onFinished, onStatus }) {
       case 'pod': setPods((l) => (l.includes(e.podId) ? l : [...l, e.podId])); break;
       case 'advice': setAdvices((l) => [...l, e]); break;
       case 'log': setLogs((l) => [...l.slice(-(MAX_LOGS - 1)), e.line]); break;
-      case 'question': setQuestion({ id: e.questionId, text: e.text, defYes: e.defYes }); break;
+      case 'question': setQuestion({ id: e.questionId, text: e.text, defYes: e.defYes, kind: e.kind, options: e.options, defaultId: e.defaultId }); break;
       case 'answer':
         answered.current.add(e.questionId);
         setQuestion((q) => (q?.id === e.questionId ? null : q));

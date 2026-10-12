@@ -7,6 +7,23 @@ import { Card, Button, Field, Badge, ErrorBox, CodeBlock, inputClass } from './u
 const AVAIL = { HIGH: 'green', MEDIUM: 'cyan', LOW: 'amber', NONE: 'red' };
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
+const keyOf = (g) => `${g.id}|${g.count}`;
+// Opzioni scelte dal server (plan.options); un piano senza `options` (salvato da una versione precedente) si ricava da `candidates`.
+function planOptions(plan) {
+  if (plan.options) return plan.options;
+  return (plan.candidates ?? []).map((c) => ({
+    id: c.gpuId, name: c.name, count: c.count, memoryGiB: c.memoryGiB, perGpuGiB: c.perGpuGiB, headroomGiB: c.headroomGiB, hourly: c.hourly,
+    availabilityHere: c.availabilityHere, elsewhere: c.elsewhere ?? [], availableHere: c.availabilityHere !== 'NONE', available: true,
+  }));
+}
+// Il comando mostrato segue il numero di GPU scelto.
+function withTensorParallel(args, count) {
+  const out = [...args];
+  const i = out.indexOf('--tensor-parallel-size');
+  if (i >= 0 && count != null) out[i + 1] = String(count);
+  return out;
+}
+
 export function PlanView({ data, onPlanChange }) {
   const { plan, advice, advisorError, advisorSkipped, planId } = data;
   const [applied, setApplied] = useState(false);
@@ -16,6 +33,12 @@ export function PlanView({ data, onPlanChange }) {
   const [saveError, setSaveError] = useState(null);
   const [busy, setBusy] = useState(null);
   const [confirmName, setConfirmName] = useState(null);
+  const options = planOptions(plan);
+  const [selected, setSelected] = useState(plan.gpu ? keyOf(plan.gpu) : null);
+  // Un piano la cui GPU non è tra le opzioni (piani salvati da versioni precedenti) conserva comunque la sua scelta.
+  const chosen = options.find((o) => keyOf(o) === selected) ?? (plan.gpu && keyOf(plan.gpu) === selected ? { ...plan.gpu, name: plan.gpu.id, hourly: plan.hourlyUSD } : null);
+  // La GPU viaggia al salvataggio solo se l'utente ha cambiato la scelta del piano.
+  const changed = Boolean(chosen) && (!plan.gpu || keyOf(plan.gpu) !== selected);
 
   async function applyAdvice() {
     setBusy('apply'); setApplyError(null);
@@ -31,7 +54,7 @@ export function PlanView({ data, onPlanChange }) {
         if (existing.includes(name)) { setConfirmName(name); return; }
       }
       setConfirmName(null);
-      const r = await api('/api/profiles', { method: 'POST', body: { name, planId } });
+      const r = await api('/api/profiles', { method: 'POST', body: { name, planId, ...(changed ? { gpu: { id: chosen.id, count: chosen.count } } : {}) } });
       setSaved(r.profile.name);
     } catch (e) { setSaveError(e); } finally { setBusy(null); }
   }
@@ -39,7 +62,7 @@ export function PlanView({ data, onPlanChange }) {
   const m = plan.model;
   const elsewhere = plan.elsewhere ?? [];
   const nameValid = NAME_RE.test(name);
-  const command = `vllm serve ${shellQuoteArgs([m.id])} --served-model-name <profilo> ${shellQuoteArgs(plan.vllm.args)}`;
+  const command = `vllm serve ${shellQuoteArgs([m.id])} --served-model-name <profilo> ${shellQuoteArgs(withTensorParallel(plan.vllm.args, chosen?.count))}`;
   return (
     <div className="space-y-4">
       <Card title="Piano calcolato">
@@ -50,7 +73,7 @@ export function PlanView({ data, onPlanChange }) {
           <p><span className="text-gray-400">Contesto:</span> {plan.context} token × {plan.concurrency} {plan.kvCacheDtype ? <Badge tone="violet">KV FP8</Badge> : null}</p>
           <p><span className="text-gray-400">Parser:</span> strumenti {plan.parsers.tool ?? 'nessuno'} · ragionamento {plan.parsers.reasoning ?? 'nessuno'}</p>
           {plan.mtp && <p><span className="text-gray-400">MTP:</span> {mtpLabel(plan.mtp)}</p>}
-          <p><span className="text-gray-400">Scelta:</span> {plan.gpu ? <>{plan.gpu.id} ×{plan.gpu.count} a <strong className="neon-text">{fmtUSD(plan.hourlyUSD)}/h</strong></> : <Badge tone="red">nessuna GPU</Badge>}</p>
+          <p><span className="text-gray-400">Scelta:</span> {chosen ? <>{chosen.name ?? chosen.id} ×{chosen.count} a <strong className="neon-text">{fmtUSD(chosen.hourly)}/h</strong></> : <Badge tone="red">nessuna GPU</Badge>}</p>
         </div>
         {!plan.gpu && (
           <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-200">
@@ -69,15 +92,27 @@ export function PlanView({ data, onPlanChange }) {
           </div>
         )}
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-gray-400"><tr><th className="py-1">GPU</th><th>N</th><th>VRAM</th><th>Per GPU</th><th>Margine</th><th>Costo</th><th>In {plan.dataCenterId}</th></tr></thead>
+          <p id="gpu-table-label" className="mb-1 text-sm text-gray-400">Scegli la GPU da usare</p>
+          <table className="w-full text-left text-sm" aria-labelledby="gpu-table-label">
+            <thead className="text-gray-400"><tr><th className="py-1"><span className="sr-only">Usa</span></th><th>GPU</th><th>N</th><th>VRAM</th><th>Per GPU</th><th>Margine</th><th>Costo</th><th>Disponibilità in {plan.dataCenterId}</th></tr></thead>
             <tbody>
-              {plan.candidates.map((c, i) => (
-                <tr key={`${c.gpuId}-${c.count}-${i}`} className="border-t border-white/5">
-                  <td className="py-1">{c.name}</td><td>{c.count}</td><td>{c.memoryGiB} GB</td><td>{fmtGiB(c.perGpuGiB)}</td><td>{fmtGiB(c.headroomGiB)}</td><td>{fmtUSD(c.hourly)}/h</td>
-                  <td>{c.availabilityHere ? <Badge tone={AVAIL[c.availabilityHere] ?? 'red'}>{c.availabilityHere}</Badge> : null}</td>
-                </tr>
-              ))}
+              {options.map((o) => {
+                const k = keyOf(o);
+                const label = `Usa ${o.name ?? o.id} ×${o.count}`;
+                return (
+                  <tr key={k} className={`border-t border-white/5 transition ${selected === k ? 'bg-cyan-400/10' : 'hover:bg-white/5'} ${o.available ? '' : 'opacity-60'}`}>
+                    <td className="py-1 pr-2">
+                      <input type="radio" name="gpu-choice" aria-label={label} checked={selected === k} disabled={!o.available} onChange={() => setSelected(k)} />
+                    </td>
+                    <td>{o.name ?? o.id}</td><td>{o.count}</td><td>{o.memoryGiB} GB</td><td>{fmtGiB(o.perGpuGiB)}</td><td>{fmtGiB(o.headroomGiB)}</td><td>{fmtUSD(o.hourly)}/h</td>
+                    <td className="space-x-1">
+                      {o.availableHere && o.availabilityHere && <Badge tone={AVAIL[o.availabilityHere] ?? 'red'}>{o.availabilityHere}</Badge>}
+                      {!o.availableHere && o.elsewhere?.length > 0 && <Badge tone="amber">solo altrove ({o.elsewhere.map((d) => d.id).join(', ')})</Badge>}
+                      {!o.available && <Badge tone="red">non disponibile ora</Badge>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -112,10 +147,10 @@ export function PlanView({ data, onPlanChange }) {
           <Field label="Nome del profilo">
             <input aria-label="Nome del profilo" className={inputClass} value={name} onChange={(e) => { setName(e.target.value); setConfirmName(null); }} pattern="^[a-z0-9][a-z0-9-]{0,40}$" placeholder="qwen3-coder" />
           </Field>
-          <Button onClick={() => save()} loading={busy === 'save'} disabled={busy !== null || !plan.gpu || !nameValid}>Salva come profilo</Button>
+          <Button onClick={() => save()} loading={busy === 'save'} disabled={busy !== null || !chosen || !nameValid}>Salva come profilo</Button>
         </div>
-        {!plan.gpu && <p className="mt-2 text-xs text-amber-300">Nessuna GPU disponibile: non è possibile salvare il profilo.</p>}
-        {plan.gpu && !nameValid && <p className="mt-2 text-xs text-gray-500">Il nome usa solo minuscole, cifre e trattini (massimo 41 caratteri) e inizia con una lettera o una cifra.</p>}
+        {!chosen && <p className="mt-2 text-xs text-amber-300">{options.some((o) => o.available) ? 'Scegli una GPU dalla tabella per salvare il profilo.' : 'Nessuna GPU disponibile: non è possibile salvare il profilo.'}</p>}
+        {chosen && !nameValid && <p className="mt-2 text-xs text-gray-500">Il nome usa solo minuscole, cifre e trattini (massimo 41 caratteri) e inizia con una lettera o una cifra.</p>}
         {confirmName && confirmName === name && (
           <div className="fade-up mt-3 space-y-2 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-sm" role="alert">
             <p className="text-amber-200">Il profilo "{confirmName}" esiste già: salvando verrà sovrascritto.</p>

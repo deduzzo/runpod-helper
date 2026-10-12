@@ -145,7 +145,7 @@ describe('PlanView', () => {
   });
 
   it('senza GPU nel datacenter: alternative altrove e salvataggio disabilitato con spiegazione', () => {
-    const p = { ...plan, gpu: null, hourlyUSD: null, elsewhere: [{ gpuId: 'H100', name: 'H100 80GB', count: 1, hourly: 2.69, elsewhere: [{ id: 'US-CA-2', availability: 'HIGH' }] }] };
+    const p = { ...plan, gpu: null, hourlyUSD: null, options: [], candidates: [], elsewhere: [{ gpuId: 'H100', name: 'H100 80GB', count: 1, hourly: 2.69, elsewhere: [{ id: 'US-CA-2', availability: 'HIGH' }] }] };
     render(<PlanView data={{ plan: p, advice: null, advisorError: null, advisorSkipped: null }} onPlanChange={() => {}} />);
     expect(screen.getByText(/nessuna GPU disponibile in EU-RO-1/i)).toBeTruthy();
     expect(screen.getByText(/H100 80GB ×1/)).toBeTruthy();
