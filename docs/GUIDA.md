@@ -697,6 +697,34 @@ In questa modalità è **Claude Code** a fare da operatore di llmpod: lanciato n
 `CLAUDE.md`, le skill e i permessi di `.claude/` e il server MCP di `.mcp.json`, e ti guida in italiano dalla
 scelta del modello allo spegnimento.
 
+### Il modo più semplice: `llmpod start`
+
+```bash
+llmpod start                     # (dopo npm link) guida passo passo
+llmpod start --cwd ~/mio-progetto
+```
+
+Senza `npm link` basta un doppio clic su `scripts/start-managed.command` (macOS) o `scripts/start-managed.sh`
+(Linux/macOS, da terminale: `sh scripts/start-managed.sh`), oppure `scripts\start-managed.bat` su Windows. I
+launcher eseguono `node src/cli/index.js start`, quindi non richiedono nessuna installazione globale (non vanno
+confusi con `scripts/start.sh`, che avvia i container Docker).
+
+`start` fa tre cose, in ordine:
+
+1. **configura llmpod se serve**: se mancano la chiave Runpod o il datacenter, lo spiega e chiede "Configuro ora
+   llmpod?"; rispondendo sì esegue la stessa configurazione guidata di `llmpod init`. Senza terminale (o con
+   `--yes`) non fa domande e si ferma con un errore che rimanda a `llmpod init` (e alle sue opzioni
+   `--runpod-key-stdin` / `--from-env` per chi automatizza);
+2. **chiede la cartella di lavoro** ("In quale cartella vuoi lavorare?", invio = cartella corrente, se non è
+   quella di llmpod). Con `--cwd <cartella>` (alias `--dir`) non chiede nulla; senza terminale usa la cartella
+   corrente;
+3. **apre Claude Code gestito** in quella cartella, con gli stessi flag di `manage --cwd` (vedi sotto). Con
+   `--profile <nome>` parte dallo stato di quel profilo.
+
+`manage` resta a disposizione per chi vuole il controllo fine (nessuna domanda, nessuna configurazione).
+
+### Con `llmpod manage`
+
 ```bash
 llmpod manage                    # avvia "claude" nella cartella di llmpod
 llmpod manage --profile prova    # parte dallo stato del profilo "prova"

@@ -20,7 +20,8 @@ export function createContext({ env = process.env, io, overrides = {}, platform 
   const events = createEvents();
   const cache = {};
   const ctx = {
-    env, io, store, http, events, platform, stdin,
+    env, io, store, http, events, platform, stdin, overrides,
+    cwd: overrides.cwd ?? (() => process.cwd()),
     spawn: overrides.spawn ?? spawn,
     exit: overrides.exit ?? ((code) => process.exit(code)),
     sleep: overrides.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
