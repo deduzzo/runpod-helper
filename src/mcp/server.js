@@ -3,9 +3,9 @@
 // monitoraggio, tuning e spegnimento dei Pod. Registrato nel progetto con .mcp.json; avviabile anche con "llmpod mcp".
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { z } from 'zod';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createContext, VERSION } from '../cli/context.js';
 import { createJobs } from '../server/jobs.js';
 import { redact } from '../core/secrets.js';
@@ -49,12 +49,13 @@ export function createMcpServer({ env = process.env, overrides = {}, questionTim
     }
   }
 
-  const server = new Server({ name: 'llmpod', version: VERSION }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations })),
-  }));
-  server.setRequestHandler(CallToolRequestSchema, async (req) => callTool(req.params.name, req.params.arguments ?? {}));
-  return { server, tools, jobs, callTool, ctx };
+  // API raccomandata dell'SDK (McpServer.registerTool). Lo schema JSON degli strumenti resta la fonte unica: zod lo converte
+  // per l'SDK (elenco e prima validazione) e validateInput lo riapplica in callTool, usato anche dai test.
+  const mcp = new McpServer({ name: 'llmpod', version: VERSION }, { instructions: INSTRUCTIONS });
+  for (const tool of tools) {
+    mcp.registerTool(tool.name, { description: tool.description, inputSchema: z.fromJSONSchema(tool.inputSchema), annotations: tool.annotations }, (args) => callTool(tool.name, args ?? {}));
+  }
+  return { server: mcp, tools, jobs, callTool, ctx };
 }
 
 export async function startStdioServer({ env = process.env } = {}) {

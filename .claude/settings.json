@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "enabledMcpjsonServers": ["llmpod"],
+  "permissions": {
+    "allow": [
+      "mcp__llmpod__status",
+      "mcp__llmpod__metrics",
+      "mcp__llmpod__logs",
+      "mcp__llmpod__search",
+      "mcp__llmpod__plan",
+      "mcp__llmpod__model_sets",
+      "mcp__llmpod__profiles",
+      "mcp__llmpod__job_status",
+      "mcp__llmpod__job_events",
+      "mcp__llmpod__up_preview",
+      "mcp__llmpod__tune_preview",
+      "mcp__llmpod__keep_preview",
+      "mcp__llmpod__client_commands",
+      "Bash(node src/cli/index.js status*)",
+      "Bash(node src/cli/index.js metrics*)",
+      "Bash(node src/cli/index.js logs*)",
+      "Bash(node src/cli/index.js search*)",
+      "Bash(node src/cli/index.js --help)",
+      "Bash(llmpod status*)",
+      "Bash(llmpod metrics*)",
+      "Bash(llmpod logs*)",
+      "Bash(llmpod search*)",
+      "Bash(llmpod --help)"
+    ],
+    "deny": [
+      "Read(~/.config/llmpod/.env)",
+      "Read(~/.config/llmpod/.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Edit(~/.config/llmpod/.env)",
+      "Edit(**/.env)",
+      "Bash(cat *.env*)",
+      "Bash(cat *llmpod/.env*)",
+      "Bash(grep *.env*)",
+      "Bash(head *.env*)",
+      "Bash(tail *.env*)",
+      "Bash(less *.env*)",
+      "Bash(more *.env*)",
+      "Bash(llmpod env*)",
+      "Bash(node src/cli/index.js env*)"
+    ]
+  }
+}
