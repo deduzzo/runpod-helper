@@ -85,7 +85,15 @@ export function createRoutes({ ctx, jobs, sse, state }) {
       const current = ctx.store.readJson('last-plan.json', null);
       if (!current || planId(current) !== b.planId) throw new HttpError(409, 'Il piano è cambiato: ricalcolalo prima di salvare');
     }
-    return { profile: ctx.ops.saveProfile(name) };
+    // Scelta della GPU dalla tabella del piano: { id, count? } tra le opzioni del piano salvato (validata da ops).
+    let gpu;
+    if (b.gpu !== undefined) {
+      const g = b.gpu;
+      const okCount = g?.count === undefined || (Number.isInteger(g.count) && g.count >= 1 && g.count <= 64);
+      if (!g || typeof g !== 'object' || typeof g.id !== 'string' || !g.id.trim() || !okCount) throw new HttpError(400, 'gpu non valida: serve { id, count }');
+      gpu = { id: g.id, count: g.count ?? null };
+    }
+    return { profile: ctx.ops.saveProfile(name, { gpu }) };
   }));
   add('GET', '/api/profiles/:name', json(({ params }) => ({ profile: ctx.store.readProfile(params.name) })));
 
@@ -95,10 +103,10 @@ export function createRoutes({ ctx, jobs, sse, state }) {
     assertProfileName(profile);
     // R17: un solo job attivo per profilo, qualunque sia l'azione.
     assertNotBusy(profile);
-    const job = jobs.start(`${action}:${profile}`, async ({ ask, emit }) => {
+    const job = jobs.start(`${action}:${profile}`, async ({ ask, choose, emit }) => {
       const events = createEvents();
       events.on((e) => emit(e));
-      const ops = ctx.makeOps({ ask, events });
+      const ops = ctx.makeOps({ ask, askChoice: choose, events });
       if (action === 'down') return ops.down(profile, {});
       const r = await ops.up(profile, {});
       // R7: stessi passi finali di "llmpod up".
@@ -119,8 +127,11 @@ export function createRoutes({ ctx, jobs, sse, state }) {
   }));
   add('POST', '/api/jobs/:id/answer', async ({ req, res, params }) => {
     const b = await readJson(req);
-    // R4: le domande sono di conferma (sì/no): la risposta deve essere un booleano.
-    if (typeof b.answer !== 'boolean') throw new HttpError(400, 'La risposta deve essere true o false');
+    // R4: la risposta deve essere valida per il tipo di domanda: booleano per le conferme, id di un'opzione (o null) per le scelte.
+    const q = jobs.get(params.id)?.question;
+    if (q?.id === String(b.questionId ?? '') && q.kind === 'choice') {
+      if (b.answer !== null && !q.options.some((o) => o.id === b.answer)) throw new HttpError(400, 'La risposta deve essere una delle opzioni proposte (oppure null per annullare)');
+    } else if (typeof b.answer !== 'boolean') throw new HttpError(400, 'La risposta deve essere true o false');
     if (!jobs.answer(params.id, String(b.questionId ?? ''), b.answer)) return sendJson(res, 409, { error: { code: 'CONFLICT', message: 'La domanda non è più attiva' } });
     return sendJson(res, 200, { ok: true });
   });

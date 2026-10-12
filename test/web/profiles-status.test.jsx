@@ -227,7 +227,7 @@ describe('Stato e costi', () => {
   it('nessun Pod, credito non disponibile, nessun volume; fase se il supervisor non misura l\'inattività', async () => {
     mockApi({ 'GET /api/status': { pods: [], balance: null, volume: null } });
     render(<Status />);
-    await screen.findByText('Nessun Pod llmpod attivo.');
+    await screen.findByText('Nessun Pod llmpod (né avviato né spento).');
     expect(screen.getByText('non disponibile')).toBeTruthy();
     expect(screen.getByText('Nessun volume configurato.')).toBeTruthy();
     cleanup();

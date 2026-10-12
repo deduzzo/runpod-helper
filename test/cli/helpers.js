@@ -17,6 +17,7 @@ export function sandbox({ answers = {} } = {}) {
   const outBuf = [];
   const errBuf = [];
   const prompt = {
+    isTty: Boolean(answers.interactive),
     ask: vi.fn(async () => (answers.ask?.length ? answers.ask.shift() : true)),
     askText: vi.fn(async (q, def) => (answers.text?.length ? answers.text.shift() : def)),
     askSecret: vi.fn(async () => (answers.secret?.length ? answers.secret.shift() : '')),

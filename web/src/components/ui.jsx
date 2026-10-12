@@ -40,7 +40,7 @@ export function Field({ label, children }) {
 
 export const inputClass = 'rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-gray-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20';
 
-const TONES = { cyan: 'bg-cyan-400/15 text-cyan-300', violet: 'bg-violet-400/15 text-violet-300', amber: 'bg-amber-400/15 text-amber-300', red: 'bg-rose-400/15 text-rose-300', green: 'bg-emerald-400/15 text-emerald-300', gray: 'bg-gray-400/15 text-gray-300' };
+const TONES = { cyan: 'bg-cyan-400/15 text-cyan-300', violet: 'bg-violet-400/15 text-violet-300', amber: 'bg-amber-400/15 text-amber-300', red: 'bg-rose-400/15 text-rose-300', green: 'bg-emerald-400/15 text-emerald-300', gray: 'bg-gray-400/15 text-gray-300', orange: 'bg-orange-400/15 text-orange-300' };
 export function Badge({ tone = 'cyan', children }) {
   return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${TONES[tone]}`}>{children}</span>;
 }

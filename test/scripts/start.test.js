@@ -10,7 +10,7 @@ const ROOTDIR = ROOT.replace(/\/$/, '');
 function fakeBin({ dockerRunning = true, infoMessage = '', composeV2 = true, secOpts = 'name=seccomp', context = 'default', waitSupport = true, pods = [], uname = '' } = {}) {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-bin-'));
   const log = path.join(bin, 'docker.log');
-  const podsJson = JSON.stringify({ pods: pods.map((p) => ({ profile: p.profile, podId: p.podId, status: 'RUNNING', supervisor: null })), balance: null, volume: null }, null, 2);
+  const podsJson = JSON.stringify({ pods: pods.map((p) => ({ profile: p.profile, podId: p.podId, status: p.status ?? 'RUNNING', ...(p.noState ? {} : { state: p.state ?? 'running', stateLabel: p.state === 'stopped' ? 'spento' : 'avviato' }), gpu: { id: 'GPU', count: 1 }, supervisor: null })), balance: null, volume: null }, null, 2);
   fs.writeFileSync(path.join(bin, 'status.json'), podsJson);
   fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh
 echo "$@" >> "${log}"
@@ -285,17 +285,33 @@ describe('scripts/stop.sh: Pod ancora attivi', () => {
     return home;
   };
 
-  it('avvisa che il Pod resta acceso e a pagamento, senza fermarlo; poi ferma i container', () => {
+  it('avvisa che il Pod resta acceso e a pagamento (da eliminare), senza toccarlo; poi ferma i container', () => {
     const { bin, log } = fakeBin({ pods: [{ profile: 'qwen3-coder', podId: 'abc123' }, { profile: 'glm', podId: 'zzz999' }] });
     const r = runStop({ home: withKey(), bin });
     expect(r.status).toBe(0);
-    expect(r.stderr).toContain('Il Pod abc123 del profilo qwen3-coder resta acceso e a pagamento: fermalo con bin/llmpod down qwen3-coder');
-    expect(r.stderr).toContain('Il Pod zzz999 del profilo glm resta acceso e a pagamento: fermalo con bin/llmpod down glm');
+    expect(r.stderr).toContain('Il Pod abc123 del profilo qwen3-coder resta acceso e a pagamento: eliminalo con bin/llmpod down qwen3-coder');
+    expect(r.stderr).toContain('Il Pod zzz999 del profilo glm resta acceso e a pagamento: eliminalo con bin/llmpod down glm');
     const calls = fs.readFileSync(log, 'utf8');
     expect(calls).toContain(' run --rm -T llmpod status --json');
     expect(calls.indexOf('status --json')).toBeLessThan(calls.indexOf('--profile openwebui down'));
     expect(calls).not.toMatch(/llmpod down/);
-    expect(r.stdout).toMatch(/I Pod su Runpod non vengono fermati/);
+    expect(r.stdout).toMatch(/I Pod su Runpod non vengono toccati.*si eliminano con bin\/llmpod down/);
+  });
+
+  it('avvisa anche dei Pod spenti: costano ancora il disco e vanno eliminati', () => {
+    const { bin } = fakeBin({ pods: [{ profile: 'glm', podId: 'old777', status: 'EXITED', state: 'stopped' }, { profile: 'qwen3-coder', podId: 'abc123' }] });
+    const r = runStop({ home: withKey(), bin });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('Il Pod old777 del profilo glm è spento ma costa ancora lo spazio su disco: eliminalo con bin/llmpod down glm');
+    expect(r.stderr).not.toMatch(/old777.*resta acceso/);
+    expect(r.stderr).toContain('Il Pod abc123 del profilo qwen3-coder resta acceso e a pagamento');
+  });
+
+  it('un Pod senza campo state (output di una versione precedente) è trattato come acceso, anche se è l\'ultimo', () => {
+    const { bin } = fakeBin({ pods: [{ profile: 'glm', podId: 'old777', status: 'EXITED', state: 'stopped' }, { profile: 'qwen3-coder', podId: 'abc123', noState: true }] });
+    const r = runStop({ home: withKey(), bin });
+    expect(r.stderr).toContain('Il Pod old777 del profilo glm è spento ma costa ancora lo spazio su disco');
+    expect(r.stderr).toContain('Il Pod abc123 del profilo qwen3-coder resta acceso e a pagamento: eliminalo con bin/llmpod down qwen3-coder');
   });
 
   it('nessun Pod: nessun avviso', () => {

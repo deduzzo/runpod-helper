@@ -8,15 +8,20 @@ import { proxyUrl } from './runpod.js';
 import { confirmCost, confirmAction, fmtUSD } from './confirm.js';
 import { buildPodBody, argsForCount } from './pod/body.js';
 import { adviseRepair } from './advisor/advisor.js';
-import { diffArgs } from './advisor/advice.js';
+import { diffArgs, fitsForOption } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
 import { profileDownloadBytes } from './planner/vram.js';
 import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
+import { applyGpuChoice, vramLabel } from './planner/gpu-choice.js';
+import { podState, STOPPED_STATUSES } from './pod-state.js';
 
-const ACTIVE = (p) => !['TERMINATED', 'EXITED'].includes(p.status);
+// ACTIVE: Pod acceso (o in avvio). Un Pod EXITED (spento) non è attivo ma ESISTE ancora e costa lo spazio su disco:
+// llmpod lo elimina sempre (DELETE), non lo "ferma" mai.
+const ACTIVE = (p) => p.status !== 'TERMINATED' && !STOPPED_STATUSES.includes(p.status);
+const EXISTS = (p) => p.status !== 'TERMINATED';
 const podName = (profile) => `llmpod-${profile}`;
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -54,6 +59,8 @@ export function profileFromPlan(plan, { name, volume, watchdog }) {
     parsers: plan.parsers,
     gpu,
     alternatives,
+    // tutte le configurazioni compatibili con la stima: `up` le ripropone in base alla disponibilità attuale
+    options: plan.options ?? null,
     cloud: plan.cloud,
     dataCenterId: plan.dataCenterId,
     volume: volume ? { id: volume.id, mountPath: '/workspace' } : null,
@@ -81,7 +88,7 @@ function suggestContext(kvTokens, profile) {
   return suggestion > profile.context * 1.25 ? suggestion : null;
 }
 
-export function createOps({ store, runpod, hf, http, events, ask, now = Date.now, sleep = defaultSleep, zcode = { dir: zcodeDir() }, advisor = null }) {
+export function createOps({ store, runpod, hf, http, events, ask, askChoice = null, now = Date.now, sleep = defaultSleep, zcode = { dir: zcodeDir() }, advisor = null }) {
   const keyOf = (name) => store.readEnv()[profileKeyVar(name)];
 
   function ensureKey(name) {
@@ -94,9 +101,11 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
     return key;
   }
 
-  function saveProfile(name) {
+  // gpu: scelta dell'utente tra le opzioni del piano ({ id, count }); si applica a una copia, last-plan.json non cambia.
+  function saveProfile(name, { gpu } = {}) {
     const plan = store.readJson('last-plan.json', null);
     if (!plan) throw new LlmpodError(Codes.NOT_FOUND, 'Nessun piano da salvare', { hint: 'Esegui prima: llmpod plan <modello>' });
+    if (gpu) applyGpuChoice(plan, { id: gpu.id, count: gpu.count ?? null });
     const cfg = store.readConfig();
     const volume = cfg.volume && cfg.volume.dataCenterId === plan.dataCenterId ? cfg.volume : null;
     const profile = profileFromPlan(plan, { name, volume, watchdog: cfg.watchdog });
@@ -112,6 +121,17 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
       if (pod && ACTIVE(pod)) return pod;
     }
     return (await runpod.listPods()).find((p) => p.name === podName(name) && ACTIVE(p)) ?? null;
+  }
+
+  // Tutti i Pod del profilo ancora esistenti, accesi o spenti (gli accesi per primi): `down` li elimina tutti.
+  async function findAllPods(name) {
+    const mine = (await runpod.listPods()).filter((p) => p.name === podName(name) && EXISTS(p));
+    const st = store.readState().pods[name];
+    if (st?.podId && !mine.some((p) => p.id === st.podId)) {
+      const pod = await runpod.getPod(st.podId);
+      if (pod && EXISTS(pod)) mine.push(pod);
+    }
+    return mine.sort((a, b) => Number(ACTIVE(b)) - Number(ACTIVE(a)));
   }
 
   function forget(name) {
@@ -224,26 +244,82 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
     registerSecret(apiKey);
 
     events.emit('phase', { message: 'Controlli preliminari' });
-    const running = (await runpod.listPods()).find((p) => p.name === podName(name) && ACTIVE(p));
+    const existing = (await runpod.listPods()).filter((p) => p.name === podName(name) && EXISTS(p));
+    const running = existing.find(ACTIVE);
     if (running) throw new LlmpodError(Codes.INVALID_INPUT, `Il profilo ${name} ha già un Pod attivo (${running.id})`, { hint: `Esegui: llmpod down ${name}` });
+    // Un Pod spento continua a costare (disco): prima di crearne uno nuovo va eliminato. Se l'utente rifiuta (o la domanda
+    // scade, nell'interfaccia web) up si ferma senza creare nulla; con --yes lo elimina.
+    for (const old of existing) {
+      if (dryRun) {
+        events.emit('warning', { message: `Il Pod ${old.id} è spento ma costa ancora lo spazio su disco: un avvio reale lo eliminerebbe prima di crearne uno nuovo` });
+      } else if (yes || await ask(`Il profilo ${name} ha un Pod spento (${old.id}) che costa ancora lo spazio su disco. Eliminarlo prima di crearne uno nuovo?`, true, { timeoutValue: false })) {
+        await terminate(name, old.id);
+      } else {
+        throw new LlmpodError(Codes.INVALID_INPUT, `Elimina prima il Pod spento ${old.id} (llmpod down ${name})`, { hint: 'Un Pod spento continua a costare lo spazio su disco: nessun nuovo Pod è stato creato' });
+      }
+    }
     if (profile.model.gated) {
       const access = await hf.checkAccess(profile.model.id, profile.model.revision);
       if (!access.ok) throw new LlmpodError(Codes.GATED_MODEL, `Nessun accesso a ${profile.model.id} (HTTP ${access.status})`, { hint: `Richiedi l'accesso su https://huggingface.co/${profile.model.id} e imposta HF_TOKEN con "llmpod init"` });
     }
     const { balance } = await runpod.getBalance();
 
-    const counts = [...new Set([profile.gpu, ...profile.alternatives].filter(Boolean).map((g) => g.count))];
+    // Con la scelta dell'utente (terminale interattivo o web) si considerano TUTTE le opzioni salvate nel profilo; altrimenti
+    // (o per profili vecchi senza `options`) solo la GPU del profilo e le sue alternative, con ripieghi.
+    const choiceMode = Boolean(askChoice) && !yes && !dryRun;
+    const wantedAlternatives = choiceMode && profile.options?.length
+      ? profile.options.map((o) => ({ id: o.id, count: o.count }))
+      : (profile.alternatives ?? []);
+    const wanted = [];
+    for (const g of [profile.gpu, ...wantedAlternatives].filter(Boolean)) if (!wanted.some((w) => w.id === g.id && w.count === g.count)) wanted.push({ id: g.id, count: g.count });
+    const counts = [...new Set(wanted.map((g) => g.count))];
     const catalogs = {};
     for (const count of counts) catalogs[count] = await runpod.listGpus({ count, cloud: profile.cloud, minCudaVersion: cfg.minCudaVersion });
-    const { inVolumeDc, otherDcs } = rankCandidates({ profile, catalogs, cloud: profile.cloud });
+    const { inVolumeDc, otherDcs } = rankCandidates({ profile: { ...profile, gpu: wanted[0], alternatives: wanted.slice(1) }, catalogs, cloud: profile.cloud });
     let candidates = inVolumeDc.filter((c) => c.hourly > 0);
-    if (!candidates.some((c) => c.availability !== 'NONE') && otherDcs.length) {
+    if (choiceMode) {
+      // Modalità scelta: niente domanda di ripiego, la scelta stessa è il consenso. Si propongono sempre anche le opzioni
+      // disponibili in altri datacenter (senza volume). Si escludono le GPU non disponibili ora e quelle che con gli argomenti
+      // salvati del profilo non entrerebbero in memoria.
+      const optionOf = (c) => profile.options?.find((o) => o.id === c.id && o.count === c.count);
+      const fits = (c) => {
+        const o = optionOf(c);
+        if (!o) return true;
+        if (o.fits === false) return false;
+        const memoryGiB = o.memoryGiB ?? (catalogs[c.count] ?? []).find((g) => g.id === c.id)?.memory;
+        if (!memoryGiB || !profile.estimate?.weightsGiB || !Number.isFinite(o.perGpuGiB)) return true;
+        return fitsForOption({ estimate: profile.estimate, kvCacheDtype: null }, { count: c.count, memoryGiB, perGpuGiB: o.perGpuGiB })(profile.vllm.args);
+      };
+      candidates = [...candidates, ...otherDcs].filter((c) => c.hourly > 0 && c.availability !== 'NONE' && fits(c)).sort((a, b) => a.hourly - b.hourly);
+    } else if (!candidates.some((c) => c.availability !== 'NONE') && otherDcs.length) {
       const policy = profile.allowFallbackWithoutVolume ?? 'ask';
       const allow = policy === 'always' || (policy === 'ask' && (yes || dryRun || await ask(
         `Nel datacenter ${profile.dataCenterId} del volume non risultano GPU disponibili. Posso provare altri datacenter senza volume (pesi scaricati a ogni avvio)?`, true)));
       if (allow) candidates = [...candidates, ...otherDcs];
     }
-    if (!candidates.length) throw new LlmpodError(Codes.NO_GPU_AVAILABLE, 'Nessun candidato GPU per questo profilo', { hint: 'Rigenera il piano con: llmpod plan' });
+    if (choiceMode) {
+      // Scelta della GPU (terminale interattivo o interfaccia web, mai con --yes): tra le configurazioni disponibili ORA.
+      // Con una sola si usa quella (la conferma del costo mostra la GPU che verrà davvero creata); con nessuna si ferma qui.
+      // Dopo la scelta si usa solo quella: niente ripieghi silenziosi su altre GPU.
+      const avail = candidates;
+      if (!avail.length) {
+        const all = wanted.map((g) => `${g.id}${g.count > 1 ? ` ×${g.count}` : ''}`).join(', ');
+        throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `Nessuna GPU disponibile ora tra le opzioni del profilo (${all})`, { hint: 'Riprova più tardi' });
+      }
+      if (avail.length > 1) {
+        const key = (c) => `${c.id}|${c.count}|${c.dataCenterId}`;
+        const memory = (c) => (catalogs[c.count] ?? []).find((g) => g.id === c.id)?.memory;
+        const where = (c) => (c.withVolume ? c.dataCenterId : `(senza volume, ${c.dataCenterId})`);
+        const label = (c) => `${c.id} ×${c.count} · ${memory(c) != null ? vramLabel({ count: c.count, memoryGiB: memory(c) }) : '? GB'} · ${fmtUSD(c.hourly)}/h · ${where(c)} · ${c.availability}`;
+        const def = avail.find((c) => c.id === profile.gpu?.id && c.count === profile.gpu?.count && c.dataCenterId === profile.dataCenterId) ?? avail[0];
+        const picked = await askChoice('Quale GPU usare per l\'avvio?', avail.map((c) => ({ id: key(c), label: label(c) })), key(def));
+        const chosen = picked == null ? null : avail.find((c) => key(c) === picked);
+        if (!chosen) throw new LlmpodError(Codes.CANCELLED, 'Nessuna GPU scelta: operazione annullata, nessun Pod creato');
+        candidates = [chosen];
+      }
+    } else if (!candidates.length) {
+      throw new LlmpodError(Codes.NO_GPU_AVAILABLE, 'Nessun candidato GPU per questo profilo', { hint: 'Rigenera il piano con: llmpod plan' });
+    }
 
     const first = candidates[0];
     if (balance < first.hourly) {
@@ -356,17 +432,29 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
     }
   }
 
+  // Elimina (DELETE, mai stop) tutti i Pod del profilo, anche quelli spenti: un Pod spento costa ancora lo spazio su disco.
   async function down(name, { yes = false, dryRun = false } = {}) {
-    const pod = await findPod(name);
-    if (!pod) {
+    const pods = await findAllPods(name);
+    if (!pods.length) {
       forget(name);
       return { podId: null };
     }
-    const conf = await confirmAction({ description: `Terminare il Pod ${pod.id} (${name}, ${fmtUSD(pod.cost ?? 0)}/h)?`, yes, dryRun, ask });
-    if (conf.dryRun) return { dryRun: true, podId: pod.id };
-    const uptime = pod.runtime?.uptime ?? 0;
-    await terminate(name, pod.id);
-    return { podId: pod.id, sessionUSD: ((pod.cost ?? 0) * uptime) / 3600 };
+    let sessionUSD = 0;
+    const deleted = [];
+    for (const pod of pods) {
+      const stopped = !ACTIVE(pod);
+      const conf = await confirmAction({
+        description: stopped ? `Eliminare il Pod spento ${pod.id} (${name}), che costa ancora lo spazio su disco` : `Terminare il Pod ${pod.id} (${name}, ${fmtUSD(pod.cost ?? 0)}/h)`,
+        yes, dryRun, ask,
+      });
+      if (conf.dryRun) continue;
+      const uptime = pod.runtime?.uptime ?? 0;
+      await terminate(name, pod.id);
+      sessionUSD += ((pod.cost ?? 0) * uptime) / 3600;
+      deleted.push({ podId: pod.id, stopped });
+    }
+    if (dryRun) return { dryRun: true, podId: pods[0].id, podIds: pods.map((p) => p.id), stopped: !ACTIVE(pods[0]) };
+    return { podId: deleted[0].podId, podIds: deleted.map((d) => d.podId), stopped: deleted[0].stopped, sessionUSD };
   }
 
   async function status() {
@@ -374,15 +462,20 @@ export function createOps({ store, runpod, hf, http, events, ask, now = Date.now
     const state = store.readState();
     const env = store.readEnv();
     const cfg = store.readConfig();
-    const ours = pods.filter((p) => p.name?.startsWith('llmpod-') && ACTIVE(p));
+    const ours = pods.filter((p) => p.name?.startsWith('llmpod-') && EXISTS(p));
     const rows = await Promise.all(ours.map(async (p) => {
       const profile = p.name.slice('llmpod-'.length);
       const uptimeSeconds = p.runtime?.uptime ?? (p.startedAt ? Math.round((now() - Date.parse(p.startedAt)) / 1000) : 0);
       const key = env[profileKeyVar(profile)];
       const sup = key && p.status === 'RUNNING' ? await createSupervisorClient({ http, podId: p.id, apiKey: key }).status() : null;
+      const { state: podStateName, label } = podState(p.status);
+      const stopped = podStateName === 'stopped';
+      // Un Pod spento non ha uptime né costo orario della GPU; costa lo spazio su disco (se Runpod ne indica il costo).
       return {
-        profile, podId: p.id, status: p.status, gpu: p.gpu ?? null, hourlyUSD: p.cost ?? 0, uptimeSeconds,
-        sessionUSD: ((p.cost ?? 0) * uptimeSeconds) / 3600, orphan: state.pods[profile]?.podId !== p.id,
+        profile, podId: p.id, status: p.status, state: podStateName, stateLabel: label, gpu: p.gpu ?? null,
+        hourlyUSD: stopped ? null : (p.cost ?? 0), diskGB: p.disk ?? null,
+        uptimeSeconds: stopped ? 0 : uptimeSeconds,
+        sessionUSD: stopped ? null : ((p.cost ?? 0) * uptimeSeconds) / 3600, orphan: state.pods[profile]?.podId !== p.id,
         supervisor: sup ? { phase: sup.phase, idleSeconds: sup.idleSeconds, idleLimitSeconds: sup.idleLimitSeconds, uptimeSeconds: sup.uptimeSeconds, maxSeconds: sup.maxSeconds } : null,
       };
     }));

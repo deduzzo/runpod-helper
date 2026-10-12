@@ -163,18 +163,37 @@ export function reviewAdvice({ advice, baseArgs, flags, allowTrustRemoteCode = f
   return { args, accepted, rejected, changes: diffArgs(baseArgs, args) };
 }
 
-export function makeFitsWith(plan) {
-  const c = plan.candidates?.find((x) => x.gpuId === plan.gpu?.id && x.count === plan.gpu?.count);
-  if (!c) return () => true;
-  const tp = plan.gpu.count;
+// Entra la configurazione `option` ({ count, memoryGiB, perGpuGiB }) con questi argomenti? La stima parte da quella del piano
+// (o del profilo): pesi, stato costante, dtype di base della KV; il resto (KV, utilizzo della memoria) dipende dagli argomenti.
+export function fitsForOption(plan, option) {
+  const tp = option.count;
+  const perGpu = option.perGpuGiB ?? plan.estimate.perGpuGiB;
   const fixed = plan.estimate.weightsGiB / tp + 2 + (plan.estimate.extraGiB ?? 0);
-  const kvPerGpu = plan.estimate.perGpuGiB - fixed;
+  const kvPerGpu = perGpu - fixed;
+  const memoryGiB = option.memoryGiB;
   return (args) => {
     const m = argMap(args);
     const isFp8 = /fp8/i.test(m.get('--kv-cache-dtype') ?? 'auto');
     const planFp8 = plan.estimate.kvDtype ? plan.estimate.kvDtype === 'fp8' : plan.kvCacheDtype === 'fp8';
     const factor = isFp8 === planFp8 ? 1 : (isFp8 ? 0.5 : 2);
     const util = Number(m.get('--gpu-memory-utilization') ?? 0.9);
-    return Number.isFinite(util) && util > 0 && util <= 0.98 && fixed + kvPerGpu * factor <= c.memoryGiB * util;
+    return Number.isFinite(util) && util > 0 && util <= 0.98 && fixed + kvPerGpu * factor <= memoryGiB * util;
   };
+}
+
+// La GPU scelta del piano si cerca tra TUTTE le opzioni (non solo nei primi `candidates`).
+export function makeFitsWith(plan) {
+  const same = (x) => (x.id ?? x.gpuId) === plan.gpu?.id && x.count === plan.gpu?.count;
+  const c = plan.options?.find(same) ?? plan.candidates?.find(same);
+  if (!c) return () => true;
+  return fitsForOption(plan, { count: c.count, memoryGiB: c.memoryGiB, perGpuGiB: plan.estimate.perGpuGiB });
+}
+
+// Dopo un consiglio (o qualunque cambio degli argomenti): ricalcola per ogni opzione se entra e marca `fits:false` le altre.
+export function markFits(plan) {
+  for (const o of plan.options ?? []) {
+    if (!o.memoryGiB || !Number.isFinite(o.perGpuGiB)) { o.fits = true; continue; }
+    o.fits = fitsForOption(plan, o)(plan.vllm.args);
+  }
+  return plan;
 }

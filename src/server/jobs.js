@@ -4,10 +4,15 @@ import { redact, redactObject } from '../core/secrets.js';
 
 const MAX_EVENTS = 1000;
 
+// Domanda pendente come la vede il client: `confirm` (sì/no, defYes) o `choice` (id tra le opzioni, defaultId).
+const questionView = (q) => (q.kind === 'choice'
+  ? { id: q.id, kind: 'choice', text: q.text, options: q.options, defaultId: q.defaultId }
+  : { id: q.id, kind: 'confirm', text: q.text, defYes: q.defYes });
+
 export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } = {}) {
   const jobs = new Map();
   let closing = false;
-  const view = (j) => ({ id: j.id, kind: j.kind, status: j.status, startedAt: j.startedAt, question: j.question ? { id: j.question.id, text: j.question.text, defYes: j.question.defYes } : null, result: j.result, error: j.error });
+  const view = (j) => ({ id: j.id, kind: j.kind, status: j.status, startedAt: j.startedAt, question: j.question ? questionView(j.question) : null, result: j.result, error: j.error });
 
   function start(kind, run) {
     for (const j of jobs.values()) {
@@ -36,13 +41,12 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
       clearTimeout(q.timer);
       job.question = null;
     };
-    // `defYes` è solo il pulsante predefinito mostrato all'utente. Senza risposta vale SEMPRE `opts.timeoutValue` (predefinito: no),
-    // così un job non confermato non continua a spendere.
-    const ask = (text, defYes = false, opts) => new Promise((resolve) => {
-      const timeoutValue = Boolean(opts?.timeoutValue ?? false);
-      // Con l'interfaccia in chiusura nessuno può rispondere: vale subito il valore di default (mai domande nuove).
+    // Una sola domanda pendente: la precedente viene chiusa come se fosse scaduta. Senza risposta (scadenza, chiusura) vale
+    // SEMPRE `timeoutValue`, così un job non confermato non continua a spendere. Con l'interfaccia in chiusura nessuno può
+    // rispondere: vale subito il valore di default (mai domande nuove).
+    // `accepts(value)` decide se una risposta è valida; `normalize` la porta al valore del job e dell'evento `answer`.
+    const openQuestion = ({ kind, text, timeoutValue, accepts, normalize, extra, announce }) => new Promise((resolve) => {
       if (job.status !== 'running' || closing) { resolve(timeoutValue); return; }
-      // Una sola domanda pendente: la precedente viene chiusa come se fosse scaduta.
       if (job.question) job.question.settle(job.question.timeoutValue);
       const id = randomUUID();
       const shown = redact(String(text));
@@ -51,12 +55,27 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
       function settle(value) {
         if (job.question?.id !== id) return;
         closeQuestion();
-        emit({ type: 'answer', questionId: id, answer: Boolean(value) });
-        resolve(Boolean(value));
+        const v = normalize(value);
+        emit({ type: 'answer', questionId: id, answer: v });
+        resolve(v);
       }
-      job.question = { id, text: shown, defYes, timeoutValue, settle, timer };
-      emit({ type: 'question', questionId: id, text: shown, defYes });
+      job.question = { id, kind, text: shown, timeoutValue, settle, timer, accepts, ...extra };
+      emit({ type: 'question', questionId: id, text: shown, kind, ...announce(job.question) });
     });
+    // `defYes` è solo il pulsante predefinito mostrato all'utente. Senza risposta vale `opts.timeoutValue` (predefinito: no).
+    const ask = (text, defYes = false, opts) => openQuestion({
+      kind: 'confirm', text, timeoutValue: Boolean(opts?.timeoutValue ?? false),
+      accepts: (v) => typeof v === 'boolean', normalize: Boolean, extra: { defYes }, announce: () => ({ defYes }),
+    });
+    // Scelta tra opzioni { id, label }: la risposta è l'id (oppure null = annulla); senza risposta vale null.
+    const choose = (text, options, defaultId = null) => {
+      const shownOptions = options.map((o) => ({ id: String(o.id), label: redact(String(o.label)) }));
+      return openQuestion({
+        kind: 'choice', text, timeoutValue: null,
+        accepts: (v) => v === null || (typeof v === 'string' && shownOptions.some((o) => o.id === v)),
+        normalize: (v) => v ?? null, extra: { options: shownOptions, defaultId }, announce: (q) => ({ options: q.options, defaultId: q.defaultId }),
+      });
+    };
     const fail = (err) => {
       const e = err ?? {};
       closeQuestion();
@@ -65,7 +84,7 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
       emit({ type: 'failed', error: job.error });
     };
     Promise.resolve()
-      .then(() => run({ ask, emit }))
+      .then(() => run({ ask, choose, emit }))
       .then((result) => {
         const safeResult = redactObject(result ?? null);
         closeQuestion();
@@ -89,7 +108,7 @@ export function createJobs({ questionTimeoutMs = 600_000, onEvent = () => {} } =
 
   function answer(jobId, questionId, value) {
     const j = jobs.get(jobId);
-    if (!j?.question || j.question.id !== questionId) return false;
+    if (!j?.question || j.question.id !== questionId || !j.question.accepts(value)) return false;
     j.question.settle(value);
     return true;
   }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, fmtUSD, fmtDuration } from '../lib/api.js';
 import { Card, Button, Badge, ErrorBox, Spinner } from '../components/ui.jsx';
+import { JobPanel } from '../components/JobPanel.jsx';
 
 const REFRESH_MS = 15_000;
 const TIMEOUT_MS = 20_000;
@@ -12,12 +13,39 @@ function shutdown(p) {
   return `inattivo da ${fmtDuration(s.idleSeconds)} su ${fmtDuration(s.idleLimitSeconds)}${max}`;
 }
 
+// Stato leggibile del Pod: avviato / in avvio / spento. Un Pod spento costa ancora lo spazio su disco finché non viene eliminato.
+const STATES = { running: ['green', 'avviato'], starting: ['amber', 'in avvio'], stopped: ['orange', 'spento'] };
+function stateOf(p) {
+  const state = p.state ?? (p.status === 'RUNNING' ? 'running' : ['EXITED', 'STOPPED'].includes(p.status) ? 'stopped' : 'starting');
+  const [tone, label] = STATES[state] ?? ['gray', p.stateLabel ?? String(p.status ?? '?').toLowerCase()];
+  return { state, tone, label: p.stateLabel ?? label };
+}
+
 export default function Status() {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const alive = useRef(true);
   const inFlight = useRef(false);
+  const [deleting, setDeleting] = useState({}); // profilo -> jobId del job "down" avviato da qui
+  const [deleteErrors, setDeleteErrors] = useState({});
+  const deleteLock = useRef(false);
+  const [jobStatus, setJobStatus] = useState({}); // jobId -> running | done | failed
+
+  // L'eliminazione passa dal job "down" (con la conferma come domanda), come "Spegni" nella scheda Profili.
+  async function remove(profile) {
+    if (deleteLock.current) return;
+    deleteLock.current = true;
+    setDeleteErrors((x) => ({ ...x, [profile]: null }));
+    try {
+      const { job } = await api('/api/jobs', { method: 'POST', body: { action: 'down', profile } });
+      setDeleting((d) => ({ ...d, [profile]: job.id }));
+    } catch (e) {
+      setDeleteErrors((x) => ({ ...x, [profile]: e }));
+    } finally {
+      deleteLock.current = false;
+    }
+  }
 
   async function load() {
     if (inFlight.current) return; // niente richieste sovrapposte (timer + clic su "Aggiorna")
@@ -47,30 +75,52 @@ export default function Status() {
   const pods = status.pods ?? [];
   return (
     <div className="space-y-4">
-      <Card title="Pod attivi">
+      <Card title="Pod">
         <div className="mb-3 flex justify-end"><Button variant="ghost" onClick={load} loading={busy}>Aggiorna</Button></div>
-        {pods.length === 0 ? <p className="text-gray-400">Nessun Pod llmpod attivo.</p> : (
+        {pods.length === 0 ? <p className="text-gray-400">Nessun Pod llmpod (né avviato né spento).</p> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[40rem] text-left text-sm">
               <thead className="text-gray-400"><tr><th scope="col" className="py-1">Profilo</th><th scope="col">Pod</th><th scope="col">Stato</th><th scope="col">GPU</th><th scope="col">Costo</th><th scope="col">Uptime</th><th scope="col">Sessione</th><th scope="col">Spegnimento</th></tr></thead>
               <tbody>
-                {pods.map((p) => (
+                {pods.map((p) => {
+                  const st = stateOf(p);
+                  return (
                   <tr key={p.podId} className="border-t border-white/5 transition hover:bg-white/5">
                     <td className="py-1 pr-2">{p.profile} {p.orphan && <Badge tone="amber">orfano</Badge>}</td>
                     <td className="pr-2">{p.podId}</td>
-                    <td className="pr-2"><Badge tone={p.status === 'RUNNING' ? 'green' : 'cyan'}>{p.status}</Badge></td>
+                    <td className="pr-2"><Badge tone={st.tone}>{st.label}</Badge></td>
                     <td className="pr-2">{p.gpu ? `${p.gpu.id} ×${p.gpu.count}` : '?'}</td>
-                    <td className="pr-2">{fmtUSD(p.hourlyUSD)}/h</td>
-                    <td className="pr-2">{fmtDuration(p.uptimeSeconds)}</td>
-                    <td className="pr-2">{fmtUSD(p.sessionUSD)}</td>
-                    <td className="text-gray-300">{shutdown(p)}</td>
+                    <td className="pr-2">{p.hourlyUSD == null || st.state === 'stopped' ? '—' : `${fmtUSD(p.hourlyUSD)}/h`}</td>
+                    <td className="pr-2">{st.state === 'stopped' ? '—' : fmtDuration(p.uptimeSeconds)}</td>
+                    <td className="pr-2">{p.sessionUSD == null || st.state === 'stopped' ? '—' : fmtUSD(p.sessionUSD)}</td>
+                    <td className="text-gray-300">
+                      {st.state === 'stopped' ? (
+                        <div className="space-y-1">
+                          <p className="text-orange-300">
+                            {`Spento: occupa ancora ${p.diskGB != null ? `${p.diskGB} GB di disco` : 'disco'} e continua a costare — eliminalo con llmpod down ${p.profile}`}
+                          </p>
+                          <Button variant="danger" aria-label={`Elimina il Pod spento ${p.podId}`} onClick={() => remove(p.profile)} disabled={Boolean(deleting[p.profile]) && !['done', 'failed'].includes(jobStatus[deleting[p.profile]])}>Elimina</Button>
+                          {deleteErrors[p.profile] && <div role="alert"><ErrorBox error={deleteErrors[p.profile]} /></div>}
+                        </div>
+                      ) : shutdown(p)}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </Card>
+      {Object.entries(deleting).map(([profile, jobId]) => (
+        <Card key={jobId} title={`Eliminazione di ${profile}`}>
+          <JobPanel
+            jobId={jobId}
+            onFinished={() => { load(); setDeleting((d) => (d[profile] === jobId ? Object.fromEntries(Object.entries(d).filter(([k]) => k !== profile)) : d)); }}
+            onStatus={(st) => setJobStatus((x) => (x[jobId] === st ? x : { ...x, [jobId]: st }))}
+          />
+        </Card>
+      ))}
       <div className="grid gap-4 sm:grid-cols-2">
         <Card title="Credito Runpod"><p className="text-2xl font-semibold neon-text">{status.balance ? fmtUSD(status.balance.balance) : 'non disponibile'}</p></Card>
         <Card title="Volume dei pesi">

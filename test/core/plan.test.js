@@ -53,6 +53,19 @@ describe('makePlan', () => {
     expect(plan.warnings.join(' ')).toMatch(/NO_GPU_AVAILABLE/);
   });
 
+  it('options: tutte le configurazioni che entrano, per costo, con disponibilità qui e altrove; gpu predefinita = la più economica disponibile', async () => {
+    const withDcs = (id, memory, price, dcs) => ({ ...gpu(id, memory, price, 'EU-A'), dataCenters: dcs.map(([d, availability]) => ({ id: d, name: d, availability })) });
+    const { hf, runpod } = fakes({
+      1: [withDcs('GPU80', 80, 1.5, [['EU-A', 'HIGH']]), withDcs('GPU96', 96, 1.2, [['EU-A', 'NONE'], ['US-B', 'LOW']]), withDcs('GPUNO', 80, 1.1, [['EU-A', 'NONE']])],
+    });
+    const plan = await makePlan({ hf, runpod, ...base });
+    expect(plan.options.map((o) => `${o.id}x${o.count}`)).toEqual(['GPUNOx1', 'GPU96x1', 'GPU80x1']);
+    expect(plan.options[0]).toMatchObject({ id: 'GPUNO', name: 'GPUNO', count: 1, memoryGiB: 80, hourly: 1.1, availabilityHere: 'NONE', availableHere: false, available: false, elsewhere: [] });
+    expect(plan.options[1]).toMatchObject({ availableHere: false, available: true, elsewhere: [{ id: 'US-B', availability: 'LOW' }] });
+    expect(plan.options[2]).toMatchObject({ availableHere: true, available: true, headroomGiB: expect.any(Number), perGpuGiB: expect.any(Number) });
+    expect(plan.gpu).toEqual({ id: 'GPU80', count: 1 });
+  });
+
   it('gli override vietati bloccano il piano, quelli sconosciuti sono avvisi', async () => {
     const { hf, runpod } = fakes({ 1: [gpu('GPU80', 80, 1.5, 'EU-A')] });
     await expect(makePlan({ hf, runpod, ...base, extra: ['--api-key', 'x'] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });

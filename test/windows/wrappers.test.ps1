@@ -26,7 +26,7 @@ Set-Content -Path $prepareFile -Encoding ASCII -Value @(
   "`$env:LLMPOD_TEST_NEW = 'x'",
   "& 'cmd' '/c' 'cd'; exit `$LASTEXITCODE"
 )
-Set-Content -Path $statusFile -Encoding ASCII -Value '{"pods":[{"profile":"qwen","podId":"abc123"}],"balance":null,"volume":null}'
+Set-Content -Path $statusFile -Encoding ASCII -Value '{"pods":[{"profile":"qwen","podId":"abc123","state":"running"},{"profile":"glm","podId":"old777","state":"stopped"}],"balance":null,"volume":null}'
 
 $env:FAKE_LOG = $log
 $env:FAKE_PREPARE = $prepareFile
@@ -79,7 +79,8 @@ $psExe = (Get-Process -Id $PID).Path
 Set-Content -Path $log -Value '' -Encoding ASCII
 $stopOut = (& $psExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\stop.ps1') 2>&1 | Out-String)
 Check ($LASTEXITCODE -eq 0) 'stop: uscita 0'
-Check ($stopOut -match 'Il Pod abc123 del profilo qwen resta acceso e a pagamento') 'stop: avviso sul Pod attivo'
+Check ($stopOut -match 'Il Pod abc123 del profilo qwen resta acceso e a pagamento: eliminalo con') 'stop: avviso sul Pod attivo'
+Check ($stopOut -match 'Il Pod old777 del profilo glm .* spento ma costa ancora lo spazio su disco') 'stop: avviso sul Pod spento'
 Check ((Read-Log).Contains('--profile openwebui down')) 'stop: ferma i container'
 
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
