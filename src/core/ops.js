@@ -286,7 +286,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
 
   // Anteprima dell'avvio, senza spesa e senza domande: opzioni avviabili ora con costo orario e costo massimo secondo i limiti
   // di spegnimento del profilo; Pod già esistenti del profilo; credito.
-  async function upPreview(name) {
+  async function upPreview(name, { limit = 12 } = {}) {
     const profile = store.readProfile(name);
     const cfg = store.readConfig();
     const existing = (await runpod.listPods()).filter((p) => p.name === podName(name) && EXISTS(p));
@@ -299,13 +299,28 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       watchdog: wd, balanceUSD: balance,
       activePod: active ? { podId: active.id, status: active.status } : null,
       stoppedPods: existing.filter((p) => !ACTIVE(p)).map((p) => ({ podId: p.id, status: p.status })),
-      options: startable.map((c) => ({
-        gpu: { id: c.id, count: c.count, dataCenterId: c.dataCenterId }, memoryGiB: c.memoryGiB, withVolume: c.withVolume,
-        availability: c.availability, hourlyUSD: c.hourly,
-        // Il watchdog elimina il Pod al più tardi dopo maxHours dall'avvio: è la spesa massima di un avvio.
-        maxCostUSD: Math.round(c.hourly * wd.maxHours * 100) / 100,
-        affordable: balance >= c.hourly,
-      })),
+      // Una sola voce per GPU×numero×volume (la prima in ordine di costo), al massimo `limit`: l'agente deve poterle
+      // mostrare tutte all'utente, non un elenco di centinaia di combinazioni per datacenter.
+      ...(() => {
+        const seen = new Set();
+        const unique = startable.filter((c) => {
+          const k = `${c.id}x${c.count}|${c.withVolume}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        const max = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 12));
+        return {
+          options: unique.slice(0, max).map((c) => ({
+            gpu: { id: c.id, count: c.count, dataCenterId: c.dataCenterId }, memoryGiB: c.memoryGiB, withVolume: c.withVolume,
+            availability: c.availability, hourlyUSD: c.hourly,
+            // Il watchdog elimina il Pod al più tardi dopo maxHours dall'avvio: è la spesa massima di un avvio.
+            maxCostUSD: Math.round(c.hourly * wd.maxHours * 100) / 100,
+            affordable: balance >= c.hourly,
+          })),
+          moreOptions: Math.max(0, unique.length - max),
+        };
+      })(),
     };
   }
 

@@ -242,8 +242,8 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
     },
     {
       name: 'up_preview', description: 'Anteprima dell\'avvio (nessuna spesa): rilegge la disponibilità e restituisce le GPU avviabili ora con costo orario e costo massimo secondo il watchdog. Da mostrare all\'utente prima di up.',
-      inputSchema: obj({ profile: S.profile }, ['profile']),
-      run: ({ profile }) => syncOps().upPreview(profile),
+      inputSchema: obj({ profile: S.profile, limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Numero massimo di opzioni (predefinito 12, una per GPU×numero×volume, in ordine di costo)' } }, ['profile']),
+      run: ({ profile, limit }) => syncOps().upPreview(profile, { limit }),
     },
     {
       name: 'up', description: 'Avvia il Pod (COSTA). Richiede gpu scelta dall\'utente, confirm: true e expectedHourlyUSD uguale a quello di up_preview (se il prezzo è cambiato: errore). Parte in background: restituisce jobId.',

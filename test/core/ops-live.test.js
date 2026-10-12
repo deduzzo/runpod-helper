@@ -179,6 +179,14 @@ describe('ops.upPreview e up con GPU scelta e prezzo atteso', () => {
     expect(t.ask).not.toHaveBeenCalled();
   });
 
+  it('upPreview: al massimo `limit` opzioni, con il numero di quelle escluse', async () => {
+    const t = setup(noPods);
+    const r = await t.ops.upPreview('p', { limit: 1 });
+    expect(r.options.map((o) => o.gpu.id)).toEqual(['GPU80']);
+    expect(r.moreOptions).toBe(1);
+    expect((await t.ops.upPreview('p')).moreOptions).toBe(0);
+  });
+
   it('upPreview segnala un Pod già attivo', async () => {
     const t = setup();
     const r = await t.ops.upPreview('p');
