@@ -142,6 +142,17 @@ cd runpod-helper
 git pull && npm ci && npm run build:web
 ```
 
+## Modi per avviare
+
+Tre strade, dalla più semplice:
+
+- **Con Claude Code (guidata):** `llmpod start` — configura llmpod se serve, chiede la cartella di lavoro e apre
+  Claude Code gestito, che avvia e segue i Pod per te chiedendoti conferma prima di ogni spesa. Senza `npm link`:
+  doppio clic su `scripts/start-managed.command` (macOS) o `scripts/start-managed.sh` (Linux), `scripts\start-managed.bat` (Windows).
+- **Interfaccia web:** `llmpod ui` apre il pannello locale (installabile come PWA); con Docker, `scripts/start.sh`
+  avvia anche Open WebUI per chattare col modello.
+- **Dal terminale (CLI):** i comandi dell'avvio rapido qui sotto.
+
 ## Avvio rapido
 
 ```bash
