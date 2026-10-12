@@ -20,7 +20,7 @@ Rispondi in italiano. Nessuna spesa senza un "sì" esplicito dell'utente al cost
    consigliato) oppure `plan { model: "org/modello", context }`. Riporta gli avvisi del piano.
 5. **Scelta della GPU**: tabella delle `options` utilizzabili (`available` e `fits`): GPU, numero, VRAM, margine,
    **prezzo/h**, disponibilità nel datacenter del volume o altrove (senza volume: pesi scaricati a ogni avvio).
-   Fai scegliere all'utente, poi `save_profile { name, gpu: { id, count } }`.
+   Fai scegliere all'utente, poi `save_profile { name, model: <model del piano>, gpu: { id, count } }`.
 6. **Anteprima dell'avvio**: `up_preview { profile }`. Mostra le opzioni avviabili ORA con **costo orario e
    costo massimo** (`maxCostUSD`, secondo le ore massime del watchdog) e i limiti di spegnimento
    (inattività, ore massime). Chiedi quale GPU e la conferma esplicita del costo.
@@ -28,7 +28,9 @@ Rispondi in italiano. Nessuna spesa senza un "sì" esplicito dell'utente al cost
    dell'opzione scelta> }`. Se l'errore è `PRICE_CHANGED`, mostra il nuovo prezzo e richiedi conferma.
 8. **Avanzamento**: `job_status { jobId }` e `job_events { jobId, since }` ogni 20–30 secondi (fasi: creazione,
    download dei pesi, caricamento, smoke test). Riassumi in breve. Se c'è una **domanda pendente**, mostrala
-   all'utente così com'è (con il costo, se presente) e rispondi con `job_answer` solo con la sua risposta.
+   all'utente così com'è (con il costo e la scadenza `expiresAt`: con il Pod acceso scade in 3 minuti e vale la
+   risposta sicura) e rispondi con `job_answer` solo con la sua risposta. Se l'avvio fallisce il Pod viene
+   eliminato da solo; per interrompere: `job_cancel { jobId, confirm: true }` (elimina il Pod).
 9. **Pronto**: riporta GPU, costo/h, tempo di avvio, eventuale suggerimento di contesto, e i comandi di
    `client_commands { profile }` (`llmpod run claude|opencode|pi|zcode --profile …`). Mai la chiave.
 10. Ricorda i limiti di spegnimento (si allungano con `/llmpod-stato` → keep) e che si spegne con `/llmpod-spegni`.

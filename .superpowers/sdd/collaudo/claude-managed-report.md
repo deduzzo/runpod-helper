@@ -65,11 +65,59 @@ nessuna credenziale reale, nessuna chiamata a Runpod/Hugging Face (fake in tutti
 
 ## Dubbi e scelte da confermare
 - **tensor-parallel-size** è bloccato in `tune` (oltre ai flag richiesti): il numero di GPU del Pod non cambia.
-- Flag sconosciuti in `tune`: avviso (come in `plan`), non errore.
+- Flag sconosciuti in `tune`: dopo la revisione sono un errore (chiudono anche le abbreviazioni di argparse).
 - La stima di memoria di `tune` scala la KV linearmente con max-model-len rispetto al contesto del profilo; non
   modella `max-num-seqs`. Se manca l'opzione GPU nel profilo usa il catalogo; senza dati non blocca (fits null).
 - `job_answer` e `save_profile` non sono in allow (richiedono conferma di Claude Code); `client_commands` sì
   (sola lettura, non nella lista della richiesta).
-- Domande pendenti dei job MCP: scadenza 30 minuti (poi vale il valore sicuro della domanda).
+- Domande pendenti dei job MCP: 30 minuti di norma, 3 minuti mentre un Pod costa (vedi correzioni).
 - ZCode: non ho un URL ufficiale verificato da citare nel README (scritto "app desktop di Z.ai, dal sito ufficiale").
-- Le regole dei permessi Bash usano la sintassi con `*` (es. `Bash(llmpod status*)`), come nella richiesta.
+
+## Correzioni della revisione
+
+Tutte test-first; `npm test` 1024 test vitest + 31 Python verdi, `npm run build:web` verde.
+
+1. **Permessi** (`.claude/settings.json`), sintassi verificata sulla documentazione dei permessi di Claude Code
+   (ordine deny → ask → allow; `Bash(cmd *)` copre anche il comando senza argomenti e non `cmdx`):
+   - `ask` per `mcp__llmpod__{up,tune,keep,down,save_profile,job_answer,job_cancel}` e per
+     `llmpod|node src/cli/index.js {up,tune,keep,down,destroy-volume,rotate-key,save,init,advisor} *`;
+   - `allow` con lo spazio (`Bash(llmpod logs *)` ecc.);
+   - `deny`: niente più `.env.*` (`.env.example` leggibile): `Read/Edit(~/.config/llmpod/.env)`,
+     `Read/Edit(**/.env)`, `cat|grep|head|tail *.env` e `*.env *`, `less|more *.env`, `llmpod env *`.
+   - Test: un piccolo matcher delle regole in `project-config.test.js` verifica decisioni concrete
+     (ask, allow, deny, `.env.example` non bloccato, `llmpod statusx` non consentito).
+2. **tune**: `normalizeArgTokens` porta tutto in `--nome-con-trattini` (minuscole, `_` → `-`, `--k=v` in due token)
+   prima di applyOverrides, argMap, TUNE_LOCKED e checkValues; anche le chiavi di `--set`. Rifiuta i token con un
+   solo trattino (`-tp`), i flag duplicati e i flag sconosciuti (quindi anche le abbreviazioni come
+   `--tensor-parallel`, `--max-model`). Test con `--tensor_parallel_size=2`, `--max_model_len=…`,
+   `--gpu_memory_utilization=0.99`, `set: ['max_model_len=…']`, `-tp 2`.
+3. **Pod acceso dopo un up fallito**:
+   - `up` con `autoTerminate` (usato dai job MCP): se l'avvio fallisce il Pod si elimina subito, senza domanda;
+   - le domande dei job MCP scadono in 3 minuti col valore sicuro durante `tune` e, in `up`, dopo la creazione del
+     Pod (`expiresAt` nella domanda; `ask` dei job accetta `timeoutMs`);
+   - `jobs.cancel` / `jobs.wait` e segnale di annullamento; i job MCP usano uno `sleep` annullabile;
+   - `down` è consentito durante un `up`/`tune` dello stesso profilo: annulla il job (domanda pendente chiusa col
+     valore sicuro), attende che esca (max 60 s) ed elimina il Pod; nuovo strumento `job_cancel` (`confirm: true`,
+     in `ask`) con la stessa logica.
+4. **Chiusura del server MCP**: SIGINT, SIGTERM, chiusura di stdin o del trasporto → `shutdown`: annulla i job e,
+   per gli `up` in corso con Pod già creato, elimina il Pod (tempo massimo 60 s), con log su stderr; poi esce con 0.
+   Test sia sulla funzione sia su un processo reale (`test/mcp/stdio.test.js`, SIGTERM e stdin chiuso).
+
+Minori:
+- `plan` (in allow) non chiama mai il consulente esterno: parametro `advisor` rimosso dallo strumento.
+- `tune` rifiuta di partire se vLLM è in `error` (il ritorno indietro andrebbe su argomenti rotti); se la ricarica
+  fallisce l'errore propone `llmpod down` come passo successivo.
+- `status --all` (CLI) e `status { all: true }` (MCP): anche gli altri Pod dell'account, in sola lettura;
+  CLAUDE.md e skill precisano che `status` da solo elenca solo i Pod `llmpod-*`.
+- `tune` via MCP richiede `expectedArgs` (il `before` dell'anteprima) e rifiuta se gli argomenti attivi sono cambiati.
+- `save_profile` richiede `model` e rifiuta se `last-plan.json` è di un altro modello (accetta anche `<set>/<id>`).
+- `llmpod manage` controlla CLAUDE.md, `.claude/settings.json`, `.claude/skills` e `.mcp.json` nella cartella del
+  progetto (avviso; senza CLAUDE.md chiede se partire comunque); `package.json` `files` li include (verificato con
+  `npm pack --dry-run`).
+- Skill e CLAUDE.md: mai `logs --follow` dall'agente.
+- README: permessi della chiave Runpod (REST + GraphQL per il credito: `llmpod init` verifica solo la parte REST;
+  se il credito risulta "non disponibile" serve una chiave con accesso completo), nota su `LLMPOD_CONFIG_DIR`
+  personalizzata (regola `deny` con percorso assoluto in `settings.local.json`) e sulla sandbox di Claude Code.
+
+Dubbio: non ho potuto verificare quali permessi *Restricted* di Runpod coprano la query GraphQL del credito; il
+README lo dice in modo prudente.

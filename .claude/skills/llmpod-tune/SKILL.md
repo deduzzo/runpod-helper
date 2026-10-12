@@ -21,15 +21,18 @@ Rispondi in italiano. La ricarica interrompe il servizio per alcuni minuti; il P
      l'argomento della recipe con meno token); alta su tutte le posizioni → prova un token in più;
    - OOM → `gpu-memory-utilization=0.85` o meno contesto;
    - contesto insufficiente → `max-model-len` più alto (tune verifica che entri).
-   Mai revisione, numero di GPU, chiave, host, porta o nome servito.
+   Mai revisione, numero di GPU, chiave, host, porta o nome servito; usa i nomi completi dei flag (niente
+   `-tp`, abbreviazioni o flag già presenti in `extra`: per cambiarli usa `set`). Con vLLM in errore tune
+   non parte: guarda i log e valuta `down` + nuovo avvio.
 5. **Anteprima**: `tune_preview { profile, set: ["chiave=valore"] }`. Mostra diff (prima → dopo), stima di
    memoria per GPU (necessaria / utilizzabile), cambio di contesto e flag sconosciuti. Se rifiuta per memoria,
    proponi un'alternativa.
 6. **Conferma esplicita** dell'utente ("vLLM verrà ricaricato: interruzione di alcuni minuti; il Pod resta",
    con il costo orario). Chiedi anche se salvare nel profilo (`save`).
-7. **Applica**: `tune { profile, set, confirm: true, save }` → `jobId`; segui con `job_status`/`job_events`.
-   Se fallisce compare la domanda "Tornare agli argomenti precedenti?": mostrala all'utente e rispondi con
-   `job_answer` secondo la sua risposta (di solito sì).
+7. **Applica**: `tune { profile, set, expectedArgs: <before dell'anteprima>, confirm: true, save }` → `jobId`;
+   segui con `job_status`/`job_events`. Se fallisce compare la domanda "Tornare agli argomenti precedenti?"
+   (scade in 3 minuti: poi torna indietro da sola): mostrala all'utente e rispondi con `job_answer` secondo la sua
+   risposta (di solito sì). Se vLLM non riparte nemmeno così, proponi `/llmpod-spegni`.
 8. **Verifica**: di nuovo `metrics` con lo stesso carico e confronta prima/dopo. Se non migliora, proponi di
    tornare indietro (un altro `tune`).
 

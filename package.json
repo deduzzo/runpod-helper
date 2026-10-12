@@ -14,7 +14,11 @@
   "files": [
     "src",
     "data",
-    "dist"
+    "dist",
+    "CLAUDE.md",
+    ".claude/settings.json",
+    ".claude/skills",
+    ".mcp.json"
   ],
   "scripts": {
     "test": "npm run test:js && npm run test:py",

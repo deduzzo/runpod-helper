@@ -1,9 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LlmpodError, Codes } from '../../core/errors.js';
 import { assertProfileName } from '../../core/config.js';
 
 // Cartella del progetto llmpod (dal percorso del pacchetto): contiene CLAUDE.md, .claude/ (skill e permessi) e .mcp.json.
 export const PROJECT_DIR = fileURLToPath(new URL('../../../', import.meta.url)).replace(/[\\/]$/, '');
+
+// File che rendono "managed" la sessione di Claude Code: regole, permessi, skill e server MCP del progetto.
+export const PROJECT_FILES = ['CLAUDE.md', '.claude/settings.json', '.claude/skills', '.mcp.json'];
+export const missingProjectFiles = (dir = PROJECT_DIR) => PROJECT_FILES.filter((f) => !fs.existsSync(path.join(dir, f)));
 
 const INSTALL_HINT = 'Installa Claude Code: curl -fsSL https://claude.ai/install.sh | bash   (oppure: npm install -g @anthropic-ai/claude-code)';
 
@@ -17,6 +23,14 @@ export function register(program, getCtx, result) {
       if (opts.profile) {
         assertProfileName(opts.profile);
         args.push(`Lavora sul profilo llmpod "${opts.profile}": mostrami lo stato dei Pod e proponi i passi successivi.`);
+      }
+      const missing = missingProjectFiles();
+      if (missing.length) {
+        ctx.io.err(`⚠ Mancano in ${PROJECT_DIR}: ${missing.join(', ')}. Claude Code partirebbe senza le regole, i permessi o il server MCP di llmpod`);
+        ctx.io.err('  Usa una copia completa del repository o reinstalla il pacchetto');
+        if (missing.includes('CLAUDE.md') && !(await ctx.io.ask('Avviare comunque Claude Code?', false))) {
+          throw new LlmpodError(Codes.CANCELLED, 'Avvio annullato: manca CLAUDE.md nella cartella del progetto');
+        }
       }
       ctx.io.err(`▸ Avvio di Claude Code in ${PROJECT_DIR}`);
       // Nessuna chiave nell'ambiente: Claude Code usa llmpod tramite il server MCP e la CLI, che leggono da soli la configurazione.

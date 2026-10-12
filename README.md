@@ -156,8 +156,12 @@ Senza `npm link` si può usare `node src/cli/index.js <comando>` dalla cartella 
 llmpod init
 ```
 
-- **Chiave Runpod** con i permessi minimi: su https://www.runpod.io/console/user/settings crea una chiave
-  *Restricted* con **Pods**, **Network Volumes** e **Templates** in Read/Write (nient'altro);
+- **Chiave Runpod**: su https://www.runpod.io/console/user/settings crea una chiave *Restricted* con
+  **Pods**, **Network Volumes** e **Templates** in Read/Write, oppure una chiave con accesso completo (*All*).
+  llmpod usa l'API REST (Pod, volumi, catalogo GPU e datacenter) e l'API GraphQL per il credito residuo, che
+  `llmpod up` controlla prima di creare un Pod. `llmpod init` verifica la chiave elencando i Pod (REST): se
+  poi `llmpod status` mostra "Credito residuo: non disponibile" o `llmpod up` si ferma sul credito, la chiave
+  *Restricted* non consente la lettura via GraphQL e serve una chiave con accesso completo;
 - **token Hugging Face** facoltativo: serve solo per i modelli gated (basta un token *Read*);
 - **datacenter** preferito (llmpod mostra quelli con GPU disponibili) e **network volume** per i pesi
   (facoltativo, con il costo mensile: evita di riscaricarli a ogni avvio).
@@ -228,23 +232,44 @@ Al primo avvio Claude Code chiede di approvare il server MCP `llmpod` del proget
 - senza domande solo le operazioni di sola lettura: `status`, `metrics`, `logs`, `search`, `plan`,
   `model_sets`, `profiles`, `job_status`, `job_events`, `up_preview`, `tune_preview`, `keep_preview`,
   `client_commands` (e gli stessi comandi CLI di sola lettura);
-- **chiedono sempre conferma**: `up`, `tune`, `keep`, `down`, `save_profile`, `job_answer`. In più gli strumenti
-  che costano richiedono `confirm: true`, e `up` anche il prezzo orario mostrato dall'anteprima
-  (`expectedHourlyUSD`): se nel frattempo è cambiato, si ferma con `PRICE_CHANGED` senza creare nulla;
-- **vietato**: leggere `~/.config/llmpod/.env` o altri `.env`, `cat`/`grep` sui `.env`, `llmpod env`. Le chiavi
-  non compaiono mai nelle risposte del server MCP; i client si avviano con `llmpod run …`.
+- **chiedono sempre conferma** (regole `ask`, che valgono anche se altrove hai consentito di più): gli strumenti
+  `up`, `tune`, `keep`, `down`, `save_profile`, `job_answer`, `job_cancel` e i comandi `llmpod up|tune|keep|down|
+  destroy-volume|rotate-key|save|init|advisor` (anche nella forma `node src/cli/index.js …`). In più gli strumenti
+  che costano richiedono `confirm: true`, `up` anche il prezzo orario mostrato dall'anteprima
+  (`expectedHourlyUSD`: se nel frattempo è cambiato si ferma con `PRICE_CHANGED` senza creare nulla), `tune` gli
+  argomenti attivi visti nell'anteprima (`expectedArgs`) e `save_profile` il modello del piano mostrato;
+- **vietato** (`deny`): leggere o modificare `~/.config/llmpod/.env` e i file `.env` del progetto, `cat`/`grep`/
+  `head`/`tail` sui `.env`, `llmpod env` (stampa le chiavi). `.env.example` resta leggibile. Le chiavi non
+  compaiono mai nelle risposte del server MCP; i client si avviano con `llmpod run …`.
+- **Se usi una cartella di configurazione diversa** (`LLMPOD_CONFIG_DIR`): le regole sopra coprono solo
+  `~/.config/llmpod/.env` e i `.env` sotto la cartella del progetto. Aggiungi in `.claude/settings.local.json`
+  (non versionato) una regola con il percorso assoluto, es. `"deny": ["Read(//percorso/llmpod/.env)",
+  "Edit(//percorso/llmpod/.env)"]`.
+- Le regole `Read`/`Edit` valgono per gli strumenti di Claude Code e per i comandi di file riconosciuti (`cat`,
+  `head`, …), non per un programma qualsiasi che apra il file da sé (es. uno script Python). Per un blocco a
+  livello di sistema operativo attiva la **sandbox** di Claude Code (`/sandbox`), che applica le stesse regole
+  a tutti i comandi della shell.
+
+**Sicurezza dei job**: se un avvio fallisce, il server MCP elimina subito il Pod (senza aspettare una risposta);
+mentre un Pod costa, le domande pendenti scadono dopo 3 minuti con il valore sicuro; `down` (o `job_cancel`)
+durante un `up`/`tune` annulla il job ed elimina il Pod; alla chiusura del server (fine sessione, SIGINT,
+SIGTERM) un `up` ancora in corso con il Pod già creato viene annullato e il Pod eliminato (entro 60 s).
 
 **Comandi CLI pensati anche per l'agente** (tutti con `--json`):
 
 ```bash
 llmpod metrics [profilo] --window 10     # due letture di /metrics a 10 s: tassi, KV %, MTP/DSpark, errori
-llmpod logs [profilo] --since 120 --follow
+llmpod logs [profilo] --since 120       # --follow resta aperto: solo da terminale, non dall'agente
+llmpod status --all                     # anche gli altri Pod dell'account (non creati da llmpod), sola lettura
 llmpod tune <profilo> --set max-num-seqs=4 --dry-run     # diff e memoria, senza ricaricare
 llmpod tune <profilo> --set kv-cache-dtype=fp8 --save    # conferma, ricarica vLLM, smoke test, salva nel profilo
 ```
 
-`tune` parte dagli argomenti attivi sul Pod, accetta anche `max-model-len` (mai revisione, numero di GPU,
-chiave, host, porta o nome servito) e rifiuta le modifiche che non entrano nella memoria della GPU del Pod.
+`tune` parte dagli argomenti attivi sul Pod (solo con vLLM pronto), accetta anche `max-model-len` (mai
+revisione, numero di GPU, chiave, host, porta o nome servito), normalizza i nomi (`--max_model_len=…` diventa
+`--max-model-len …`), rifiuta forme brevi (`-tp`), abbreviazioni, flag sconosciuti o duplicati e le modifiche che
+non entrano nella memoria della GPU del Pod. Se la ricarica fallisce propone di tornare agli argomenti
+precedenti e, se vLLM non riparte, `llmpod down`.
 
 **Il server MCP in altri progetti**:
 
