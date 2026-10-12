@@ -85,6 +85,18 @@ export function createSupervisorClient({ http, podId, apiKey, baseUrl = proxyUrl
   };
 }
 
+// Dopo POST /reload: il supervisore imposta args e fase 'loading' prima di fermare il vecchio vLLM. Si attende di vederli
+// (oppure 'error'), altrimenti waitForReady potrebbe leggere 'ready' dal processo che sta morendo. false se non succede entro il limite.
+export async function waitReloadStarted({ sup, args, timeoutMs = 60_000, sleep = defaultSleep, now = Date.now }) {
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    const st = await sup.status();
+    if (st && (st.phase === 'error' || (JSON.stringify(st.args) === JSON.stringify(args) && st.phase !== 'ready'))) return true;
+    if (now() >= deadline) return false;
+    await sleep(2000);
+  }
+}
+
 export const readyTimeoutMs = (weightsBytes) => Math.round((weightsBytes / 50e6) * 1000) + 600_000;
 
 // `since`: cursore dei log da cui ripartire (dopo un riavvio di vLLM). Il cursore raggiunto è in `logCursor`

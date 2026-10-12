@@ -13,11 +13,12 @@ import { diffArgs, fitsForOption } from './advisor/advice.js';
 import { loadFlags } from './planner/vllm-args.js';
 import { syncDerivedFields } from './planner/plan.js';
 import { profileDownloadBytes } from './planner/vram.js';
-import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs } from './pod/launcher.js';
+import { rankCandidates, createWithFallback, waitForRunning, createSupervisorClient, waitForReady, readyTimeoutMs, waitReloadStarted } from './pod/launcher.js';
 import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
 import { applyGpuChoice, vramLabel } from './planner/gpu-choice.js';
 import { podState, STOPPED_STATUSES } from './pod-state.js';
+import { createLiveOps } from './ops-live.js';
 
 // ACTIVE: Pod acceso (o in avvio). Un Pod EXITED (spento) non è attivo ma ESISTE ancora e costa lo spazio su disco:
 // llmpod lo elimina sempre (DELETE), non lo "ferma" mai.
@@ -227,18 +228,9 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       return null;
     }
     events.emit('phase', { message: 'Riavvio di vLLM con gli argomenti corretti' });
-    // Il supervisore imposta args e fase 'loading' prima di fermare il vecchio vLLM: si attende di vederli,
-    // altrimenti waitForReady potrebbe leggere 'ready' dal processo che sta morendo.
-    const deadline = now() + 60_000;
-    for (;;) {
-      const st = await sup.status();
-      if (st && (st.phase === 'error' || (JSON.stringify(st.args) === JSON.stringify(fixed.vllm.args) && st.phase !== 'ready'))) return fixed.vllm.args;
-      if (now() >= deadline) {
-        events.emit('warning', { message: 'Il supervisore non ha confermato il riavvio di vLLM entro 60 secondi' });
-        return null;
-      }
-      await sleep(2000);
-    }
+    if (await waitReloadStarted({ sup, args: fixed.vllm.args, sleep, now })) return fixed.vllm.args;
+    events.emit('warning', { message: 'Il supervisore non ha confermato il riavvio di vLLM entro 60 secondi' });
+    return null;
   }
 
   function saveProfileArgs(name, args) {
@@ -249,7 +241,63 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     return profile;
   }
 
-  async function up(name, { yes = false, dryRun = false } = {}) {
+  // Candidati per l'avvio. `all`: tutte le opzioni salvate nel profilo; `startable` sono quelle avviabili ORA (disponibili, con
+  // prezzo, che con gli argomenti salvati entrano in memoria; anche in altri datacenter senza volume, salvo
+  // allowFallbackWithoutVolume "never"), dalla più economica.
+  async function launchCandidates(profile, cfg, { all }) {
+    const wantedAlternatives = all && profile.options?.length
+      ? profile.options.map((o) => ({ id: o.id, count: o.count }))
+      : (profile.alternatives ?? []);
+    const wanted = [];
+    for (const g of [profile.gpu, ...wantedAlternatives].filter(Boolean)) if (!wanted.some((w) => w.id === g.id && w.count === g.count)) wanted.push({ id: g.id, count: g.count });
+    const counts = [...new Set(wanted.map((g) => g.count))];
+    const catalogs = {};
+    for (const count of counts) catalogs[count] = await runpod.listGpus({ count, cloud: profile.cloud, minCudaVersion: cfg.minCudaVersion });
+    const { inVolumeDc, otherDcs } = rankCandidates({ profile: { ...profile, gpu: wanted[0], alternatives: wanted.slice(1) }, catalogs, cloud: profile.cloud });
+    const optionOf = (c) => profile.options?.find((o) => o.id === c.id && o.count === c.count);
+    const memoryOf = (c) => optionOf(c)?.memoryGiB ?? (catalogs[c.count] ?? []).find((g) => g.id === c.id)?.memory ?? null;
+    const fits = (c) => {
+      const o = optionOf(c);
+      if (!o) return true;
+      if (o.fits === false) return false;
+      const memoryGiB = memoryOf(c);
+      if (!memoryGiB || !profile.estimate?.weightsGiB || !Number.isFinite(o.perGpuGiB)) return true;
+      return fitsForOption({ estimate: profile.estimate, kvCacheDtype: null }, { count: c.count, memoryGiB, perGpuGiB: o.perGpuGiB })(profile.vllm.args);
+    };
+    const elsewhere = profile.allowFallbackWithoutVolume === 'never' ? [] : otherDcs;
+    const startable = [...inVolumeDc, ...elsewhere]
+      .filter((c) => c.hourly > 0 && c.availability !== 'NONE' && fits(c))
+      .sort((a, b) => a.hourly - b.hourly)
+      .map((c) => ({ ...c, memoryGiB: memoryOf(c) }));
+    return { catalogs, inVolumeDc, otherDcs, startable, wanted };
+  }
+
+  // Anteprima dell'avvio, senza spesa e senza domande: opzioni avviabili ora con costo orario e costo massimo secondo i limiti
+  // di spegnimento del profilo; Pod già esistenti del profilo; credito.
+  async function upPreview(name) {
+    const profile = store.readProfile(name);
+    const cfg = store.readConfig();
+    const existing = (await runpod.listPods()).filter((p) => p.name === podName(name) && EXISTS(p));
+    const active = existing.find(ACTIVE);
+    const { balance } = await runpod.getBalance();
+    const { startable } = await launchCandidates(profile, cfg, { all: true });
+    const wd = { ...DEFAULT_WATCHDOG, ...profile.watchdog };
+    return {
+      profile: name, model: profile.model.id, context: profile.context, mtp: profile.mtp ?? null,
+      watchdog: wd, balanceUSD: balance,
+      activePod: active ? { podId: active.id, status: active.status } : null,
+      stoppedPods: existing.filter((p) => !ACTIVE(p)).map((p) => ({ podId: p.id, status: p.status })),
+      options: startable.map((c) => ({
+        gpu: { id: c.id, count: c.count, dataCenterId: c.dataCenterId }, memoryGiB: c.memoryGiB, withVolume: c.withVolume,
+        availability: c.availability, hourlyUSD: c.hourly,
+        // Il watchdog elimina il Pod al più tardi dopo maxHours dall'avvio: è la spesa massima di un avvio.
+        maxCostUSD: Math.round(c.hourly * wd.maxHours * 100) / 100,
+        affordable: balance >= c.hourly,
+      })),
+    };
+  }
+
+  async function up(name, { yes = false, dryRun = false, gpu = null, expectedHourlyUSD = null, costConfirmed = false } = {}) {
     const profile = store.readProfile(name);
     const cfg = store.readConfig();
     const env = store.readEnv();
@@ -280,33 +328,20 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
 
     // Con la scelta dell'utente (terminale interattivo o web) si considerano TUTTE le opzioni salvate nel profilo; altrimenti
     // (o per profili vecchi senza `options`) solo la GPU del profilo e le sue alternative, con ripieghi.
-    const choiceMode = Boolean(askChoice) && !yes && !dryRun;
-    const wantedAlternatives = choiceMode && profile.options?.length
-      ? profile.options.map((o) => ({ id: o.id, count: o.count }))
-      : (profile.alternatives ?? []);
-    const wanted = [];
-    for (const g of [profile.gpu, ...wantedAlternatives].filter(Boolean)) if (!wanted.some((w) => w.id === g.id && w.count === g.count)) wanted.push({ id: g.id, count: g.count });
-    const counts = [...new Set(wanted.map((g) => g.count))];
-    const catalogs = {};
-    for (const count of counts) catalogs[count] = await runpod.listGpus({ count, cloud: profile.cloud, minCudaVersion: cfg.minCudaVersion });
-    const { inVolumeDc, otherDcs } = rankCandidates({ profile: { ...profile, gpu: wanted[0], alternatives: wanted.slice(1) }, catalogs, cloud: profile.cloud });
+    // `gpu` (server MCP): GPU già scelta dall'utente su up_preview; si usa solo quella, se è ancora avviabile.
+    const choiceMode = Boolean(askChoice) && !yes && !dryRun && !gpu;
+    const { catalogs, inVolumeDc, otherDcs, startable, wanted } = await launchCandidates(profile, cfg, { all: choiceMode || Boolean(gpu) });
     let candidates = inVolumeDc.filter((c) => c.hourly > 0);
-    if (choiceMode) {
-      // Modalità scelta: niente domanda di ripiego, la scelta stessa è il consenso. Si propongono anche le opzioni
-      // disponibili in altri datacenter (senza volume), salvo allowFallbackWithoutVolume "never". Si escludono le GPU non disponibili ora e quelle che con gli argomenti
-      // salvati del profilo non entrerebbero in memoria.
-      const optionOf = (c) => profile.options?.find((o) => o.id === c.id && o.count === c.count);
-      const fits = (c) => {
-        const o = optionOf(c);
-        if (!o) return true;
-        if (o.fits === false) return false;
-        const memoryGiB = o.memoryGiB ?? (catalogs[c.count] ?? []).find((g) => g.id === c.id)?.memory;
-        if (!memoryGiB || !profile.estimate?.weightsGiB || !Number.isFinite(o.perGpuGiB)) return true;
-        return fitsForOption({ estimate: profile.estimate, kvCacheDtype: null }, { count: c.count, memoryGiB, perGpuGiB: o.perGpuGiB })(profile.vllm.args);
-      };
-      // allowFallbackWithoutVolume "never": mai opzioni di altri datacenter (senza volume).
-      const elsewhere = profile.allowFallbackWithoutVolume === 'never' ? [] : otherDcs;
-      candidates = [...candidates, ...elsewhere].filter((c) => c.hourly > 0 && c.availability !== 'NONE' && fits(c)).sort((a, b) => a.hourly - b.hourly);
+    if (gpu) {
+      const same = (c) => c.id === gpu.id && (gpu.count == null || c.count === gpu.count) && (!gpu.dataCenterId || c.dataCenterId === gpu.dataCenterId);
+      const chosen = startable.filter(same);
+      if (!chosen.length) {
+        throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `${gpu.id}${gpu.count ? ` ×${gpu.count}` : ''} non è avviabile ora per il profilo ${name}`, { hint: 'Rileggi le opzioni disponibili (up_preview) e fai scegliere di nuovo' });
+      }
+      candidates = [chosen.find((c) => c.withVolume) ?? chosen[0]];
+    } else if (choiceMode) {
+      // Modalità scelta: niente domanda di ripiego, la scelta stessa è il consenso.
+      candidates = startable;
     } else if (!candidates.some((c) => c.availability !== 'NONE') && otherDcs.length) {
       const policy = profile.allowFallbackWithoutVolume ?? 'ask';
       const allow = policy === 'always' || (policy === 'ask' && (yes || dryRun || await ask(
@@ -338,12 +373,16 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     }
 
     const first = candidates[0];
+    // Il costo è stato confermato dall'utente su un prezzo preciso (up_preview): se nel frattempo è cambiato si ferma qui.
+    if (expectedHourlyUSD != null && Math.abs(first.hourly - expectedHourlyUSD) > 0.0005) {
+      throw new LlmpodError(Codes.PRICE_CHANGED, `Il prezzo è cambiato: ${first.id} ×${first.count} costa ora ${fmtUSD(first.hourly)}/h invece di ${fmtUSD(expectedHourlyUSD)}/h`, { hint: 'Rileggi le opzioni con up_preview e chiedi di nuovo conferma all\'utente: nessun Pod è stato creato' });
+    }
     if (balance < first.hourly) {
       throw new LlmpodError(Codes.INSUFFICIENT_BALANCE, `Credito Runpod (${fmtUSD(balance)}) inferiore a un'ora di utilizzo (${fmtUSD(first.hourly)})`, { hint: 'Ricarica il credito su https://www.runpod.io/console/user/billing' });
     }
     const buildBody = (c) => buildPodBody({ profile, candidate: c, apiKey, hfToken: env.HF_TOKEN, minCudaVersion: cfg.minCudaVersion });
     const conf = await confirmCost({
-      hourlyUSD: first.hourly, yes, dryRun, ask,
+      hourlyUSD: first.hourly, yes: yes || costConfirmed, dryRun, ask,
       description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`,
     });
     if (conf.dryRun) {
@@ -589,5 +628,6 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     throw new LlmpodError(Codes.INVALID_INPUT, 'Specifica il profilo con --profile', { hint: all.length ? `Profili: ${all.join(', ')}` : 'Crea un profilo con: llmpod plan <modello> e llmpod save <nome>' });
   }
 
-  return { saveProfile, saveProfileArgs, up, down, keep, status, endpoint, rotateKey, resolveProfile };
+  const live = createLiveOps({ store, runpod, http, events, ask, now, sleep, findPod, keyOf, refreshZcode });
+  return { saveProfile, saveProfileArgs, up, upPreview, down, keep, status, endpoint, rotateKey, resolveProfile, ...live };
 }
