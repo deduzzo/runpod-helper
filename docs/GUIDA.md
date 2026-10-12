@@ -105,6 +105,62 @@ Il file `.env` ha permessi `600` (solo il tuo utente può leggerlo): se sono pi�
 `CONFIG_PERMISSIONS`. Le chiavi non vengono mai stampate, tranne con `llmpod env` quando lo chiedi tu.
 **Non condividere `.env`, non copiarlo in un repository e non incollarne il contenuto in chat o nelle issue.**
 
+### Configurare senza terminale interattivo
+
+`llmpod init` e `llmpod advisor` fanno domande e chiedono le chiavi con input nascosto. Senza un terminale (script,
+CI, il prefisso `!` di Claude Code, un comando lanciato con `</dev/null`) le domande non hanno risposta: llmpod si
+ferma con un errore che indica **quale opzione usare al posto della domanda**, invece di annullare in silenzio.
+
+**Le chiavi non si passano mai come argomento** (`--api-key …` viene rifiutata): finirebbero nella cronologia della
+shell e nell'elenco dei processi. Si passano dallo **standard input** (la prima riga, spazi esclusi), da una pipe.
+
+Consulente, con tutte le informazioni nelle opzioni (nessuna domanda):
+
+```bash
+# macOS: la chiave è negli appunti
+pbpaste | llmpod advisor --preset zai-coding-plan --api-key-stdin --accept-zai-notice
+
+# qualsiasi shell: la chiave si digita senza eco e non resta nella cronologia
+read -rs K && printf '%s' "$K" | llmpod advisor --preset zai-coding-plan --api-key-stdin --accept-zai-notice; unset K
+
+# da un file leggibile solo da te (chmod 600)
+llmpod advisor --preset anthropic --model <modello> --api-key-stdin < ~/chiave-consulente.txt
+
+# endpoint personalizzato
+pbpaste | llmpod advisor --preset custom --protocol openai --base-url https://host/v1 --model <modello> --auth bearer --api-key-stdin
+```
+
+- `--api-key-stdin` richiede `--preset` e **non fa domande**: modello, URL, protocollo e autenticazione (preset
+  `custom`) arrivano da `--model`, `--base-url`, `--protocol` (`anthropic` o `openai`) e `--auth` (`bearer` o
+  `x-api-key`).
+- Il preset `zai-coding-plan` mostra un avviso sulle condizioni del Coding Plan. Senza terminale va confermato con
+  `--accept-zai-notice`, che registra la presa visione (una sola volta); senza il flag llmpod si ferma e lo spiega.
+  Leggi l'avviso prima di aggiungere il flag: stampa il testo a ogni esecuzione.
+- La chiave non viene mai stampata né inclusa nei messaggi d'errore.
+
+Credenziali di `init`:
+
+```bash
+pbpaste | llmpod init --runpod-key-stdin --datacenter EU-RO-1 --no-volume
+pbpaste | llmpod init --hf-token-stdin --datacenter EU-RO-1 --no-volume   # richiede la chiave Runpod già salvata
+```
+
+- `--runpod-key-stdin` e `--hf-token-stdin` sono **mutuamente esclusivi** perché lo standard input è uno solo. Se ti
+  servono entrambi, lancia `init` **due volte** (prima con `--runpod-key-stdin`, poi con `--hf-token-stdin`) oppure
+  usa le variabili d'ambiente.
+- `--from-env` legge `RUNPOD_API_KEY` e `HF_TOKEN` dall'**ambiente del processo**, ma solo se lo chiedi con questo
+  flag (mai di default): `RUNPOD_API_KEY=… HF_TOKEN=… llmpod init --from-env …`. Imposta le variabili in modo che
+  non finiscano nella cronologia (per esempio `read -rs RUNPOD_API_KEY; export RUNPOD_API_KEY`).
+- Con uno di questi flag le domande sulle credenziali non vengono fatte: una chiave già salvata resta quella,
+  a meno che tu non ne fornisca una nuova.
+- Anche le altre domande di `init` hanno la loro opzione quando manca il terminale: `--datacenter <id>`,
+  `--volume-size <gb>`, `--no-volume`, `--yes` (conferma il costo del volume e riusa un volume esistente).
+
+**Con il prefisso `!` di Claude Code** il comando gira senza terminale: passa la chiave via stdin **da un file o dagli
+appunti** (per esempio `! pbpaste | llmpod advisor --preset zai-coding-plan --api-key-stdin --accept-zai-notice`),
+**mai scrivendola nel prompt o nel comando**: quello che digiti nella conversazione è visibile al modello e resta
+nella cronologia.
+
 ---
 
 ## Concetti

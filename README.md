@@ -84,6 +84,28 @@ La configurazione guidata chiede:
 Le chiavi vengono salvate in `~/.config/llmpod/.env` con permessi `600` e non vengono mai stampate: non
 condividere quel file.
 
+#### Configurare senza terminale interattivo
+
+Senza un terminale (script, CI, prefisso `!` di Claude Code) le domande di `init` e `advisor` non hanno risposta e
+llmpod si ferma indicando l'opzione da usare. Le chiavi si passano dallo **standard input**, mai come argomento
+(finirebbero nella cronologia della shell):
+
+```bash
+# macOS: chiave negli appunti
+pbpaste | llmpod advisor --preset zai-coding-plan --api-key-stdin --accept-zai-notice
+# qualsiasi shell: digitata senza eco
+read -rs K && printf '%s' "$K" | llmpod advisor --preset zai-coding-plan --api-key-stdin --accept-zai-notice; unset K
+# credenziali di init (uno solo per volta: stdin è uno solo; per entrambi lancia init due volte)
+pbpaste | llmpod init --runpod-key-stdin --datacenter EU-RO-1 --no-volume
+pbpaste | llmpod init --hf-token-stdin --datacenter EU-RO-1 --no-volume
+# oppure dall'ambiente, solo se lo chiedi: RUNPOD_API_KEY / HF_TOKEN
+llmpod init --from-env --datacenter EU-RO-1 --no-volume
+```
+
+`--accept-zai-notice` registra la presa visione dell'avviso del Coding Plan di Z.ai al posto della domanda. Con il
+prefisso `!` di Claude Code passa la chiave da un file o dagli appunti, **mai scritta nel prompt**. Dettagli e
+opzioni: [guida](docs/GUIDA.md#configurare-senza-terminale-interattivo).
+
 ### 3. Client (almeno uno)
 
 | Client | Installazione ufficiale |

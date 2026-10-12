@@ -13,14 +13,14 @@ import { zcodeDir, isZcodeRunning } from '../core/clients/zcode.js';
 
 export const VERSION = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
-export function createContext({ env = process.env, io, overrides = {}, platform = process.platform }) {
+export function createContext({ env = process.env, io, overrides = {}, platform = process.platform, stdin = process.stdin }) {
   const store = createStore({ dir: configDir(env), platform, env });
   store.checkPermissions();
   const http = overrides.http ?? createHttp({ userAgent: `llmpod/${VERSION}` });
   const events = createEvents();
   const cache = {};
   const ctx = {
-    env, io, store, http, events, platform,
+    env, io, store, http, events, platform, stdin,
     spawn: overrides.spawn ?? spawn,
     exit: overrides.exit ?? ((code) => process.exit(code)),
     sleep: overrides.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),

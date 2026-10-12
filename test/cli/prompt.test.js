@@ -56,4 +56,32 @@ describe('createPrompt', () => {
     expect(written()).not.toContain('segretissimo');
     prompt.close();
   });
+
+  it('(e) eofHint: a input terminato la domanda fallisce indicando l\'opzione da usare, senza usare il predefinito', async () => {
+    const { input, prompt } = setup();
+    input.end();
+    const hint = 'Usa --accept-zai-notice';
+    await expect(within(prompt.ask('Q?', true, { eofHint: hint }))).rejects.toMatchObject({ code: 'INVALID_INPUT', hint });
+    await expect(within(prompt.askText('Q?', 'x', { eofHint: hint }))).rejects.toMatchObject({ hint });
+    await expect(within(prompt.askSecret('Q?', { eofHint: hint }))).rejects.toMatchObject({ hint });
+    // senza eofHint il comportamento resta quello di prima
+    expect(await within(prompt.ask('Q?', true))).toBe(true);
+  });
+
+  it('(g) input già consumato fino alla fine (es. chiave letta da stdin): nessuna attesa infinita', async () => {
+    const { input, prompt } = setup();
+    input.end('chiave');
+    input.resume();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(input.readableEnded).toBe(true);
+    expect(await within(prompt.ask('Q?', true))).toBe(true);
+    await expect(within(prompt.askText('Q?', 'x', { eofHint: 'usa --opzione' }))).rejects.toMatchObject({ hint: 'usa --opzione' });
+  });
+
+  it('(f) eofHint non interviene se la riga è presente', async () => {
+    const { input, prompt } = setup();
+    input.write('s\n');
+    expect(await within(prompt.ask('Q?', false, { eofHint: 'x' }))).toBe(true);
+    prompt.close();
+  });
 });
