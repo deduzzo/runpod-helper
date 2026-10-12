@@ -134,6 +134,13 @@ describe('ops.tunePreview / ops.tune', () => {
     expect(t.calls('/reload', 'POST')).toHaveLength(2);
   });
 
+  it('confirmed: nessuna domanda per la ricarica, ma il ritorno agli argomenti precedenti resta una domanda', async () => {
+    const t = setup({ onReload: (_a, n) => (n === 1 ? 'error' : 'ready') }, { answers: [false] });
+    await expect(t.ops.tune('p', { set: ['max-num-seqs=4'], confirmed: true })).rejects.toMatchObject({ details: expect.objectContaining({ reverted: false }) });
+    expect(t.ask).toHaveBeenCalledTimes(1);
+    expect(t.ask.mock.calls[0][0]).toMatch(/Tornare agli argomenti precedenti/);
+  });
+
   it('il supervisore rifiuta il reload (409) → errore, nessun ritorno necessario', async () => {
     const t = setup({ reloadStatus: 409 });
     await expect(t.ops.tune('p', { set: ['max-num-seqs=4'], yes: true })).rejects.toMatchObject({ code: 'HTTP' });
@@ -186,6 +193,17 @@ describe('ops.upPreview e up con GPU scelta e prezzo atteso', () => {
     await expect(t.ops.up('p', { gpu: { id: 'GPU80', count: 1 }, expectedHourlyUSD: 1.5 })).rejects.toMatchObject({ code: 'CANCELLED' });
     expect(t.ask.mock.calls[0][0]).toMatch(/1,50 \$\/h/);
     expect(t.runpod.createPod).not.toHaveBeenCalled();
+  });
+});
+
+describe('ops.keep con preview', () => {
+  it('restituisce limiti attuali, nuovi e costo massimo senza domande né chiamate a /watchdog', async () => {
+    const t = setup();
+    const r = await t.ops.keep('p', { maxHours: 12, preview: true });
+    expect(r).toMatchObject({ preview: true, podId: 'pod1', hourlyUSD: 1.5, spendCanIncrease: true, next: { maxSeconds: 43200, remainingSeconds: 39600 } });
+    expect(r.maxCostUSD).toBeCloseTo(16.5);
+    expect(t.ask).not.toHaveBeenCalled();
+    expect(t.calls('/watchdog')).toHaveLength(0);
   });
 });
 

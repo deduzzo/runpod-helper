@@ -20,8 +20,12 @@ import * as ui from './commands/ui.js';
 import * as chat from './commands/chat.js';
 import * as prepare from './commands/prepare.js';
 import * as keep from './commands/keep.js';
+import * as metrics from './commands/metrics.js';
+import * as logs from './commands/logs.js';
+import * as tune from './commands/tune.js';
+import * as manage from './commands/manage.js';
 
-export const COMMANDS = [init, search, plan, save, up, down, keep, status, env, run, rotateKey, destroyVolume, advisor, ui, chat, prepare];
+export const COMMANDS = [init, search, plan, save, up, down, keep, status, metrics, logs, tune, manage, env, run, rotateKey, destroyVolume, advisor, ui, chat, prepare];
 
 export async function runCli(argv, { io, env = process.env, overrides = {} } = {}) {
   const ownPrompt = io ? null : createPrompt();

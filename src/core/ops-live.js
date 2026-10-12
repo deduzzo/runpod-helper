@@ -138,13 +138,15 @@ export function createLiveOps({ store, runpod, http, events, ask, now, sleep, fi
     return { st, smoke };
   }
 
-  async function tune(name, { set = [], extra = [], yes = false, dryRun = false, save = false } = {}) {
+  // confirmed: la conferma della ricarica è già stata data (server MCP, confirm: true); a differenza di yes, il ritorno agli
+  // argomenti precedenti in caso di errore resta una domanda.
+  async function tune(name, { set = [], extra = [], yes = false, confirmed = false, dryRun = false, save = false } = {}) {
     const p = await prepareTune(name, { set, extra });
     const preview = previewOf(name, p);
     if (dryRun) return { dryRun: true, ...preview };
     await confirmAction({
       description: `Applicare i nuovi argomenti di vLLM al Pod ${p.pod.id} (${name}). ${RELOAD_NOTE} (${p.pod.cost ? `${fmtUSD(p.pod.cost)}/h` : 'costo orario non noto'})`,
-      yes, ask,
+      yes: yes || confirmed, ask,
     });
     let result;
     try {

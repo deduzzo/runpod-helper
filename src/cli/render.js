@@ -28,7 +28,7 @@ export function createIo({ stdout = process.stdout, stderr = process.stderr, pro
   };
 }
 
-const CLI_COMMANDS = 'init|search|plan|save|up|down|status|env|run|rotate-key|destroy-volume|advisor|ui|chat|prepare|logs';
+const CLI_COMMANDS = 'init|search|plan|save|up|down|status|env|run|rotate-key|destroy-volume|advisor|ui|chat|prepare|logs|keep|metrics|tune|manage|mcp';
 
 // Dentro Docker il comando si lancia dal wrapper: negli errori "llmpod <comando>" diventa "bin/llmpod <comando>".
 export function dockerCommands(text, env = process.env) {

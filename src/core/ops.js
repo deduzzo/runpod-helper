@@ -515,7 +515,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
   // Cambia i limiti di spegnimento (inattività, durata massima dall'avvio) di un Pod già avviato, senza riavviarlo.
   // Con `save` aggiorna anche il profilo, per i prossimi avvii. `yes` salta le conferme (costo massimo se la spesa possibile
   // aumenta; profilo con inattività mai o più di 8 ore).
-  async function keep(name, { idleMinutes, maxHours, save = false, yes = false } = {}) {
+  async function keep(name, { idleMinutes, maxHours, save = false, yes = false, preview = false } = {}) {
     const wanted = validateWatchdog({ idleMinutes, maxHours });
     const profile = store.readProfile(name); // NOT_FOUND se il profilo non esiste
     const pod = await findPod(name);
@@ -540,6 +540,17 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     // La spesa possibile aumenta con più ore massime, con l'inattività disattivata o con una soglia più alta.
     const idleRaised = wanted.idleMinutes != null && curIdleMinutes !== 0 && (wanted.idleMinutes === 0 || wanted.idleMinutes > curIdleMinutes);
     const hoursRaised = wanted.maxHours != null && newMaxSeconds > current.maxSeconds;
+    // Anteprima (server MCP): cosa cambierebbe e quanto potrebbe costare, senza domande e senza toccare il Pod.
+    if (preview) {
+      const remainingSeconds = Math.max(0, newMaxSeconds - current.uptimeSeconds);
+      return {
+        preview: true, podId: pod.id, profile: name, hourlyUSD,
+        current: { idleLimitSeconds: current.idleLimitSeconds, maxSeconds: current.maxSeconds, uptimeSeconds: current.uptimeSeconds },
+        next: { idleMinutes: newIdleMinutes, maxSeconds: newMaxSeconds, remainingSeconds, expiresAt: new Date(now() + remainingSeconds * 1000).toISOString() },
+        maxCostUSD: maxCostUSD({ hourlyUSD, maxSeconds: newMaxSeconds, uptimeSeconds: current.uptimeSeconds }),
+        spendCanIncrease: idleRaised || hoursRaised,
+      };
+    }
     if ((idleRaised || hoursRaised) && !yes) {
       const remaining = newMaxSeconds - current.uptimeSeconds;
       const cost = maxCostUSD({ hourlyUSD, maxSeconds: newMaxSeconds, uptimeSeconds: current.uptimeSeconds });
