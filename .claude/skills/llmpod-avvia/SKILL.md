@@ -36,7 +36,9 @@ Rispondi in italiano. Nessuna spesa senza un "sì" esplicito dell'utente al cost
    eliminato da solo; per interrompere un avvio non ancora pronto: `job_cancel { jobId, confirm: true }` (annulla
    ed elimina il Pod appena creato).
 9. **Pronto**: riporta GPU, costo/h, tempo di avvio, eventuale suggerimento di contesto, e i comandi di
-   `client_commands { profile }` (`llmpod run claude|opencode|pi|zcode --profile …`). Mai la chiave.
+   `client_commands { profile }` (`llmpod run claude|opencode|pi|zcode --profile …`). Mai la chiave. Se lanci tu un client, aggiungi
+   `--cwd <cartella della sessione>` così parte nella stessa cartella del progetto (senza `--cwd`, in un terminale
+   interattivo llmpod chiede la cartella; non interattivo usa la corrente).
 10. Ricorda i limiti di spegnimento (si allungano con `/llmpod-stato` → keep) e che si spegne con `/llmpod-spegni`.
 
 Da terminale (equivalente): `node src/cli/index.js search --set abliterated`, `plan <set>/<id>`, `save <nome>`,
