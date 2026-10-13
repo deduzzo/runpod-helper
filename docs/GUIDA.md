@@ -393,8 +393,10 @@ llmpod run pi --profile prova          # pi
 llmpod run zcode --profile prova       # ZCode: scrive la configurazione (su macOS apre l'app; --no-open per non aprirla)
 ```
 
-Con `--cwd <cartella>` il client parte nella cartella del tuo progetto invece che in quella corrente
-(`llmpod run claude --profile prova --cwd ~/mio-progetto`). La cartella deve esistere; per ZCode, che si limita a
+Se lanci `llmpod run <client>` da un terminale interattivo, llmpod ti chiede in quale cartella lavorare
+(default: la cartella corrente; Invio per accettarla). Con `--cwd <cartella>` non chiede nulla e il client parte nella
+cartella indicata (`llmpod run claude --profile prova --cwd ~/mio-progetto`); senza terminale usa la cartella corrente.
+La cartella deve esistere; per ZCode, che si limita a
 scrivere la configurazione e ad aprire l'app, `--cwd` non ha effetto.
 
 Senza `--profile` llmpod usa il profilo con l'unico Pod avviato o l'unico profilo esistente; altrimenti chiede di

@@ -178,7 +178,7 @@ llmpod ti fa a ogni passo, è nella [guida](docs/GUIDA.md#avviare-il-pod).
 | `llmpod plan <modello>` | Stima VRAM, propone le GPU e gli argomenti di vLLM (`--context`, `--gpu`, `--set chiave=valore`, `--no-advisor`) |
 | `llmpod save <nome>` | Salva l'ultimo piano come profilo |
 | `llmpod up <profilo>` | Crea il Pod, attende vLLM ed esegue lo smoke test (`--dry-run` per vedere la richiesta) |
-| `llmpod run <client>` | Avvia `claude`, `opencode` o `pi`, oppure configura `zcode`, sul Pod attivo (`--profile`, `--cwd <cartella>` per lavorare in un'altra cartella) |
+| `llmpod run <client>` | Avvia `claude`, `opencode` o `pi`, oppure configura `zcode`, sul Pod attivo (`--profile`, `--cwd <cartella>` per lavorare in un'altra cartella; in un terminale interattivo, senza `--cwd`, la cartella viene chiesta con default la corrente) |
 | `llmpod claude` | Alias di `llmpod run claude` |
 | `llmpod env` | Stampa gli `export` per altri client (**contiene la chiave**; `--format sh\|ps1\|json`) |
 | `llmpod chat` | Apre Open WebUI collegato al Pod, per una prova veloce |

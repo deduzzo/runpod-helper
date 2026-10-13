@@ -20,6 +20,8 @@ Il consulente esterno di llmpod (`llmpod advisor`) resta disponibile, ma qui il 
    console https://www.runpod.io/console/pods.
 5. **Mai leggere né stampare chiavi**: niente `~/.config/llmpod/.env`, token, `llmpod env`, variabili con
    chiavi. Per i client usa `client_commands` (`llmpod run …`), che passa la chiave senza mostrarla.
+   Quando lanci tu un client (`llmpod run …`), passa sempre `--cwd <cartella della sessione>` così parte nella
+   stessa cartella del progetto su cui stai lavorando (evita la domanda sulla cartella in contesto non interattivo).
 6. **Ogni operazione che costa chiede conferma mostrando il costo orario e il costo massimo** (secondo i
    limiti di spegnimento): prima l'anteprima (`up_preview`, `tune_preview`, `keep_preview`), poi la domanda
    all'utente, poi lo strumento con `confirm: true`. Senza un "sì" esplicito non si spende.

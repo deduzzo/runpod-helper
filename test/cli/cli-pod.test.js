@@ -99,7 +99,7 @@ describe('CLI: ciclo di vita del Pod', () => {
     expect(await t.go(['claude'])).toBe(3);
   });
 
-  it('run --cwd avvia il client nella cartella indicata; senza --cwd non imposta cwd', async () => {
+  it('run --cwd avvia il client nella cartella indicata; senza --cwd e non interattivo usa la cartella corrente', async () => {
     const t = setup();
     t.activate();
     const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-work-')));
@@ -110,7 +110,87 @@ describe('CLI: ciclo di vita del Pod', () => {
     expect(await t.go(['run', 'pi', '--cwd', dir])).toBe(3);
     expect(t.spawn.mock.calls[2][2].cwd).toBe(dir);
     expect(await t.go(['run', 'claude'])).toBe(3);
-    expect(t.spawn.mock.calls[3][2]).not.toHaveProperty('cwd');
+    expect(t.spawn.mock.calls[3][2].cwd).toBe(fs.realpathSync(process.cwd())); // non interattivo: cartella corrente
+  });
+
+  describe('cartella di lavoro interattiva', () => {
+    const mkdir = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'llmpod-work-')));
+    const noSecrets = (spawn) => {
+      const [, args, opts] = spawn.mock.calls[0];
+      const blob = JSON.stringify([args, opts.cwd]);
+      expect(blob).not.toContain(KEY);
+      expect(blob).not.toContain(SECRETS.RUNPOD_API_KEY);
+      expect(Object.keys(opts.env).filter((k) => /^(RUNPOD|HF_)/.test(k))).toEqual([]);
+    };
+
+    it('run pi interattivo senza --cwd: la risposta diventa il cwd dello spawn', async () => {
+      const cur = mkdir();
+      const chosen = mkdir();
+      const t = setup({ answers: { interactive: true, text: [chosen] } });
+      t.activate();
+      expect(await t.run(['run', 'pi'], { ...t.overrides, cwd: () => cur })).toBe(3);
+      expect(t.prompt.askText).toHaveBeenCalledTimes(1);
+      expect(t.prompt.askText.mock.calls[0][0]).toMatch(/In quale cartella vuoi lavorare con il modello\?/);
+      expect(t.prompt.askText.mock.calls[0][1]).toBe(cur);
+      expect(t.spawn.mock.calls[0][2].cwd).toBe(chosen);
+      noSecrets(t.spawn);
+    });
+
+    it('alias claude interattivo: stessa domanda e stesso cwd', async () => {
+      const cur = mkdir();
+      const chosen = mkdir();
+      const t = setup({ answers: { interactive: true, text: [chosen] } });
+      t.activate();
+      expect(await t.run(['claude'], { ...t.overrides, cwd: () => cur })).toBe(3);
+      expect(t.prompt.askText).toHaveBeenCalledTimes(1);
+      expect(t.spawn.mock.calls[0][2].cwd).toBe(chosen);
+    });
+
+    it('interattivo, risposta vuota (Invio): usa la cartella corrente', async () => {
+      const cur = mkdir();
+      const t = setup({ answers: { interactive: true } });
+      t.activate();
+      expect(await t.run(['run', 'pi'], { ...t.overrides, cwd: () => cur })).toBe(3);
+      expect(t.spawn.mock.calls[0][2].cwd).toBe(cur);
+    });
+
+    it('interattivo con --cwd: nessuna domanda', async () => {
+      const dir = mkdir();
+      const t = setup({ answers: { interactive: true, text: [mkdir()] } });
+      t.activate();
+      expect(await t.go(['run', 'pi', '--cwd', dir])).toBe(3);
+      expect(t.prompt.askText).not.toHaveBeenCalled();
+      expect(t.spawn.mock.calls[0][2].cwd).toBe(dir);
+    });
+
+    it('non interattivo senza --cwd: nessuna domanda, cwd = cartella corrente', async () => {
+      const cur = mkdir();
+      const t = setup();
+      t.activate();
+      expect(await t.run(['run', 'pi'], { ...t.overrides, cwd: () => cur })).toBe(3);
+      expect(t.prompt.askText).not.toHaveBeenCalled();
+      expect(t.spawn.mock.calls[0][2].cwd).toBe(cur);
+      expect(await t.run(['claude'], { ...t.overrides, cwd: () => cur })).toBe(3);
+      expect(t.prompt.askText).not.toHaveBeenCalled();
+      expect(t.spawn.mock.calls[1][2].cwd).toBe(cur);
+    });
+
+    it('interattivo, cartella inesistente: errore chiaro prima di contattare Runpod e senza avviare il client', async () => {
+      const t = setup({ answers: { interactive: true, text: [path.join(mkdir(), 'non-esiste')] } });
+      t.activate();
+      expect(await t.go(['run', 'pi'])).toBe(1);
+      expect(t.err()).toMatch(/non esiste/);
+      expect(t.spawn).not.toHaveBeenCalled();
+      expect(t.runpod.listPods).not.toHaveBeenCalled();
+      expect(t.runpod.getPod).not.toHaveBeenCalled();
+    });
+
+    it('zcode: nessuna domanda sulla cartella, anche se interattivo', async () => {
+      const t = setup({ answers: { interactive: true } });
+      t.activate();
+      expect(await t.go(['run', 'zcode', '--no-open'])).toBe(0);
+      expect(t.prompt.askText).not.toHaveBeenCalled();
+    });
   });
 
   it('run --cwd inesistente: INVALID_INPUT senza avviare il client; zcode accetta --cwd', async () => {
