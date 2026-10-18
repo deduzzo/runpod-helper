@@ -228,8 +228,8 @@ llmpod plan abliterated/1 --context 65536  # contesto diverso da quello consigli
 ```
 
 Il primo set è **`abliterated`**: modelli senza rifiuti (abliterated, heretic, uncensored), molto capaci e adatti
-ai client di coding agentici: Qwen3.8-27B (GPTQ e BF16), Qwen3.6-35B-A3B, gpt-oss-120b, MiniMax-M2.7,
-Qwen3.8-Flash-Next, DeepSeek-V4-Flash e V4.1-Flash, GLM-5.3-Flash e GLM-5.3.
+ai client di coding agentici: Qwen3.8-27B (GPTQ, NVFP4, FP8 e BF16), Qwen3.6-35B-A3B, Ornith-1.5-35B-A3B,
+gpt-oss-120b, MiniMax-M2.7, Qwen3.8-Flash-Next, DeepSeek-V4-Flash e V4.1-Flash (lancio e 1017), GLM-5.3-Flash e GLM-5.3.
 
 > ⚠ **Avviso.** Sono modelli con salvaguardie ridotte o rimosse: possono produrre contenuti dannosi o
 > inappropriati. Usali in modo responsabile, nel rispetto della legge e delle licenze, e non esporli a utenti non

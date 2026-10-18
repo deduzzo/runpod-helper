@@ -94,8 +94,30 @@ describe('set abliterated (dati verificati)', () => {
     expect(v4.notes).not.toMatch(/MTP nativo/);
   });
 
+  it('voci aggiunte il 2026-10-18: Qwen3.8-27B FP8/NVFP4, Ornith-1.5 e DeepSeek-V4.1-Flash-1017 accanto alla V4.1 di lancio', () => {
+    const by = (id) => set.models.find((m) => m.id === id);
+    expect(by('id-2/Qwen3.8-27B-Uncensored-FP8')).toMatchObject({ key: 'qwen3.8-27b-fp8', family: 'Qwen3.8-27B', format: 'fp8', mtp: true, draft: 'mtp', gated: false, toolParser: 'qwen3_coder' });
+    expect(by('llmfan46/Qwen3.8-27B-Uncensored-Heretic-Native-MTP-Preserved-NVFP4')).toMatchObject({ key: 'qwen3.8-27b-nvfp4', family: 'Qwen3.8-27B', format: 'nvfp4', mtp: true, draft: 'mtp' });
+    expect(by('huihui-ai/Huihui-Ornith-1.5-35B-A3B-abliterated')).toMatchObject({ key: 'ornith-1.5-35b-a3b-bf16', format: 'bf16', modelType: 'qwen3_5_moe', mtp: true, draft: 'mtp' });
+    const v41 = by('dealignai/DeepSeek-V4.1-Flash-UNCENSORED-FP8');
+    const v41b = by('dealignai/DeepSeek-V4.1-Flash-1017-UNCENSORED-FP8');
+    expect(v41).toBeDefined();
+    expect(v41b).toMatchObject({ key: 'deepseek-v4.1-flash-1017-fp8', family: v41.family, draft: 'dspark', toolParser: v41.toolParser, reasoningParser: v41.reasoningParser });
+    expect(v41b.notes).toMatch(/2026-10-18/);
+    expect(set.models.indexOf(v41b)).toBe(set.models.indexOf(v41) + 1);
+  });
+
+  it('MiMo-V2.6-Flash (esperti MXFP4, qkv FP8 fuso) non è nel set: vLLM v0.30.0 non lo carica; la regola dei parser viene dalla recipe MiMo', () => {
+    expect(set.models.some((m) => /mimo/i.test(m.id))).toBe(false);
+    const p = detectParsers({ modelId: 'dealignai/MiMo-V2.6-Flash-RL-UNCENSORED', config: { architectures: ['MiMoV2ForCausalLM'], model_type: 'mimo_v2' } });
+    expect(p).toMatchObject({ tool: 'mimo', reasoning: 'mimo' });
+    expect(p.warnings.join('\n')).toMatch(/0\.31/);
+    const rules = JSON.parse(fs.readFileSync(new URL('../../data/parsers.json', import.meta.url), 'utf8')).rules;
+    expect(rules.find((r) => r.architectures?.includes('MiMoV2ForCausalLM')).source).toMatch(/vllm-project\/recipes.*MiMo/);
+  });
+
   it('per ogni famiglia con MTP disponibile la variante proposta lo ha', () => {
-    for (const f of ['GLM-5.3', 'GLM-5.3-Flash', 'DeepSeek-V4.1-Flash', 'DeepSeek-V4-Flash', 'Qwen3.8-27B', 'Qwen3.8-Flash-Next', 'Qwen3.6-35B-A3B']) {
+    for (const f of ['GLM-5.3', 'GLM-5.3-Flash', 'DeepSeek-V4.1-Flash', 'DeepSeek-V4-Flash', 'Qwen3.8-27B', 'Qwen3.8-Flash-Next', 'Qwen3.6-35B-A3B', 'Ornith-1.5-35B-A3B']) {
       expect(set.models.filter((m) => m.family === f).every((m) => m.mtp), f).toBe(true);
     }
   });

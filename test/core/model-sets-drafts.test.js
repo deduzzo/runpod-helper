@@ -85,6 +85,21 @@ describe('piano con draft DSpark/MTP (recipe vLLM ufficiali)', () => {
     expect(plan.vllm.args).not.toContain('--engram-config');
   });
 
+  it('DeepSeek-V4.1-Flash-1017: stessa config della V4.1 di lancio → stessa speculative-config DSpark della recipe', async () => {
+    const a = fakes(V41);
+    const b = fakes('dealignai/DeepSeek-V4.1-Flash-1017-UNCENSORED-FP8');
+    const [pa, pb] = await Promise.all([makePlan({ ...a, ...base, modelRef: a.ref }), makePlan({ ...b, ...base, modelRef: b.ref })]);
+    expect(specOf(pb)).toEqual(specOf(pa));
+    expect(pb.mtp).toMatchObject({ present: true, enabled: true, draft: 'dspark' });
+  });
+
+  it('Qwen3.8-27B NVFP4 (ModelOpt W4A16, mtp* escluso dalla quantizzazione): MTP attivo', async () => {
+    const { hf, runpod, ref } = fakes('llmfan46/Qwen3.8-27B-Uncensored-Heretic-Native-MTP-Preserved-NVFP4', [gpu('NVIDIA RTX A6000', 48, 0.6)]);
+    const plan = await makePlan({ hf, runpod, ...base, modelRef: ref });
+    expect(specOf(plan)).toEqual({ method: 'mtp', num_speculative_tokens: 1 });
+    expect(plan.mtp).toMatchObject({ present: true, enabled: true, draft: 'mtp' });
+  });
+
   it('GLM-5.3-Flash: MTP rilevato dal prefisso language_model e --speculative-config mtp', async () => {
     const { hf, runpod, ref } = fakes(GLM_FLASH);
     const plan = await makePlan({ hf, runpod, ...base, modelRef: ref });
