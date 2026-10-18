@@ -349,7 +349,10 @@ llmpod up prova
 1. **controlli preliminari**: se il profilo ha già un Pod acceso si ferma (`llmpod down prova` per eliminarlo);
    se ha un **Pod spento** chiede di eliminarlo prima di crearne uno nuovo (predefinito sì; se rifiuti, `up` si
    ferma senza creare nulla); per i modelli *gated* verifica l'accesso; legge il credito;
-2. **scelta della GPU** tra quelle disponibili ora (vedi [Scegliere la GPU](#scegliere-la-gpu));
+2. **scelta della GPU** tra quelle disponibili ora (vedi [Scegliere la GPU](#scegliere-la-gpu)). Se la GPU del
+   profilo non è disponibile (o non c'è nessuna GPU disponibile) la scelta propone anche le GPU *"non disponibile
+   ora: attendi (verifica ogni 10 s)"*: scegliendone una il costo si conferma subito, una volta sola, e il Pod parte
+   appena la GPU si libera, senza altre domande (anche nell'interfaccia web);
 3. **conferma del costo**: costo orario (e per 24 ore), **stima del tempo e del costo dell'avvio** (vedi
    [Stimare i costi](#stimare-i-costi)), la modalità NCCL sicura se il Pod ha più GPU senza NVLink completo e, se il profilo
    esce dai limiti predefiniti, "inattività: mai (o N min), massimo N h → costo massimo X $". Si ferma se il
@@ -357,7 +360,9 @@ llmpod up prova
 4. **creazione del Pod**, attesa dell'avvio, **download e caricamento dei pesi** (con `--verbose` vedi i log di
    vLLM in diretta). L'avanzamento distingue le due parti: *"Download dei pesi: 45% (57 di 126 GiB)"* (i byte del
    modello nella cache di Hugging Face; non dice mai 100% finché il download è in corso) e poi *"Caricamento dei
-   pesi: 147/206 file, circa 7 min rimanenti"* (la barra di vLLM). Se vLLM non è pronto entro il tempo previsto
+   pesi: 147/206 file, circa 7 min rimanenti"* (la barra di vLLM; con il draft MTP vLLM rilegge gli stessi file:
+   *"Caricamento dei pesi del draft (passaggio 2)"*). Il download conta anche i file che `huggingface_hub` sposta
+   nel suo store condiviso (xet). Se vLLM non è pronto entro il tempo previsto
    chiede se aspettare altri 15 minuti;
 5. **smoke test**: `/v1/models`, una chiamata a strumento su `/v1/messages` (protocollo Anthropic) e una su
    `/v1/chat/completions` (protocollo OpenAI).
@@ -605,7 +610,12 @@ llmpod destroy-volume             # conferma + digitazione del nome del volume; 
   5 minuti fissi; download a ~100 MB/s, saltato se la stessa revisione è già sul volume (llmpod lo annota dopo un
   avvio riuscito con il volume); caricamento a ~2 s/GiB dal disco del Pod, ×4 dal volume di rete, ×1,5 con più GPU.
   Il fattore del volume è un'ipotesi ricavata dal collaudo (lettura a ~90 MB/s, tipica di uno storage di rete).
-  `up` (e `tune`, senza il download) attende vLLM almeno 1,5 volte la stima prima di chiedere se aspettare ancora.
+  **Dopo ogni avvio la stima impara**: llmpod misura la velocità del download e i secondi per GiB del caricamento
+  (per disco locale o volume, una o più GPU) e li annota in `state.json`; le stime successive usano la mediana
+  delle ultime 5 misure e lo dicono (*"velocità misurate negli avvii precedenti"*). Esempio reale: GLM-5.3-Flash
+  (181 GiB) su una B300 è stato scaricato a ~740 MB/s e caricato in 70 s, molto meno delle costanti prudenti.
+  I tempi di attesa di `up` (e `tune`, senza il download) restano calcolati sulle costanti prudenti: almeno 1,5
+  volte quella stima prima di chiedere se aspettare ancora.
 - **Fisso**: il volume, al mese.
 - `llmpod status` mostra il costo della sessione in corso e il credito residuo.
 

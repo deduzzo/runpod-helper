@@ -29,6 +29,8 @@ Rispondi in italiano. Nessuna spesa senza un "sì" esplicito dell'utente al cost
    `--disable-custom-all-reduce`). Chiedi quale GPU e la conferma esplicita del costo. Se la GPU voluta è solo in
    `waitable` (adatta ma non disponibile ora) e l'utente vuole aspettarla: stessa conferma del costo, poi `up` con
    `wait: true` (verifica ogni 10 s, nessuna spesa finché il Pod non esiste; `job_cancel` interrompe l'attesa).
+   Quando l'utente chiede di aspettare o cercare una GPU, la conferma del costo è UNA: dopo il "sì" lancia subito
+   l'attesa e non chiedere altro quando la GPU si libera (le GPU grandi restano libere per poco).
 7. **Avvio**: `up { profile, gpu: { id, count, dataCenterId }, confirm: true, expectedHourlyUSD: <hourlyUSD
    dell'opzione scelta> }`. Se l'errore è `PRICE_CHANGED`, mostra il nuovo prezzo e richiedi conferma.
 8. **Avanzamento**: `job_status { jobId }` e `job_events { jobId, since }` ogni 20–30 secondi (fasi: creazione,

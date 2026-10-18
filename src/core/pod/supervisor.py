@@ -169,7 +169,7 @@ def compiling_descendants(pid, proc_root='/proc'):
     return found
 
 
-def restart_decision(loading_started, fatal, transient, restarts, max_restarts, was_ready=False):
+def restart_decision(loading_started, fatal, transient, restarts, max_restarts, was_ready=False, weights_loaded=False):
     """(riavviare?, motivo). Durante l'avvio si riavvia solo per errori chiaramente transitori prima della lettura dei pesi:
     un riavvio dopo ricaricherebbe tutti i pesi (anche 20 minuti a pagamento) e un errore NCCL/CUDA/OOM si ripeterebbe.
     Un crash con vLLM già pronto (a runtime) ha diritto a un riavvio."""
@@ -177,6 +177,9 @@ def restart_decision(loading_started, fatal, transient, restarts, max_restarts, 
         if restarts >= max_restarts:
             return False, f'dopo {restarts} riavvii'
         return True, 'crash di vLLM dopo che era pronto'
+    if weights_loaded:
+        return False, ('dopo il caricamento dei pesi (inizializzazione di vLLM: KV cache, compilazione, CUDA graph): '
+                       'nessun riavvio automatico (ricaricare i pesi costerebbe altro tempo)')
     if loading_started:
         return False, 'durante il caricamento dei pesi: nessun riavvio automatico (ricaricare i pesi costerebbe altro tempo)'
     if fatal:
@@ -331,17 +334,24 @@ def env_config(env):
 def model_cache_bytes(hf_home, model):
     """Byte già scaricati del modello nella cache di Hugging Face (hub/models--org--nome).
 
-    Solo i file regolari (blobs, anche .incomplete): i file in snapshots/ sono link ai blobs e non vanno contati due
-    volte; gli altri modelli in cache (es. sul volume di rete) non contano."""
+    I file regolari (blobs, anche .incomplete) e, in blobs/, i link allo store condiviso di huggingface_hub (con xet un
+    blob completato si sposta nello store e al suo posto resta un link): i link si seguono e ogni file reale conta una volta.
+    I file in snapshots/ sono link ai blobs e non vanno contati due volte; gli altri modelli in cache non contano."""
     path = os.path.join(hf_home, 'hub', 'models--' + model.replace('/', '--'))
+    blobs = os.path.join(path, 'blobs')
     total = 0
+    seen = set()
     for root, _dirs, files in os.walk(path):
         for name in files:
+            full = os.path.join(root, name)
             try:
-                st = os.lstat(os.path.join(root, name))
+                st = os.lstat(full)
+                if stat.S_ISLNK(st.st_mode) and root == blobs:
+                    st = os.stat(full)  # link allo store condiviso: conta il blob reale
             except OSError:
-                continue
-            if stat.S_ISREG(st.st_mode):
+                continue  # file sparito durante la lettura o link rotto
+            if stat.S_ISREG(st.st_mode) and (st.st_dev, st.st_ino) not in seen:
+                seen.add((st.st_dev, st.st_ino))
                 total += st.st_size
     return total
 
@@ -486,7 +496,13 @@ class Supervisor:
         self.last_output_at = self.clock()
         progress = parse_load_progress(line)
         if progress:
-            self.load_progress = progress
+            # Una barra che riparte dopo un passaggio completo è un nuovo passaggio sugli stessi shard (es. il draft MTP
+            # dopo il modello), non un passo indietro.
+            prev = self.load_progress
+            load_pass = (prev or {}).get('pass', 1)
+            if prev and prev['total'] and prev['done'] >= prev['total'] and progress['done'] < prev['done']:
+                load_pass += 1
+            self.load_progress = {**progress, 'pass': load_pass}
             if progress['total'] and progress['done'] >= progress['total']:
                 self.weights_loaded = True
             if self.phase == 'downloading':
@@ -643,7 +659,7 @@ class Supervisor:
                     self.log(f'[llmpod] vLLM terminato con codice {code}')
                     restart, why = restart_decision(self.loading_started, self.fatal_cause is not None,
                                                     self.transient_cause is not None, self.restarts, self.cfg['max_restarts'],
-                                                    was_ready=was_ready)
+                                                    was_ready=was_ready, weights_loaded=self.weights_loaded)
                     cause = self.current_cause()
                     if restart and was_ready and self.runtime_restarts >= self.cfg.get('max_runtime_restarts', 2):
                         # Ciclo pronto → crash → riavvio: ogni giro ricarica i pesi e costa. Limite per la vita del Pod.

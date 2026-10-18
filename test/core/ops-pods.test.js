@@ -85,12 +85,13 @@ describe('up: scelta della GPU', () => {
     expect(t.runpod.createPod.mock.calls[0][0].gpu).toMatchObject({ id: 'GPU96', count: 1 });
   });
 
-  it('se la GPU del profilo non è disponibile la predefinita è la più economica disponibile (le non disponibili non sono proposte)', async () => {
+  it('se la GPU del profilo non è disponibile la predefinita è la più economica disponibile; la GPU del profilo è proposta in attesa', async () => {
     const catalog = { 1: [gpu('GPU80', 80, 1.5, [['EU-A', 'NONE']]), gpu('GPU96', 96, 2.5, [['EU-A', 'LOW']]), gpu('GPUX', 80, 2, [['EU-A', 'MEDIUM']])] };
     const t = setup({ catalog, askChoice: async (_t, _o, def) => def });
     await t.ops.up('p');
     const [, options, def] = t.choose.mock.calls[0];
-    expect(options.map((o) => o.id)).toEqual(['GPUX|1|EU-A', 'GPU96|1|EU-A']);
+    expect(options.map((o) => o.id)).toEqual(['GPUX|1|EU-A', 'GPU96|1|EU-A', 'GPU80|1|attesa']);
+    expect(options[2].label).toBe('GPU80 ×1 · 80 GB · 1,50 $/h · non disponibile ora: attendi (verifica ogni 10 s)');
     expect(def).toBe('GPUX|1|EU-A');
     expect(t.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPUX');
   });
@@ -187,35 +188,43 @@ describe('up in modalità scelta: disponibilità, altri datacenter, memoria', ()
   const opts = [opt('GPU80', 1, 1.5, 'HIGH'), opt('GPUY', 1, 1.8, 'HIGH'), opt('GPU96', 1, 2.5, 'LOW')];
   const run = (catalog, extra = {}) => setup({ catalog: { 1: catalog }, planPatch: { options: opts }, ...extra });
 
-  it('unica GPU disponibile diversa da quella del profilo: la conferma e createPod riguardano quella', async () => {
-    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+  it('unica GPU disponibile diversa da quella del profilo: scelta tra quella e l\'attesa della GPU del profilo; la conferma e createPod riguardano la scelta', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'HIGH']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async (_t, _o, def) => def });
     await t.ops.up('p');
-    expect(t.choose).not.toHaveBeenCalled();
+    expect(t.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPUY|1|EU-A', 'GPU80|1|attesa']);
     expect(t.ask.mock.calls[0][0]).toMatch(/GPUY ×1.*1,80 \$\/h/);
     expect(t.runpod.createPod).toHaveBeenCalledTimes(1);
     expect(t.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPUY');
   });
 
   it('unica disponibile più cara della GPU del profilo (e caso più economica): sempre quella, mai una GPU NONE', async () => {
-    const dearer = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async () => 'x' });
+    const dearer = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'LOW']])], { askChoice: async (_t, _o, def) => def });
     await dearer.ops.up('p');
     expect(dearer.runpod.createPod).toHaveBeenCalledTimes(1);
     expect(dearer.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPU96');
     expect(dearer.ask.mock.calls[0][0]).toMatch(/GPU96 ×1.*2,50 \$\/h/);
-    const cheaper = run([dcGpu('GPU80', 1.5, [['EU-A', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+    const cheaper = run([dcGpu('GPU80', 1.5, [['EU-A', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async (_t, _o, def) => def });
     cheaper.store.writeProfile({ ...cheaper.store.readProfile('p'), gpu: { id: 'GPU96', count: 1 } });
     await cheaper.ops.up('p');
-    expect(cheaper.choose).not.toHaveBeenCalled();
+    expect(cheaper.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPU96|1|attesa']);
     expect(cheaper.runpod.createPod.mock.calls[0][0].gpu.id).toBe('GPU80');
     expect(cheaper.ask.mock.calls[0][0]).toMatch(/GPU80 ×1.*1,50 \$\/h/);
   });
 
-  it('nessuna GPU disponibile: NO_GPU_AVAILABLE con l\'elenco delle opzioni, nessuna creazione e nessuna conferma', async () => {
-    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+  it('nessuna GPU disponibile: propone l\'attesa di tutte le opzioni; senza scelta nessuna creazione e nessuna conferma', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => null });
+    const err = await t.ops.up('p').catch((e) => e);
+    expect(t.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPU80|1|attesa', 'GPUY|1|attesa', 'GPU96|1|attesa']);
+    expect(err).toMatchObject({ code: 'CANCELLED' });
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+    expect(t.ask).not.toHaveBeenCalled();
+  });
+
+  it('nessuna GPU disponibile né adatta al profilo: NO_GPU_AVAILABLE con l\'elenco delle opzioni', async () => {
+    const t = run([], { askChoice: async () => 'x' });
     const err = await t.ops.up('p').catch((e) => e);
     expect(err).toMatchObject({ code: 'NO_GPU_AVAILABLE', message: expect.stringMatching(/GPU80.*GPUY.*GPU96/), hint: 'Riprova più tardi' });
     expect(t.runpod.createPod).not.toHaveBeenCalled();
-    expect(t.ask).not.toHaveBeenCalled();
   });
 
   it('propone anche le opzioni disponibili in altri datacenter, etichettate "(senza volume, <dc>)"; predefinita: la GPU del profilo nel datacenter del volume', async () => {
@@ -248,10 +257,11 @@ describe('up in modalità scelta: disponibilità, altri datacenter, memoria', ()
     expect(t.choose.mock.calls[0][1].map((o) => o.id)).toEqual(['GPU80|1|EU-A', 'GPU96|1|EU-A']);
   });
 
-  it('con "never" e nessuna GPU nel datacenter del volume: NO_GPU_AVAILABLE, niente altri datacenter', async () => {
-    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE'], ['US-1', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => 'x' });
+  it('con "never" e nessuna GPU nel datacenter del volume: solo attese nel datacenter del volume, niente altri datacenter', async () => {
+    const t = run([dcGpu('GPU80', 1.5, [['EU-A', 'NONE'], ['US-1', 'HIGH']]), dcGpu('GPUY', 1.8, [['EU-A', 'NONE']]), dcGpu('GPU96', 2.5, [['EU-A', 'NONE']])], { askChoice: async () => null });
     t.store.writeProfile({ ...t.store.readProfile('p'), allowFallbackWithoutVolume: 'never' });
-    await expect(t.ops.up('p')).rejects.toMatchObject({ code: 'NO_GPU_AVAILABLE' });
+    await expect(t.ops.up('p')).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(t.choose.mock.calls[0][1].every((o) => o.id.endsWith('|attesa'))).toBe(true);
     expect(t.runpod.createPod).not.toHaveBeenCalled();
   });
 

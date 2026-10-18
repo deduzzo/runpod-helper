@@ -18,7 +18,7 @@ import { smokeTest } from './pod/smoke.js';
 import { updateZcode, zcodeDir } from './clients/zcode.js';
 import { applyGpuChoice, vramLabel } from './planner/gpu-choice.js';
 import { podState, STOPPED_STATUSES } from './pod-state.js';
-import { estimateStartup, startupText, weightsOnVolume, rememberWeightsOnVolume } from './planner/startup.js';
+import { estimateStartup, startupText, weightsOnVolume, rememberWeightsOnVolume, createStartupMeter, rememberStartupStats, observedStartup } from './planner/startup.js';
 import { needsNcclSafe } from './planner/nccl.js';
 import { createLiveOps } from './ops-live.js';
 
@@ -41,10 +41,11 @@ function watchdogNote(wd, hourly) {
 }
 
 // Stima del tempo e del costo dell'avvio (download + caricamento dei pesi) su un candidato: il Pod costa anche prima di essere pronto.
-function startupOf(profile, c, state) {
+// Con le misure degli avvii precedenti (state.startupStats) la stima è realistica; prudent: solo le costanti prudenti (timeout).
+function startupOf(profile, c, state, { prudent = false } = {}) {
   const e = estimateStartup({
     downloadBytes: profileDownloadBytes(profile), weightsBytes: profile.model?.weightsBytes, count: c.count, withVolume: Boolean(c.withVolume),
-    cached: weightsOnVolume(state, profile, c), hourlyUSD: c.hourly,
+    cached: weightsOnVolume(state, profile, c), hourlyUSD: c.hourly, observed: prudent ? null : observedStartup(state),
   });
   return { ...e, text: startupText(e) };
 }
@@ -426,7 +427,9 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const same = (c) => c.id === gpu.id && (gpu.count == null || c.count === gpu.count) && (!gpu.dataCenterId || c.dataCenterId === gpu.dataCenterId);
     let lc = await launchCandidates(profile, cfg, { all: choiceMode || Boolean(gpu) });
     if (gpu && wait && !dryRun) lc = await waitForGpu(profile, cfg, gpu, same, wait, lc);
-    const { catalogs, inVolumeDc, otherDcs, startable, wanted } = lc;
+    const { catalogs, inVolumeDc, otherDcs, startable, waitable, wanted } = lc;
+    // Prezzo già confermato dall'utente prima di un'attesa scelta qui (modalità scelta): niente seconda domanda all'avvio.
+    let waitConfirmedHourly = null;
     let candidates = inVolumeDc.filter((c) => c.hourly > 0);
     if (gpu) {
       const chosen = startable.filter(same);
@@ -447,21 +450,50 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       // Scelta della GPU (terminale interattivo o interfaccia web, mai con --yes): tra le configurazioni disponibili ORA.
       // Con una sola si usa quella (la conferma del costo mostra la GPU che verrà davvero creata); con nessuna si ferma qui.
       // Dopo la scelta si usa solo quella: niente ripieghi silenziosi su altre GPU.
+      // Configurazioni adatte ma non disponibili ora, da scegliere per attenderle (una per GPU×numero): la GPU del profilo se
+      // non è disponibile (quella scelta nel piano) oppure, se non c'è nulla di disponibile, tutte. Così un avvio normale
+      // con la GPU del profilo disponibile non ha domande in più.
       const avail = candidates;
-      if (!avail.length) {
+      const isProfileGpu = (c) => c.id === profile.gpu?.id && c.count === profile.gpu?.count;
+      const profileGpuAvailable = avail.some(isProfileGpu);
+      const seenWait = new Set();
+      const waits = profileGpuAvailable ? [] : waitable.filter((c) => {
+        const k = `${c.id}|${c.count}`;
+        if (seenWait.has(k) || avail.some((a) => a.id === c.id && a.count === c.count)) return false;
+        if (avail.length && !isProfileGpu(c)) return false;
+        seenWait.add(k);
+        return true;
+      });
+      if (!avail.length && !waits.length) {
         const all = wanted.map((g) => `${g.id}${g.count > 1 ? ` ×${g.count}` : ''}`).join(', ');
         throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `Nessuna GPU disponibile ora tra le opzioni del profilo (${all})`, { hint: 'Riprova più tardi' });
       }
-      if (avail.length > 1) {
-        const key = (c) => `${c.id}|${c.count}|${c.dataCenterId}`;
+      if (avail.length > 1 || waits.length) {
+        const key = (c) => (c.availability === 'NONE' ? `${c.id}|${c.count}|attesa` : `${c.id}|${c.count}|${c.dataCenterId}`);
         const memory = (c) => (catalogs[c.count] ?? []).find((g) => g.id === c.id)?.memory;
-        const where = (c) => (c.withVolume ? c.dataCenterId : `(senza volume, ${c.dataCenterId})`);
-        const label = (c) => `${c.id} ×${c.count} · ${memory(c) != null ? vramLabel({ count: c.count, memoryGiB: memory(c) }) : '? GB'} · ${fmtUSD(c.hourly)}/h · ${where(c)} · ${c.availability}`;
-        const def = avail.find((c) => c.id === profile.gpu?.id && c.count === profile.gpu?.count && c.dataCenterId === profile.dataCenterId) ?? avail[0];
-        const picked = await askChoice('Quale GPU usare per l\'avvio?', avail.map((c) => ({ id: key(c), label: label(c) })), key(def));
-        const chosen = picked == null ? null : avail.find((c) => key(c) === picked);
+        const where = (c) => (c.availability === 'NONE' ? `non disponibile ora: attendi (verifica ogni ${WAIT_INTERVAL_MS / 1000} s)`
+          : `${c.withVolume ? c.dataCenterId : `(senza volume, ${c.dataCenterId})`} · ${c.availability}`);
+        const label = (c) => `${c.id} ×${c.count} · ${memory(c) != null ? vramLabel({ count: c.count, memoryGiB: memory(c) }) : '? GB'} · ${fmtUSD(c.hourly)}/h · ${where(c)}`;
+        const all = [...avail, ...waits];
+        const def = avail.find((c) => c.id === profile.gpu?.id && c.count === profile.gpu?.count && c.dataCenterId === profile.dataCenterId) ?? all[0];
+        const picked = await askChoice('Quale GPU usare per l\'avvio?', all.map((c) => ({ id: key(c), label: label(c) })), key(def));
+        const chosen = picked == null ? null : all.find((c) => key(c) === picked);
         if (!chosen) throw new LlmpodError(Codes.CANCELLED, 'Nessuna GPU scelta: operazione annullata, nessun Pod creato');
         candidates = [chosen];
+        if (chosen.availability === 'NONE') {
+          // Attesa scelta dall'utente: il costo si conferma ORA, una volta sola; quando la GPU si libera l'avvio parte subito.
+          const target = { id: chosen.id, count: chosen.count };
+          const sameTarget = (c) => c.id === target.id && c.count === target.count;
+          await confirmCost({
+            hourlyUSD: chosen.hourly, ask,
+            description: `In attesa di ${chosen.id} ×${chosen.count} (verifica ogni ${WAIT_INTERVAL_MS / 1000} s, nessuna spesa nell'attesa), poi avvio di ${name}`
+              + ` senza altre domande${watchdogNote(profile.watchdog, chosen.hourly)}; ${startupOf(profile, chosen, store.readState()).text}`,
+          });
+          const ready = await waitForGpu(profile, cfg, target, sameTarget, wait ?? {}, lc);
+          const now_ = ready.startable.filter(sameTarget).sort((a, b) => a.hourly - b.hourly);
+          candidates = [now_.find((c) => c.withVolume) ?? now_[0]];
+          waitConfirmedHourly = chosen.hourly;
+        }
       }
     } else if (!candidates.length) {
       throw new LlmpodError(Codes.NO_GPU_AVAILABLE, 'Nessun candidato GPU per questo profilo', { hint: 'Rigenera il piano con: llmpod plan' });
@@ -469,15 +501,16 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
 
     const first = candidates[0];
     // Il costo è stato confermato dall'utente su un prezzo preciso (up_preview): se nel frattempo è cambiato si ferma qui.
-    if (expectedHourlyUSD != null && Math.abs(first.hourly - expectedHourlyUSD) > 0.0005) {
-      throw new LlmpodError(Codes.PRICE_CHANGED, `Il prezzo è cambiato: ${first.id} ×${first.count} costa ora ${fmtUSD(first.hourly)}/h invece di ${fmtUSD(expectedHourlyUSD)}/h`, { hint: 'Rileggi le opzioni con up_preview e chiedi di nuovo conferma all\'utente: nessun Pod è stato creato' });
+    const expected = expectedHourlyUSD ?? waitConfirmedHourly;
+    if (expected != null && Math.abs(first.hourly - expected) > 0.0005) {
+      throw new LlmpodError(Codes.PRICE_CHANGED, `Il prezzo è cambiato: ${first.id} ×${first.count} costa ora ${fmtUSD(first.hourly)}/h invece di ${fmtUSD(expected)}/h`, { hint: 'Rileggi le opzioni con up_preview e chiedi di nuovo conferma all\'utente: nessun Pod è stato creato' });
     }
     if (balance < first.hourly) {
       throw new LlmpodError(Codes.INSUFFICIENT_BALANCE, `Credito Runpod (${fmtUSD(balance)}) inferiore a un'ora di utilizzo (${fmtUSD(first.hourly)})`, { hint: 'Ricarica il credito su https://www.runpod.io/console/user/billing' });
     }
     const buildBody = (c) => buildPodBody({ profile, candidate: c, apiKey, hfToken: env.HF_TOKEN, minCudaVersion: cfg.minCudaVersion });
     const conf = await confirmCost({
-      hourlyUSD: first.hourly, yes: yes || costConfirmed, dryRun, ask,
+      hourlyUSD: first.hourly, yes: yes || costConfirmed || waitConfirmedHourly != null, dryRun, ask,
       description: `Avvio di ${name}: ${first.id} ×${first.count} in ${first.dataCenterId}${first.withVolume ? '' : ' (senza volume)'}${watchdogNote(profile.watchdog, first.hourly)}`
         + `; ${startupOf(profile, first, store.readState()).text}${ncclSafeFor(profile, first) ? '; modalità NCCL sicura (più GPU senza NVLink completo)' : ''}`,
     });
@@ -521,6 +554,11 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     }
     const { pod, candidate } = created;
     events.emit('pod', { podId: pod.id });
+    let startupMeter = null;
+    const saveStartupStats = () => {
+      if (!startupMeter) return;
+      try { store.writeState(rememberStartupStats(store.readState(), startupMeter.result())); } catch { /* misura facoltativa */ }
+    };
 
     try {
       const state = store.readState();
@@ -530,7 +568,10 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       const runningPod = await waitForRunning({ runpod, podId: pod.id, sleep, now });
       const sup = createSupervisorClient({ http, podId: pod.id, apiKey });
       events.emit('phase', { message: 'Avvio di vLLM (download e caricamento dei pesi)' });
-      const readyOpts = { sup, sleep, now, onStatus: (s) => events.emit('progress', progressOf(s)), onLog: (line) => events.emit('log', { line }) };
+      // Misura di download e caricamento di questo avvio: rende realistiche le stime successive (anche se l'avvio fallisce dopo).
+      const meter = createStartupMeter({ now, downloadBytes: weightsOnVolume(store.readState(), profile, candidate) ? 0 : profileDownloadBytes(profile), weightsBytes: profile.model?.weightsBytes, count: candidate.count, withVolume: Boolean(candidate.withVolume) });
+      startupMeter = meter;
+      const readyOpts = { sup, sleep, now, onStatus: (s) => { meter.observe(s); events.emit('progress', progressOf(s)); }, onLog: (line) => events.emit('log', { line }) };
       const baseUrl = proxyUrl(pod.id, 8000);
       const endpoint = { baseUrl, apiKey, servedName: profile.servedName, context: profile.context, reasoning: Boolean(profile.parsers?.reasoning) };
       let currentArgs = podArgs(profile, candidate); // come nel corpo del Pod (anche la modalità NCCL sicura)
@@ -541,7 +582,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       let cursor = 0; // cursore dei log del supervisore: dopo un riavvio non si rileggono i log del run precedente
       for (;;) {
         try {
-          let timeoutMs = startupTimeoutMs(profileDownloadBytes(profile), startupOf(profile, candidate, store.readState()));
+          let timeoutMs = startupTimeoutMs(profileDownloadBytes(profile), startupOf(profile, candidate, store.readState(), { prudent: true }));
           for (;;) {
             try {
               st = await waitForReady({ ...readyOpts, since: cursor, timeoutMs });
@@ -570,6 +611,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
           endpoint.reasoning = Boolean(syncDerivedFields({ vllm: { args: [...next] } }).parsers.reasoning);
         }
       }
+      saveStartupStats();
       // I pesi di questa revisione ora sono sul volume: il prossimo avvio con il volume non li riscarica.
       if (candidate.withVolume && profile.volume?.id) store.writeState(rememberWeightsOnVolume(store.readState(), profile));
       await refreshZcode(endpoint);
@@ -579,6 +621,7 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
         contextSuggestion: suggestContext(st.kvCacheTokens, profile), smoke, repairedArgs,
       };
     } catch (err) {
+      saveStartupStats();
       events.emit('warning', { message: `Avvio non riuscito: ${err.message}` });
       if (!(await offerTerminate(name, pod.id, yes || autoTerminate))) throw strayPodError(err, name, pod.id);
       throw err;

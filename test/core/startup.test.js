@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateStartup, startupText, weightsOnVolume, rememberWeightsOnVolume } from '../../src/core/planner/startup.js';
+import { estimateStartup, startupText, weightsOnVolume, rememberWeightsOnVolume, createStartupMeter, rememberStartupStats, observedStartup } from '../../src/core/planner/startup.js';
 import { startupTimeoutMs, readyTimeoutMs, reloadTimeoutMs } from '../../src/core/pod/launcher.js';
 
 const GiB = 1024 ** 3;
@@ -73,5 +73,48 @@ describe('startupTimeoutMs: attesa di up proporzionata alla stima', () => {
     const big = estimateStartup({ downloadBytes: 126 * GiB, weightsBytes: 126 * GiB, count: 2, withVolume: true });
     expect(startupTimeoutMs(126 * GiB, big)).toBe(Math.round(1.5 * big.totalSeconds * 1000));
     expect(startupTimeoutMs(126 * GiB, big)).toBeGreaterThan(readyTimeoutMs(126 * GiB));
+  });
+});
+
+describe('stima appresa dagli avvii reali', () => {
+  it('meter: velocità di download dal passaggio downloading → loading e secondi per GiB dalla barra di vLLM', () => {
+    let t = 0;
+    const m = createStartupMeter({ now: () => t, downloadBytes: 181 * GiB, weightsBytes: 181 * GiB, count: 1, withVolume: false });
+    m.observe({ phase: 'downloading', downloadedBytes: 0 });
+    t = 260_000;
+    m.observe({ phase: 'loading', loadProgress: { done: 60, total: 120, elapsedSeconds: 30, pass: 1 } });
+    m.observe({ phase: 'loading', loadProgress: { done: 120, total: 120, elapsedSeconds: 70, pass: 1 } });
+    // il secondo passaggio (draft) non sovrascrive la misura del modello
+    m.observe({ phase: 'loading', loadProgress: { done: 120, total: 120, elapsedSeconds: 3, pass: 2 } });
+    const r = m.result();
+    expect(r.downloadBytesPerSecond).toBeCloseTo((181 * GiB) / 260, 0);
+    expect(r.loadKey).toBe('local-single');
+    expect(r.loadSecondsPerGiB).toBeCloseTo(70 / 181, 3);
+  });
+
+  it('meter: download troppo breve (pesi già presenti) o assente → nessuna misura del download', () => {
+    let t = 0;
+    const m = createStartupMeter({ now: () => t, downloadBytes: 10 * GiB, weightsBytes: 10 * GiB, count: 2, withVolume: true });
+    m.observe({ phase: 'downloading' });
+    t = 5_000;
+    m.observe({ phase: 'loading' });
+    expect(m.result()).toEqual({ downloadBytesPerSecond: null, loadKey: 'volume-multi', loadSecondsPerGiB: null });
+  });
+
+  it('le misure (mediana delle ultime 5) sostituiscono le costanti; il testo dice che sono misurate', () => {
+    let state = {};
+    for (const bps of [700e6, 800e6, 750e6]) state = rememberStartupStats(state, { downloadBytesPerSecond: bps, loadKey: 'local-single', loadSecondsPerGiB: 0.4 });
+    expect(observedStartup(state)).toEqual({ downloadBytesPerSecond: 750e6, loadSecondsPerGiB: { 'local-single': 0.4 } });
+    const e = estimateStartup({ downloadBytes: 433 * GiB, weightsBytes: 433 * GiB, count: 1, observed: observedStartup(state), hourlyUSD: 17.98 });
+    expect(e.downloadSeconds).toBe(Math.round((433 * GiB) / 750e6));
+    expect(e.loadSeconds).toBe(Math.round(433 * 0.4));
+    expect(e.measured).toBe(true);
+    expect(startupText(e)).toMatch(/velocità misurate negli avvii precedenti/);
+    // configurazione mai misurata (2 GPU): caricamento con la costante prudente, download misurato
+    const multi = estimateStartup({ downloadBytes: 40 * GiB, weightsBytes: 40 * GiB, count: 2, observed: observedStartup(state) });
+    expect(multi.loadSeconds).toBe(120);
+    for (let i = 0; i < 6; i++) state = rememberStartupStats(state, { downloadBytesPerSecond: 100e6, loadKey: 'local-single', loadSecondsPerGiB: null });
+    expect(state.startupStats.download).toHaveLength(5);
+    expect(observedStartup({})).toBeNull();
   });
 });

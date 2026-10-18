@@ -332,3 +332,82 @@ describe('up in attesa della GPU scelta (wait)', () => {
     await expect(t.ops.up('p', { wait: {} })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 });
+
+describe('stima dell\'avvio dalle misure reali', () => {
+  it('upPreview usa le velocità misurate (state.startupStats) e lo dice nel testo', async () => {
+    const t = setup({ pods: [] });
+    t.store.writeState({ ...t.store.readState(), startupStats: { download: [1e9], load: { 'local-single': [0.5] } } });
+    const s = (await t.ops.upPreview('p')).options[0].startup;
+    expect(s.measured).toBe(true);
+    expect(s.downloadSeconds).toBe(Math.round((40 * 1024 ** 3) / 1e9));
+    expect(s.loadSeconds).toBe(20);
+    expect(s.text).toMatch(/velocità misurate/);
+  });
+
+  it('up salva la misura dell\'avvio in state.json', async () => {
+    const t = setup({ pods: [] });
+    await t.ops.up('p', { gpu: { id: 'GPU80', count: 1 }, expectedHourlyUSD: 1.5, costConfirmed: true });
+    expect(t.store.readState().startupStats).toMatchObject({ download: expect.any(Array), load: expect.any(Object) });
+  });
+});
+
+describe('modalità scelta (web, terminale): GPU in attesa tra le opzioni', () => {
+  function setupChoice(pick, { after = 2 } = {}) {
+    const w = createWorld({ pods: [] });
+    const ask = vi.fn(async () => true);
+    const askChoice = vi.fn(async (_q, options) => options.find((o) => o.id.startsWith(pick))?.id ?? null);
+    const events = createEvents();
+    const seen = [];
+    events.on((e) => seen.push(e));
+    const sleep = vi.fn(async () => {});
+    let checks = 0;
+    w.runpod.listGpus.mockImplementation(async ({ count }) => {
+      if (count !== 1) return [];
+      checks++;
+      return [CATALOG[0], CATALOG[1], { ...CATALOG[2], dataCenters: [{ id: 'EU-A', availability: checks > after ? 'HIGH' : 'NONE' }] }];
+    });
+    let t = Date.parse('2026-10-01T10:00:00Z');
+    const ops = createOps({ store: w.store, runpod: w.runpod, hf: {}, http: w.http, events, ask, askChoice, now: () => (t += 1000), sleep, zcode: { dir: path.join(w.root, 'zcode'), isRunning: async () => false } });
+    return { ...w, ops, ask, askChoice, seen, sleep };
+  }
+
+  it('la GPU non disponibile compare nella scelta come attesa; scelta: UNA conferma, attesa ogni 10 s, avvio senza altre domande', async () => {
+    const t = setupChoice('GPU141');
+    t.store.writeProfile({ ...t.store.readProfile('p'), gpu: { id: 'GPU141', count: 1 } }); // la GPU scelta nel piano
+    const r = await t.ops.up('p');
+    const options = t.askChoice.mock.calls[0][1];
+    expect(options.find((o) => o.id.startsWith('GPU141')).label).toMatch(/non disponibile ora: attendi \(verifica ogni 10 s\)/);
+    expect(t.ask).toHaveBeenCalledTimes(1);
+    expect(t.ask.mock.calls[0][0]).toMatch(/In attesa di GPU141 ×1.*poi avvio di p/);
+    expect(t.sleep.mock.calls.filter(([ms]) => ms === 10000).length).toBeGreaterThanOrEqual(1);
+    expect(t.runpod.createPod.mock.calls[0][0].gpu).toMatchObject({ id: 'GPU141' });
+    expect(r.candidate.id).toBe('GPU141');
+  });
+
+  it('scelta di una GPU disponibile: comportamento invariato (nessuna attesa)', async () => {
+    const t = setupChoice('GPU96');
+    t.store.writeProfile({ ...t.store.readProfile('p'), gpu: { id: 'GPU141', count: 1 } });
+    await t.ops.up('p');
+    expect(t.sleep).not.toHaveBeenCalledWith(10000);
+    expect(t.runpod.createPod.mock.calls[0][0].gpu).toMatchObject({ id: 'GPU96' });
+  });
+
+  it('nessuna GPU disponibile ora ma una in attesa: si propone comunque la scelta (non più NO_GPU_AVAILABLE)', async () => {
+    const t = setupChoice('GPU141');
+    t.runpod.listGpus.mockImplementation(async ({ count }) => (count === 1 ? [{ ...CATALOG[2], dataCenters: [{ id: 'EU-A', availability: t.runpod.listGpus.mock.calls.length > 3 ? 'HIGH' : 'NONE' }] }] : []));
+    await t.ops.up('p');
+    expect(t.askChoice).toHaveBeenCalledTimes(1);
+    expect(t.runpod.createPod).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('modalità scelta: GPU del profilo disponibile', () => {
+  it('nessuna attesa proposta e, con una sola GPU disponibile, nessuna domanda di scelta', async () => {
+    const w = createWorld({ pods: [], catalog: [CATALOG[0], CATALOG[2]] });
+    const askChoice = vi.fn(async () => null);
+    const ops = createOps({ store: w.store, runpod: w.runpod, hf: {}, http: w.http, events: createEvents(), ask: vi.fn(async () => true), askChoice, now: Date.now, sleep: async () => {}, zcode: { dir: path.join(w.root, 'zcode'), isRunning: async () => false } });
+    await ops.up('p');
+    expect(askChoice).not.toHaveBeenCalled();
+    expect(w.runpod.createPod.mock.calls[0][0].gpu).toMatchObject({ id: 'GPU80' });
+  });
+});

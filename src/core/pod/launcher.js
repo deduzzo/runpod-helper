@@ -129,7 +129,9 @@ export function progressOf(st) {
     if (lp.done >= lp.total) return { message: 'Pesi caricati: inizializzazione di vLLM (KV cache, compilazione, CUDA graph)' };
     let eta = '';
     if (Number.isFinite(lp.remainingSeconds)) eta = lp.remainingSeconds < 60 ? ', meno di un minuto rimanente' : `, circa ${Math.round(lp.remainingSeconds / 60)} min rimanenti`;
-    return { message: `Caricamento dei pesi: ${lp.done}/${lp.total} file${eta}`, ratio: lp.done / lp.total };
+    // Dal secondo passaggio vLLM rilegge gli stessi shard per il draft (MTP): la barra riparte da zero.
+    const what = lp.pass > 1 ? `Caricamento dei pesi del draft (passaggio ${lp.pass})` : 'Caricamento dei pesi';
+    return { message: `${what}: ${lp.done}/${lp.total} file${eta}`, ratio: lp.done / lp.total };
   }
   return { message: { loading: 'Caricamento del modello in GPU', ready: 'vLLM pronto' }[st.phase] ?? `Fase: ${st.phase}` };
 }

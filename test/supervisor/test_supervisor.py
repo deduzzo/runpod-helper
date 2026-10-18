@@ -213,6 +213,44 @@ class PureFunctions(unittest.TestCase):
         self.assertEqual(sv.model_cache_bytes(tmp, 'org/modello'), 130)
         self.assertEqual(sv.model_cache_bytes(tmp, 'org/assente'), 0)
 
+    def test_model_cache_bytes_store_condiviso_xet(self):
+        # huggingface_hub con lo store condiviso: blobs/<etag> diventa un link relativo al blob nello store (fuori dalla
+        # cartella del modello). Il link si segue (una volta per file reale); i link in snapshots/ non contano.
+        tmp = tempfile.mkdtemp()
+        hub = os.path.join(tmp, 'hub')
+        mine = os.path.join(hub, 'models--org--modello')
+        store = os.path.join(hub, '.blobs', 'ab')
+        for d in (os.path.join(mine, 'blobs'), os.path.join(mine, 'snapshots', 'abc'), store):
+            os.makedirs(d)
+        with open(os.path.join(store, 'abcd'), 'wb') as f:
+            f.write(b'x' * 500)
+        os.symlink(os.path.relpath(os.path.join(store, 'abcd'), os.path.join(mine, 'blobs')), os.path.join(mine, 'blobs', 'e1'))
+        with open(os.path.join(mine, 'blobs', 'e2.incomplete'), 'wb') as f:
+            f.write(b'x' * 40)
+        os.symlink(os.path.join('..', '..', 'blobs', 'e1'), os.path.join(mine, 'snapshots', 'abc', 'model.safetensors'))
+        # stesso blob dello store per due etag (deduplicazione xet): conta una volta sola
+        os.symlink(os.path.relpath(os.path.join(store, 'abcd'), os.path.join(mine, 'blobs')), os.path.join(mine, 'blobs', 'e3'))
+        # link rotto (store ripulito): ignorato
+        os.symlink('inesistente', os.path.join(mine, 'blobs', 'e4'))
+        self.assertEqual(sv.model_cache_bytes(tmp, 'org/modello'), 540)
+
+    def test_restart_decision_dopo_i_pesi(self):
+        restart, why = sv.restart_decision(loading_started=True, fatal=False, transient=False, restarts=0, max_restarts=1, weights_loaded=True)
+        self.assertFalse(restart)
+        self.assertIn('dopo il caricamento dei pesi', why)
+        self.assertNotIn('durante il caricamento', why)
+
+    def test_load_progress_secondo_passaggio(self):
+        s = sv.Supervisor(sv.env_config({'LLMPOD_MODEL': 'org/m', 'LLMPOD_SERVED_NAME': 'm', 'VLLM_API_KEY': 'k', 'LLMPOD_STATE': os.path.join(tempfile.mkdtemp(), 's.json')}))
+        line = lambda done: f'Loading safetensors checkpoint shards: {done * 100 // 120}% Completed | {done}/120 [00:01<00:01, 40it/s]'
+        s._observe(line(60))
+        s._observe(line(120))
+        self.assertEqual(s.load_progress['pass'], 1)
+        # il draft MTP rilegge gli stessi shard: secondo passaggio, non un passo indietro
+        s._observe(line(5))
+        self.assertEqual(s.load_progress['pass'], 2)
+        self.assertEqual(s.load_progress['done'], 5)
+
     def test_emergency_terminate(self):
         runpod = FakeRunpod()
         try:
@@ -476,7 +514,7 @@ class SupervisorIntegration(unittest.TestCase):
         self.sup.phase = 'downloading'
         self.sup.log('(Worker_TP0 pid=1) Loading safetensors checkpoint shards:  71% Completed | 147/206 [17:06<06:52, 6.99s/it]')
         st = self.sup.status()
-        self.assertEqual(st['loadProgress'], {'done': 147, 'total': 206, 'percent': 71, 'elapsedSeconds': 1026, 'remainingSeconds': 412})
+        self.assertEqual(st['loadProgress'], {'done': 147, 'total': 206, 'percent': 71, 'elapsedSeconds': 1026, 'remainingSeconds': 412, 'pass': 1})
         self.assertEqual(st['phase'], 'loading')  # vLLM sta leggendo i pesi: il download è finito
         self.sup.log('[llmpod] Loading safetensors checkpoint shards: 1% Completed | 1/206 [00:01<00:10, 1s/it]')
         self.assertEqual(self.sup.status()['loadProgress']['done'], 147)  # le righe del supervisore non contano

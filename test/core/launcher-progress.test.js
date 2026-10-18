@@ -22,6 +22,12 @@ describe('progressOf: avanzamento onesto di download e caricamento dei pesi', ()
     expect(progressOf({ phase: 'loading', loadProgress: { done: 205, total: 206, remainingSeconds: 20 } }).message).toBe('Caricamento dei pesi: 205/206 file, meno di un minuto rimanente');
   });
 
+  it('secondo passaggio sugli stessi shard (draft MTP): etichetta dedicata, non un passo indietro', () => {
+    expect(progressOf({ phase: 'loading', loadProgress: { done: 85, total: 120, remainingSeconds: 20, pass: 2 } }).message)
+      .toBe('Caricamento dei pesi del draft (passaggio 2): 85/120 file, meno di un minuto rimanente');
+    expect(progressOf({ phase: 'loading', loadProgress: { done: 85, total: 120, remainingSeconds: 20, pass: 1 } }).message).toMatch(/^Caricamento dei pesi: 85/);
+  });
+
   it('caricamento senza barra (o pesi già letti): messaggio generico senza percentuale', () => {
     expect(progressOf({ phase: 'loading' })).toEqual({ message: 'Caricamento del modello in GPU' });
     expect(progressOf({ phase: 'loading', loadProgress: { done: 206, total: 206, remainingSeconds: 0 } })).toEqual({ message: 'Pesi caricati: inizializzazione di vLLM (KV cache, compilazione, CUDA graph)' });
