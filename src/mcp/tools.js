@@ -247,22 +247,31 @@ export function createTools({ ctx, jobs, log = (m) => process.stderr.write(`[llm
       run: ({ profile, limit }) => syncOps().upPreview(profile, { limit }),
     },
     {
-      name: 'up', description: 'Avvia il Pod (COSTA). Richiede gpu scelta dall\'utente, confirm: true e expectedHourlyUSD uguale a quello di up_preview (se il prezzo è cambiato: errore). Parte in background: restituisce jobId.',
-      inputSchema: obj({ profile: S.profile, gpu: S.gpu, confirm: S.confirm, expectedHourlyUSD: { type: 'number', minimum: 0 } }, ['profile', 'gpu', 'confirm', 'expectedHourlyUSD']),
+      name: 'up', description: 'Avvia il Pod (COSTA). Richiede gpu scelta dall\'utente, confirm: true e expectedHourlyUSD uguale a quello di up_preview (se il prezzo è cambiato: errore). Parte in background: restituisce jobId. wait: true con una GPU di `waitable` (non disponibile ora): il job verifica la disponibilità ogni 10 s e crea il Pod appena si libera, al prezzo confermato (nessuna spesa durante l\'attesa; waitMaxMinutes limita l\'attesa, job_cancel la interrompe).',
+      inputSchema: obj({
+        profile: S.profile, gpu: S.gpu, confirm: S.confirm, expectedHourlyUSD: { type: 'number', minimum: 0 },
+        wait: { type: 'boolean', description: 'attende che la GPU scelta sia disponibile (verifica ogni 10 s)' },
+        waitMaxMinutes: { type: 'integer', minimum: 1, maximum: 1440, description: 'durata massima dell\'attesa (predefinito 240)' },
+      }, ['profile', 'gpu', 'confirm', 'expectedHourlyUSD']),
       annotations: { destructiveHint: false },
-      run: async ({ profile, gpu, expectedHourlyUSD }) => {
+      run: async ({ profile, gpu, expectedHourlyUSD, wait = false, waitMaxMinutes = 240 }) => {
         assertNotBusy(profile);
         const preview = await syncOps().upPreview(profile);
         if (preview.activePod) throw new LlmpodError(Codes.INVALID_INPUT, `Il profilo ${profile} ha già un Pod attivo (${preview.activePod.podId})`, { hint: 'Usa status e, se serve, down' });
-        const match = preview.options.filter((o) => o.gpu.id === gpu.id && (gpu.count == null || o.gpu.count === gpu.count) && (!gpu.dataCenterId || o.gpu.dataCenterId === gpu.dataCenterId));
-        const chosen = match.find((o) => o.withVolume) ?? match[0];
-        if (!chosen) throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `${gpu.id} non è avviabile ora per il profilo ${profile}`, { hint: 'Rileggi le opzioni con up_preview e fai scegliere di nuovo' });
+        const sameGpu = (o) => o.gpu.id === gpu.id && (gpu.count == null || o.gpu.count === gpu.count) && (!gpu.dataCenterId || o.gpu.dataCenterId === gpu.dataCenterId);
+        const match = preview.options.filter(sameGpu);
+        const chosen = match.find((o) => o.withVolume) ?? match[0] ?? (wait ? preview.waitable.find(sameGpu) : undefined);
+        if (!chosen) {
+          throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `${gpu.id} non è avviabile ora per il profilo ${profile}`, {
+            hint: preview.waitable.some(sameGpu) ? 'È tra le GPU di waitable: con wait: true il job attende che si liberi' : 'Rileggi le opzioni con up_preview e fai scegliere di nuovo',
+          });
+        }
         if (Math.abs(chosen.hourlyUSD - expectedHourlyUSD) > 0.0005) {
           throw new LlmpodError(Codes.PRICE_CHANGED, `Il prezzo è cambiato: ${gpu.id} costa ora ${chosen.hourlyUSD} $/h invece di ${expectedHourlyUSD} $/h`, { hint: 'Mostra il nuovo prezzo all\'utente e chiedi di nuovo conferma: nessun Pod è stato creato' });
         }
         const choice = { ...chosen.gpu };
         return startJob('up', profile, async ({ ops, ask, emit }) => {
-          const r = await ops.up(profile, { gpu: choice, expectedHourlyUSD, costConfirmed: true, autoTerminate: true });
+          const r = await ops.up(profile, { gpu: choice, expectedHourlyUSD, costConfirmed: true, autoTerminate: true, wait: wait ? { maxMinutes: waitMaxMinutes } : null });
           if (r?.contextSuggestion) emit({ type: 'info', message: `La KV cache consente fino a ${r.contextSuggestion} token per richiesta: si può rigenerare il profilo con un contesto maggiore` });
           if (r?.repairedArgs && await ask('Salvare nel profilo gli argomenti corretti dal consulente?', true)) {
             ops.saveProfileArgs(profile, r.repairedArgs);

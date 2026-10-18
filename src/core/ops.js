@@ -29,6 +29,8 @@ const ACTIVE = (p) => p.status !== 'TERMINATED' && !STOPPED_STATUSES.includes(p.
 const EXISTS = (p) => p.status !== 'TERMINATED';
 const podName = (profile) => `llmpod-${profile}`;
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Intervallo tra due verifiche della disponibilità durante l'attesa di una GPU (up con wait).
+export const WAIT_INTERVAL_MS = 10_000;
 
 export const generateKey = () => randomBytes(32).toString('base64url');
 
@@ -293,7 +295,13 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
       .filter((c) => c.hourly > 0 && c.availability !== 'NONE' && fits(c))
       .sort((a, b) => a.hourly - b.hourly)
       .map((c) => ({ ...c, memoryGiB: memoryOf(c) }));
-    return { catalogs, inVolumeDc, otherDcs, startable, wanted };
+    // Configurazioni del profilo che entrano ma non sono disponibili ora: si può attendere che si liberino (up con wait).
+    const isStartable = (c) => startable.some((s) => s.id === c.id && s.count === c.count);
+    const waitable = [...inVolumeDc, ...elsewhere]
+      .filter((c) => c.hourly > 0 && c.availability === 'NONE' && fits(c) && !isStartable(c))
+      .sort((a, b) => a.hourly - b.hourly)
+      .map((c) => ({ ...c, memoryGiB: memoryOf(c) }));
+    return { catalogs, inVolumeDc, otherDcs, startable, waitable, wanted };
   }
 
   // Anteprima dell'avvio, senza spesa e senza domande: opzioni avviabili ora con costo orario e costo massimo secondo i limiti
@@ -304,9 +312,10 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     const existing = (await runpod.listPods()).filter((p) => p.name === podName(name) && EXISTS(p));
     const active = existing.find(ACTIVE);
     const { balance } = await runpod.getBalance();
-    const { startable } = await launchCandidates(profile, cfg, { all: true });
+    const { startable, waitable } = await launchCandidates(profile, cfg, { all: true });
     const wd = { ...DEFAULT_WATCHDOG, ...profile.watchdog };
     const state = store.readState();
+    const seenWait = new Set();
     return {
       profile: name, model: profile.model.id, context: profile.context, mtp: profile.mtp ?? null,
       watchdog: wd, balanceUSD: balance,
@@ -338,12 +347,50 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
           moreOptions: Math.max(0, unique.length - max),
         };
       })(),
+      // Non avviabili ora ma adatte al profilo: up con wait verifica ogni 10 s finché si liberano (nessuna spesa nell'attesa).
+      waitable: waitable.filter((c) => {
+        const k = `${c.id}x${c.count}`;
+        if (seenWait.has(k)) return false;
+        seenWait.add(k);
+        return true;
+      }).map((c) => ({
+        gpu: { id: c.id, count: c.count }, memoryGiB: c.memoryGiB, hourlyUSD: c.hourly,
+        maxCostUSD: Math.round(c.hourly * wd.maxHours * 100) / 100, affordable: balance >= c.hourly,
+        startup: startupOf(profile, c, state), ncclSafe: ncclSafeFor(profile, c),
+      })),
     };
+  }
+
+  // Attende che la GPU scelta sia avviabile, rileggendo la disponibilità ogni wait.intervalMs (10 s): nessun Pod esiste
+  // durante l'attesa, quindi non si spende nulla. Oltre wait.maxMinutes si ferma con NO_GPU_AVAILABLE.
+  async function waitForGpu(profile, cfg, gpu, same, wait, initial) {
+    const intervalMs = wait.intervalMs ?? WAIT_INTERVAL_MS;
+    const label = `${gpu.id}${gpu.count ? ` ×${gpu.count}` : ''}`;
+    const since = now();
+    let lc = initial;
+    let checks = 0;
+    if (!lc.startable.some(same)) {
+      events.emit('phase', { message: `In attesa di ${label}: non disponibile ora, verifica ogni ${Math.round(intervalMs / 1000)} s (nessuna spesa finché non si crea il Pod)` });
+    }
+    while (!lc.startable.some(same)) {
+      const minutes = (now() - since) / 60000;
+      if (wait.maxMinutes && minutes >= wait.maxMinutes) {
+        throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `${label} ancora non disponibile dopo ${wait.maxMinutes} min di attesa: nessun Pod creato`, { hint: 'Riprova più tardi o scegli un\'altra GPU con up_preview' });
+      }
+      checks++;
+      events.emit('progress', { message: `${label} non ancora disponibile (verifica n. ${checks}, attesa da ${Math.floor(minutes)} min)` });
+      await sleep(intervalMs);
+      lc = await launchCandidates(profile, cfg, { all: true });
+    }
+    if (checks) events.emit('info', { message: `${label} disponibile dopo ${checks} verifiche: avvio` });
+    return lc;
   }
 
   // autoTerminate (server MCP): se l'avvio fallisce il Pod creato si elimina subito, senza domanda (nessuno deve restare a
   // pagare un Pod rotto in attesa di una risposta).
-  async function up(name, { yes = false, dryRun = false, gpu = null, expectedHourlyUSD = null, costConfirmed = false, autoTerminate = false } = {}) {
+  // wait (con gpu): se la GPU scelta non è disponibile ora, la disponibilità si rilegge ogni 10 s finché si libera ({ intervalMs, maxMinutes }).
+  async function up(name, { yes = false, dryRun = false, gpu = null, expectedHourlyUSD = null, costConfirmed = false, autoTerminate = false, wait = null } = {}) {
+    if (wait && !gpu) throw new LlmpodError(Codes.INVALID_INPUT, 'L\'attesa della disponibilità richiede una GPU scelta', { hint: 'Indica la GPU: --gpu <id>[x<numero>]' });
     const profile = store.readProfile(name);
     const cfg = store.readConfig();
     const env = store.readEnv();
@@ -376,10 +423,12 @@ export function createOps({ store, runpod, hf, http, events, ask, askChoice = nu
     // (o per profili vecchi senza `options`) solo la GPU del profilo e le sue alternative, con ripieghi.
     // `gpu` (server MCP): GPU già scelta dall'utente su up_preview; si usa solo quella, se è ancora avviabile.
     const choiceMode = Boolean(askChoice) && !yes && !dryRun && !gpu;
-    const { catalogs, inVolumeDc, otherDcs, startable, wanted } = await launchCandidates(profile, cfg, { all: choiceMode || Boolean(gpu) });
+    const same = (c) => c.id === gpu.id && (gpu.count == null || c.count === gpu.count) && (!gpu.dataCenterId || c.dataCenterId === gpu.dataCenterId);
+    let lc = await launchCandidates(profile, cfg, { all: choiceMode || Boolean(gpu) });
+    if (gpu && wait && !dryRun) lc = await waitForGpu(profile, cfg, gpu, same, wait, lc);
+    const { catalogs, inVolumeDc, otherDcs, startable, wanted } = lc;
     let candidates = inVolumeDc.filter((c) => c.hourly > 0);
     if (gpu) {
-      const same = (c) => c.id === gpu.id && (gpu.count == null || c.count === gpu.count) && (!gpu.dataCenterId || c.dataCenterId === gpu.dataCenterId);
       const chosen = startable.filter(same);
       if (!chosen.length) {
         throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `${gpu.id}${gpu.count ? ` ×${gpu.count}` : ''} non è avviabile ora per il profilo ${name}`, { hint: 'Rileggi le opzioni disponibili (up_preview) e fai scegliere di nuovo' });

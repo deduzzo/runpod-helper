@@ -368,6 +368,11 @@ contesto molto più grande di quello del profilo, lo suggerisce ("puoi rigenerar
 `llmpod up prova --dry-run` mostra la richiesta che verrebbe inviata a Runpod senza creare nulla; `--yes` salta
 le conferme.
 
+Se la GPU che vuoi non è disponibile ora, `llmpod up prova --gpu "NVIDIA B300 SXM6 AC x2" --wait` chiede subito la
+conferma del costo (al prezzo attuale) e poi verifica la disponibilità ogni 10 secondi: appena la GPU si libera crea
+il Pod. Durante l'attesa non si spende nulla; `--wait-max <minuti>` (predefinito 240) limita l'attesa e Ctrl+C la
+interrompe. Se al momento dell'avvio il prezzo è cambiato, si ferma senza creare nulla.
+
 ### Se qualcosa va storto
 
 - **Errore di avvio o smoke test fallito** (`OOM`, `VLLM_ERROR`, `SMOKE_TEST_FAILED`): se hai configurato il

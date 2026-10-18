@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createOps } from '../../src/core/ops.js';
 import { createEvents } from '../../src/core/events.js';
 import { redact } from '../../src/core/secrets.js';
-import { createWorld, KEY, ACTIVE_ARGS, PROFILE } from '../fixtures/fake-world.js';
+import { createWorld, KEY, ACTIVE_ARGS, PROFILE, CATALOG } from '../fixtures/fake-world.js';
 import { estimateStartup, startupText } from '../../src/core/planner/startup.js';
 
 function setup(opts = {}, { answers = [] } = {}) {
@@ -279,4 +279,56 @@ it('redact maschera la chiave del profilo dopo l\'uso', async () => {
   const t = setup();
   await t.ops.logs('p');
   expect(redact(`x ${KEY}`)).not.toContain(KEY);
+});
+
+describe('up in attesa della GPU scelta (wait)', () => {
+  const gpuDef = (price, availability) => ({ id: 'GPU141', displayName: 'GPU141', memory: 141, price: { secure: price }, maxCount: { secure: 8 }, dataCenters: [{ id: 'EU-A', availability }] });
+  // La GPU141 diventa disponibile dopo `after` verifiche (prima: NONE), al prezzo `price`.
+  function becomesAvailable(t, { after, price = 3.9 }) {
+    let checks = 0;
+    t.runpod.listGpus.mockImplementation(async ({ count }) => {
+      if (count !== 1) return [];
+      checks++;
+      return [CATALOG[0], CATALOG[1], gpuDef(checks > after ? price : 3.9, checks > after ? 'HIGH' : 'NONE')];
+    });
+  }
+
+  it('upPreview: le GPU del profilo non disponibili ora sono in `waitable`, con costo orario e massimo', async () => {
+    const t = setup({ pods: [] });
+    const r = await t.ops.upPreview('p');
+    expect(r.options.map((o) => o.gpu.id)).not.toContain('GPU141');
+    expect(r.waitable).toEqual([expect.objectContaining({ gpu: { id: 'GPU141', count: 1 }, hourlyUSD: 3.9, maxCostUSD: 31.2, memoryGiB: 141 })]);
+  });
+
+  it('verifica ogni 10 s finché la GPU è disponibile, poi crea il Pod su quella GPU (nessuna spesa durante l\'attesa)', async () => {
+    const t = setup({ pods: [] });
+    becomesAvailable(t, { after: 3 });
+    const r = await t.ops.up('p', { gpu: { id: 'GPU141', count: 1 }, expectedHourlyUSD: 3.9, costConfirmed: true, wait: {} });
+    expect(t.sleep.mock.calls.filter(([ms]) => ms === 10000)).toHaveLength(3);
+    expect(t.runpod.createPod).toHaveBeenCalledTimes(1);
+    expect(t.runpod.createPod.mock.calls[0][0].gpu).toMatchObject({ id: 'GPU141', count: 1 });
+    expect(r.candidate.id).toBe('GPU141');
+    expect(t.seen.find((e) => e.type === 'phase' && /In attesa di GPU141 ×1/.test(e.message)).message).toMatch(/ogni 10 s/);
+    expect(t.seen.filter((e) => e.type === 'progress' && /GPU141 ×1 non ancora disponibile/.test(e.message))).toHaveLength(3);
+  });
+
+  it('attesa oltre maxMinutes → NO_GPU_AVAILABLE, nessun Pod', async () => {
+    const t = setup({ pods: [] });
+    becomesAvailable(t, { after: Infinity });
+    await expect(t.ops.up('p', { gpu: { id: 'GPU141', count: 1 }, expectedHourlyUSD: 3.9, costConfirmed: true, wait: { maxMinutes: 1 } }))
+      .rejects.toMatchObject({ code: 'NO_GPU_AVAILABLE', message: expect.stringMatching(/dopo 1 min di attesa/) });
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+  });
+
+  it('disponibile ma a un prezzo diverso da quello confermato → PRICE_CHANGED, nessun Pod', async () => {
+    const t = setup({ pods: [] });
+    becomesAvailable(t, { after: 1, price: 4.5 });
+    await expect(t.ops.up('p', { gpu: { id: 'GPU141', count: 1 }, expectedHourlyUSD: 3.9, costConfirmed: true, wait: {} })).rejects.toMatchObject({ code: 'PRICE_CHANGED' });
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+  });
+
+  it('wait senza gpu scelta → INVALID_INPUT', async () => {
+    const t = setup({ pods: [] });
+    await expect(t.ops.up('p', { wait: {} })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
 });

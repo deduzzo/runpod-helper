@@ -234,6 +234,47 @@ describe('up: nessuna spesa senza conferma esplicita e al prezzo mostrato', () =
     expect(t.runpod.createPod).not.toHaveBeenCalled();
   });
 
+  it('wait: GPU non disponibile ora (waitable) → il job attende la disponibilità e poi crea il Pod', async () => {
+    const t = setup(noPods);
+    const preview = await t.call('up_preview', { profile: 'p' });
+    expect(preview.data.waitable[0]).toMatchObject({ gpu: { id: 'GPU141', count: 1 }, hourlyUSD: 3.9 });
+    // senza wait resta l'errore di oggi
+    expect((await t.call('up', { profile: 'p', gpu: { id: 'GPU141', count: 1 }, confirm: true, expectedHourlyUSD: 3.9 })).data.error.code).toBe('NO_GPU_AVAILABLE');
+    let checks = 0;
+    const base = t.runpod.listGpus.getMockImplementation();
+    t.runpod.listGpus.mockImplementation(async (q) => {
+      const list = await base(q);
+      if (q.count !== 1) return list;
+      checks++;
+      return checks > 3 ? list.map((g) => (g.id === 'GPU141' ? { ...g, dataCenters: [{ id: 'EU-A', availability: 'HIGH' }] } : g)) : list;
+    });
+    const r = await t.call('up', { profile: 'p', gpu: { id: 'GPU141', count: 1 }, confirm: true, expectedHourlyUSD: 3.9, wait: true });
+    expect(r.isError).toBe(false);
+    const job = await t.settle(r.data.jobId);
+    expect(job.status).toBe('done');
+    expect(job.result).toMatchObject({ candidate: { id: 'GPU141' } });
+    const ev = await t.call('job_events', { jobId: r.data.jobId });
+    expect(ev.data.events.some((e) => e.type === 'phase' && /In attesa di GPU141/.test(e.message))).toBe(true);
+  });
+
+  it('wait: job_cancel durante l\'attesa ferma il job, nessun Pod creato', async () => {
+    const t = setup(noPods, { sleep: yieldSleep });
+    const r = await t.call('up', { profile: 'p', gpu: { id: 'GPU141', count: 1 }, confirm: true, expectedHourlyUSD: 3.9, wait: true });
+    await t.until(r.data.jobId, 'progress');
+    const c = await t.call('job_cancel', { jobId: r.data.jobId, confirm: true });
+    expect(c.isError).toBe(false);
+    const job = await t.settle(r.data.jobId);
+    expect(job.status).toBe('cancelled');
+    expect(t.runpod.createPod).not.toHaveBeenCalled();
+  });
+
+  it('wait con prezzo diverso da quello di waitable → PRICE_CHANGED subito, nessun job', async () => {
+    const t = setup(noPods);
+    const r = await t.call('up', { profile: 'p', gpu: { id: 'GPU141', count: 1 }, confirm: true, expectedHourlyUSD: 3.5, wait: true });
+    expect(r.data.error.code).toBe('PRICE_CHANGED');
+    expect(t.mcp.jobs.list()).toEqual([]);
+  });
+
   it('un secondo up sullo stesso profilo mentre il primo è in corso → errore', async () => {
     const t = setup({ pods: [{ id: 'old', name: 'llmpod-p', status: 'EXITED', cost: 0 }] });
     const args = { profile: 'p', gpu: { id: 'GPU80', count: 1 }, confirm: true, expectedHourlyUSD: 1.5 };

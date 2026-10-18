@@ -40,7 +40,7 @@ Server MCP `llmpod` (registrato in `.mcp.json`, avviabile anche con `llmpod mcp`
 | `plan` | stima VRAM, opzioni GPU con prezzo e disponibilità, argomenti vLLM, MTP (`model` anche `<set>/<id>`); mai il consulente esterno | no |
 | `save_profile` | salva l'ultimo piano con la GPU scelta (`model` = modello del piano mostrato, altrimenti rifiuta) | no |
 | `profiles`, `status` | profili salvati; Pod llmpod avviati / in avvio / spenti / in eliminazione, credito (`all: true`: anche gli altri Pod dell'account) | no |
-| `up_preview` → `up` | opzioni avviabili ora con costo orario e massimo → avvio in background (`gpu`, `confirm: true`, `expectedHourlyUSD`) | **sì** |
+| `up_preview` → `up` | opzioni avviabili ora (`options`) e quelle adatte ma non disponibili (`waitable`) con costo orario e massimo → avvio in background (`gpu`, `confirm: true`, `expectedHourlyUSD`; con `wait: true` su una GPU di `waitable` il job verifica ogni 10 s e crea il Pod appena si libera, nessuna spesa nell'attesa, `waitMaxMinutes` predefinito 240) | **sì** |
 | `job_status`, `job_events`, `job_answer` | avanzamento di `up`/`tune`, domande pendenti (con scadenza `expiresAt`) | dipende dalla domanda |
 | `job_cancel` | `up` non ancora pronto: annulla ed elimina il Pod appena creato; `tune`: interrompe e riporta vLLM agli argomenti precedenti, il Pod RESTA acceso (`confirm: true`) | up: ferma la spesa; tune: il Pod continua a costare |
 | `metrics`, `logs` | token/s, KV %, accettazione MTP/DSpark, errori; log di vLLM mascherati | no |

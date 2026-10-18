@@ -26,7 +26,9 @@ Rispondi in italiano. Nessuna spesa senza un "sì" esplicito dell'utente al cost
    minuti di download e caricamento dei pesi e quanto si paga prima che il modello sia pronto; sui modelli > 100 GiB
    e multi-GPU può superare i 40 minuti) e i limiti di spegnimento (inattività, ore massime). Se `ncclSafe` è vero
    il Pod parte in modalità NCCL sicura (più GPU senza NVLink completo: `NCCL_P2P_DISABLE=1` o `NCCL_P2P_LEVEL=NVL`,
-   `--disable-custom-all-reduce`). Chiedi quale GPU e la conferma esplicita del costo.
+   `--disable-custom-all-reduce`). Chiedi quale GPU e la conferma esplicita del costo. Se la GPU voluta è solo in
+   `waitable` (adatta ma non disponibile ora) e l'utente vuole aspettarla: stessa conferma del costo, poi `up` con
+   `wait: true` (verifica ogni 10 s, nessuna spesa finché il Pod non esiste; `job_cancel` interrompe l'attesa).
 7. **Avvio**: `up { profile, gpu: { id, count, dataCenterId }, confirm: true, expectedHourlyUSD: <hourlyUSD
    dell'opzione scelta> }`. Se l'errore è `PRICE_CHANGED`, mostra il nuovo prezzo e richiedi conferma.
 8. **Avanzamento**: `job_status { jobId }` e `job_events { jobId, since }` ogni 20–30 secondi (fasi: creazione,

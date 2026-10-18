@@ -1,6 +1,24 @@
 import { attachRenderer } from '../render.js';
 import { fmtUSD } from '../../core/confirm.js';
-import { AMBIGUOUS_CREATE_WARNING } from '../../core/ops.js';
+import { AMBIGUOUS_CREATE_WARNING, WAIT_INTERVAL_MS } from '../../core/ops.js';
+import { LlmpodError, Codes } from '../../core/errors.js';
+import { parseGpuSpec } from '../../core/planner/gpu-choice.js';
+
+// --wait: il costo si conferma PRIMA dell'attesa (al prezzo di adesso), così quando la GPU si libera l'avvio parte subito
+// senza aspettare una risposta; se nel frattempo il prezzo cambia, up si ferma con PRICE_CHANGED senza creare nulla.
+async function confirmWait(ctx, name, gpu, { yes, waitMax }) {
+  const preview = await ctx.ops.upPreview(name);
+  const same = (o) => o.gpu.id === gpu.id && (gpu.count == null || o.gpu.count === gpu.count);
+  const option = preview.options.find(same) ?? preview.waitable.find(same);
+  if (!option) {
+    throw new LlmpodError(Codes.NO_GPU_AVAILABLE, `${gpu.id}${gpu.count ? ` ×${gpu.count}` : ''} non è tra le GPU adatte al profilo ${name}`, { hint: `Guarda le opzioni del piano: llmpod plan <modello>` });
+  }
+  const label = `${option.gpu.id} ×${option.gpu.count}`;
+  const now = preview.options.some(same) ? 'disponibile ora' : `non disponibile ora: verifica ogni ${WAIT_INTERVAL_MS / 1000} s per al massimo ${waitMax} min e avvio appena disponibile`;
+  const ok = yes || await ctx.io.ask(`Avvio di ${name} su ${label} a ${fmtUSD(option.hourlyUSD)}/h (massimo ${fmtUSD(option.maxCostUSD)} secondo i limiti di spegnimento), ${now}. Confermi la spesa?`, false);
+  if (!ok) throw new LlmpodError(Codes.CANCELLED, 'Spesa non confermata: nessuna attesa e nessun Pod creato');
+  return { gpu: { id: option.gpu.id, count: option.gpu.count }, expectedHourlyUSD: option.hourlyUSD };
+}
 
 // Gestione di Ctrl+C durante "up": non deve mai lasciare un Pod acceso senza avvisare.
 export function createInterruptHandler({ ops, runpod, io, name, getPodId, isCreating = () => true, exit = (c) => process.exit(c) }) {
@@ -47,6 +65,9 @@ export function register(program, getCtx) {
     .description('Crea il Pod, attende vLLM ed esegue lo smoke test')
     .option('--yes', 'non chiedere conferme')
     .option('--dry-run', 'mostra la richiesta senza creare nulla')
+    .option('--gpu <id>', 'usa questa GPU, nella forma <id>[x<numero>]')
+    .option('--wait', `se la GPU scelta non è disponibile, verifica ogni ${WAIT_INTERVAL_MS / 1000} s e avvia appena si libera (richiede --gpu)`)
+    .option('--wait-max <minuti>', 'durata massima dell\'attesa', (v) => Number.parseInt(v, 10), 240)
     .action(async (name, opts) => {
       const ctx = getCtx();
       const { io } = ctx;
@@ -60,7 +81,13 @@ export function register(program, getCtx) {
       const onSigint = createInterruptHandler({ ops: ctx.ops, runpod: ctx.runpod, io, name, getPodId: () => podId, isCreating: () => creating });
       process.on('SIGINT', onSigint);
       try {
-        const r = await ctx.ops.up(name, { yes: opts.yes, dryRun: opts.dryRun });
+        if (opts.wait && !opts.gpu) throw new LlmpodError(Codes.INVALID_INPUT, '--wait richiede la GPU da attendere: --gpu <id>[x<numero>]');
+        const gpu = opts.gpu ? parseGpuSpec(opts.gpu) : null;
+        const chosen = opts.wait && !opts.dryRun ? await confirmWait(ctx, name, gpu, { yes: opts.yes, waitMax: opts.waitMax }) : null;
+        const r = await ctx.ops.up(name, {
+          yes: opts.yes, dryRun: opts.dryRun, gpu: chosen?.gpu ?? gpu,
+          ...(chosen ? { expectedHourlyUSD: chosen.expectedHourlyUSD, costConfirmed: true, wait: { maxMinutes: opts.waitMax } } : {}),
+        });
         if (r.dryRun) {
           io.out(`[dry-run] ${r.message}`);
           io.out(`Candidati: ${r.candidates.map((c) => `${c.id} ×${c.count} @ ${c.dataCenterId}${c.withVolume ? '' : ' (senza volume)'}`).join(', ')}`);
