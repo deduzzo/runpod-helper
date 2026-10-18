@@ -1,6 +1,6 @@
 import { LlmpodError, Codes } from '../errors.js';
 import { parseModelRef, summarizeModel } from '../hf.js';
-import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes, hasMtp, draftKind, GiB } from './vram.js';
+import { weightsBytes, downloadBytes, kvBytesPerToken, kvShardsFor, estimate, tpSizes, hasMtp, draftKind, mtpHeadLoadable, linearHeads, GiB } from './vram.js';
 import { detectParsers, buildArgs, applyOverrides, validateArgs, MTP_SPEC, DSPARK_SPEC } from './vllm-args.js';
 import { selectGpus } from './gpu-select.js';
 import { optionOf, refreshGpuWarnings } from './gpu-choice.js';
@@ -8,6 +8,17 @@ import { optionOf, refreshGpuWarnings } from './gpu-choice.js';
 const SHA_RE = /^[0-9a-f]{40}$/;
 // Riserva per lo stato del draft MTP (KV del suo strato e buffer): approssimazione per eccesso, i pesi MTP sono già nei file.
 const MTP_RESERVE_GiB = 1;
+// Limite CUDA dell'asse z della griglia: i kernel ricorrenti dell'attenzione lineare lanciano batch × teste blocchi su quell'asse.
+const CUDA_GRID_Z_MAX = 65535;
+// Batch predefinito di vLLM sulle GPU grandi (max_num_seqs e ultima dimensione delle CUDA graph).
+const VLLM_DEFAULT_MAX_SEQS = 1024;
+// Batch massimo (potenza di 2) che resta nel limite della griglia; null se il predefinito di vLLM va già bene.
+function maxSeqsForLinearHeads(heads) {
+  if (!heads || VLLM_DEFAULT_MAX_SEQS * heads <= CUDA_GRID_Z_MAX) return null;
+  let n = VLLM_DEFAULT_MAX_SEQS;
+  while (n * heads > CUDA_GRID_Z_MAX) n /= 2;
+  return n;
+}
 // Quantizzazione dichiarata in config.json: 'nvfp4' (ModelOpt quant_algo NVFP4 o compressed-tensors nvfp4-*), altrimenti quant_method.
 function quantizationOf(config) {
   const q = config.quantization_config ?? config.text_config?.quantization_config ?? null;
@@ -109,10 +120,15 @@ export async function makePlan({
   const mtpPresent = hasMtp(config, weightMap);
   // Tipo di draft: DSpark (config con dspark_*) usa l'argomento della recipe della regola, MTP quello predefinito.
   const draft = draftKind(config, weightMap);
-  const speculative = draft === 'dspark' ? (parsers.dspark ?? DSPARK_SPEC) : draft === 'mtp' ? MTP_SPEC : null;
+  // Testa del draft non esclusa dalla quantizzazione NVFP4 e senza scale nel checkpoint: vLLM non parte, quindi niente MTP.
+  const headOk = draft !== 'mtp' || mtpHeadLoadable(config, weightMap);
+  if (!headOk) {
+    warnings.push('MTP_DISABLED: la testa del draft MTP non è esclusa dalla quantizzazione FP4 (ModelOpt) del checkpoint (vLLM la caricherebbe come FP4 senza scale e non partirebbe): decodifica speculativa disattivata');
+  }
+  const speculative = !headOk ? null : draft === 'dspark' ? (parsers.dspark ?? DSPARK_SPEC) : draft === 'mtp' ? MTP_SPEC : null;
   const specDisabled = set.some((x) => /^(--)?speculative[-_]config=false$/.test(x));
   // Memoria costante per GPU oltre pesi e KV: stato lineare degli strati ibridi × concorrenza e riserva del draft MTP (stime per eccesso).
-  const extraGiB = ((kv.stateBytes ?? 0) * concurrency) / GiB + (mtpPresent && !specDisabled ? MTP_RESERVE_GiB : 0);
+  const extraGiB = ((kv.stateBytes ?? 0) * concurrency) / GiB + (speculative && !specDisabled ? MTP_RESERVE_GiB : 0);
   const pick = (kvPerToken) => {
     const needs = (tp) => estimate({ weightsBytes: wBytes, kvPerToken, context: ctx, concurrency, tp, kvShards: kvShardsFor(config, tp), extraGiB }).perGpuGiB;
     return { needs, sel: selectGpus({ catalogs, dataCenterId, needs, tpSizes: sizes, cloud }) };
@@ -135,7 +151,9 @@ export async function makePlan({
   }
 
   const tp = sel.choice?.count ?? 1;
-  const args = applyOverrides(buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype, speculative }), { set, extra });
+  const maxSeqs = maxSeqsForLinearHeads(linearHeads(config));
+  const batchCap = maxSeqs ? ['--max-num-seqs', String(maxSeqs), '--max-cudagraph-capture-size', String(maxSeqs)] : [];
+  const args = applyOverrides([...buildArgs({ context: ctx, tp, revision: sha, parsers, kvCacheDtype, speculative }), ...batchCap], { set, extra });
   const { unknown, forbidden } = validateArgs(args, flags, { allowTrustRemoteCode });
   if (forbidden.length) {
     throw new LlmpodError(Codes.INVALID_INPUT, `Argomenti vLLM non consentiti: ${forbidden.join(', ')}`, { hint: 'llmpod gestisce da solo chiave, host, porta e nome servito' });

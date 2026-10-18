@@ -53,24 +53,38 @@ function layerSplit(c) {
 // Stato lineare per sequenza (Gated DeltaNet): per strato lineare linear_num_value_heads × linear_key_head_dim × linear_value_head_dim
 // × 4 byte (FP32). Le convoluzioni (linear_conv_kernel_dim) sono trascurate: vale come stima, in eccesso rispetto alla KV quantizzata.
 // 0 se la config non dichiara le dimensioni.
+// Con linear_attn_config (KDA di GLM-5.3-Flash, Kimi Linear) lo stato è num_heads × head_dim × head_dim.
 function linearStateBytes(c, nLinear) {
+  const la = c.linear_attn_config;
+  if (la?.num_heads > 0 && la?.head_dim > 0) return nLinear * la.num_heads * la.head_dim * la.head_dim * 4;
   const { linear_num_value_heads: vh, linear_key_head_dim: kd, linear_value_head_dim: vd } = c;
   return vh > 0 && kd > 0 && vd > 0 ? nLinear * vh * kd * vd * 4 : 0;
 }
+
+// Teste degli strati ad attenzione lineare (null se il modello non ne ha): i kernel ricorrenti (fused_recurrent di FLA) lanciano
+// una griglia con batch × teste sull'asse z, che in CUDA non può superare 65535.
+export function linearHeads(config) {
+  const c = textConfig(config);
+  const heads = c.linear_attn_config?.num_heads ?? c.linear_num_value_heads ?? null;
+  return heads > 0 && layerSplit(c).constant > 0 ? heads : null;
+}
+
+// MLA (DeepSeek, GLM-5): cache latente kv_lora_rank (+ qk_rope_head_dim, 0 in GLM-5.3-Flash che usa solo NoPE).
+const isMla = (c) => c.kv_lora_rank > 0;
 
 // KV cache per token (kvDtypeBytes per elemento). Per le architetture ibride (layer_types con strati lineari, o
 // full_attention_interval) contano solo gli strati ad attenzione completa; `stateBytes` è lo stato costante per sequenza degli
 // strati lineari. Gli strati a finestra scorrevole sono trattati prudentemente come attenzione completa.
 export function kvBytesPerToken(config, kvDtypeBytes = 2) {
   const c = textConfig(config);
-  const layers = c.num_hidden_layers;
-  if (c.kv_lora_rank && c.qk_rope_head_dim) {
-    return { bytes: (c.kv_lora_rank + c.qk_rope_head_dim) * layers * kvDtypeBytes, kind: 'mla' };
+  const { kv, constant } = layerSplit(c);
+  if (isMla(c)) {
+    const bytes = (c.kv_lora_rank + (c.qk_rope_head_dim ?? 0)) * kv * kvDtypeBytes;
+    return constant > 0 ? { bytes, kind: 'mla', stateBytes: linearStateBytes(c, constant) } : { bytes, kind: 'mla' };
   }
   const heads = c.num_attention_heads;
   const kvHeads = c.num_key_value_heads ?? heads;
   const headDim = c.head_dim ?? c.hidden_size / heads;
-  const { kv, constant } = layerSplit(c);
   const bytes = 2 * kv * kvHeads * headDim * kvDtypeBytes;
   if (constant > 0) return { bytes, kind: 'hybrid', stateBytes: linearStateBytes(c, constant) };
   return { bytes, kind: 'full' };
@@ -102,11 +116,28 @@ export function draftKind(config, weightMap) {
   return keys.some((k) => k.startsWith('dspark_')) ? 'dspark' : 'mtp';
 }
 
+const globToRegExp = (p) => new RegExp(`^${p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*')}$`);
+
+// La testa del draft nextn (shared_head.head, stile DeepSeek/GLM) si carica con un checkpoint ModelOpt (NVFP4)? vLLM la crea con la
+// quantizzazione del modello salvo che l'elenco ignore la escluda: se non è esclusa e il checkpoint non ne ha le scale FP4, vLLM si
+// ferma con "weight_scale ... never loaded" (GLM-5.3-Flash NVFP4 di dealignai). true per gli altri formati e per i draft mtp.*.
+export function mtpHeadLoadable(config, weightMap) {
+  const c = { ...(config.text_config ?? {}), ...config };
+  const q = config.quantization_config ?? config.text_config?.quantization_config;
+  const ignore = q?.ignore ?? q?.exclude_modules;
+  if (String(q?.quant_method ?? '').toLowerCase() !== 'modelopt' || !Array.isArray(ignore)) return true;
+  if (!((c.num_nextn_predict_layers ?? 0) > 0 && c.num_hidden_layers > 0)) return true;
+  const n = c.num_hidden_layers;
+  const heads = [`model.layers.${n}.shared_head.head`, `model.language_model.layers.${n}.shared_head.head`];
+  if (weightMap && heads.some((h) => `${h}.weight_scale` in weightMap)) return true;
+  return ignore.some((p) => heads.some((h) => globToRegExp(String(p)).test(h)));
+}
+
 // In quante GPU si ripartisce davvero la KV cache: con MLA la cache latente non è sharded;
 // con GQA vLLM replica le teste KV quando tp > num_key_value_heads.
 export function kvShardsFor(config, tp) {
   const c = textConfig(config);
-  if (c.kv_lora_rank && c.qk_rope_head_dim) return 1;
+  if (isMla(c)) return 1;
   const kvHeads = c.num_key_value_heads ?? c.num_attention_heads;
   return Math.max(1, Math.min(tp, kvHeads));
 }
